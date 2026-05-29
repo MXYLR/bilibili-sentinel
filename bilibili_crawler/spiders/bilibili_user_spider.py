@@ -1,0 +1,454 @@
+"""
+B站用户数据采集 Spider — F12-F14 特征数据源
+
+核心流程:
+  1. 从 Redis (db=1) 读取用户 MID 种子
+  2. Step A: GET /x/space/wbi/acc/info → 用户画像 → yield UserInfoItem
+  3. Step B: GET /x/space/wbi/arc/search → 投稿列表 → 补充 video_count/post_count
+  4. Step C: GET /x/polymer/web-dynamic/v1/feed/space → 动态列表 → yield UserPostItem
+  5. Spider idle 时检查 Redis 新种子，超时后自动退出
+
+数据用途:
+  - UserInfoItem → F1(账号年龄), F2(粉丝比), F3(等级), F4(头像), F12(骨架)
+  - UserPostItem → F13(转发抽奖), F14(敏感内容)
+
+种子格式 (JSON):
+  {"mid": 24512285}
+
+运行方式:
+  scrapy crawl bilibili_user
+"""
+
+import json
+import logging
+import time
+
+import redis
+import scrapy
+from scrapy import signals
+from scrapy.exceptions import DontCloseSpider
+
+from bilibili_crawler.items import UserInfoItem, UserPostItem
+from bilibili_crawler.utils.bilibili_api import (
+    get_user_info_url,
+    get_user_posts_url,
+    get_user_videos_url,
+    parse_bilibili_response,
+    prewarm_wbi_cache,
+)
+
+logger = logging.getLogger("bilibili_user")
+
+# ---- 安全限制 ----
+MAX_USERS_PER_RUN = 500        # 单次运行最多处理500个用户
+POSTS_PER_USER = 50            # 每个用户最多采集50条动态
+MAX_POSTS_PAGES = 5            # 动态最多翻5页 (每页约10-12条)
+MAX_IDLE_TIME = 300            # 空闲超时(s): 等待新种子的最大时间
+
+# ---- Redis 配置 ----
+_REDIS_HOST = "localhost"
+_REDIS_PORT = 6379
+_REDIS_DB = 1
+_REDIS_KEY = "bilibili_crawler:user_seeds"
+
+
+class BilibiliUserSpider(scrapy.Spider):
+    """
+    B站用户数据爬虫 — 补充 F12-F14 水军检测所需信息。
+
+    从 Redis 队列获取 MID 列表，依次采集:
+    - 用户画像 (UserInfoItem)
+    - 用户动态 (UserPostItem)
+    """
+
+    name = "bilibili_user"
+
+    custom_settings = {
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 2,
+        "DOWNLOAD_DELAY": 0.5,
+        "DOWNLOAD_TIMEOUT": 30,
+        "COOKIES_ENABLED": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._redis = None
+        self._user_count = 0
+        self._total_posts = 0
+        self._idle_start_time = None
+        self._seen_mids = set()  # 本次运行已处理的 MID
+
+    @classmethod
+    def from_crawler(cls, crawler, *args, **kwargs):
+        spider = super().from_crawler(crawler, *args, **kwargs)
+        crawler.signals.connect(spider.spider_idle, signal=signals.spider_idle)
+        return spider
+
+    # ================================================================
+    #  Redis 种子读取
+    # ================================================================
+
+    def _get_redis(self):
+        if self._redis is None:
+            self._redis = redis.Redis(
+                host=_REDIS_HOST, port=_REDIS_PORT, db=_REDIS_DB,
+                decode_responses=True,
+            )
+        return self._redis
+
+    def _pop_seed(self):
+        """从 Redis 队列弹出一个 MID 种子。返回 MID int 或 None。"""
+        r = self._get_redis()
+        try:
+            raw = r.lpop(_REDIS_KEY)
+            if not raw:
+                return None
+            seed = json.loads(raw) if isinstance(raw, str) else raw
+            mid = seed.get("mid") if isinstance(seed, dict) else int(raw)
+            return int(mid)
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.warning(f"Invalid seed data: {raw[:80]}... ({e})")
+            return None
+        except Exception as e:
+            logger.error(f"Redis read error: {e}")
+            return None
+
+    def _push_mids_to_redis(self, mids: list):
+        """批量注入 MID 到 Redis 种子队列。"""
+        r = self._get_redis()
+        try:
+            for mid in mids:
+                r.rpush(_REDIS_KEY, json.dumps({"mid": mid}))
+            logger.info(f"Injected {len(mids)} MIDs into {_REDIS_KEY}")
+        except Exception as e:
+            logger.error(f"Redis write error: {e}")
+
+    # ================================================================
+    #  爬虫入口
+    # ================================================================
+
+    def start_requests(self):
+        """启动: 从 Redis 读取种子并开始爬取。"""
+        prewarm_wbi_cache()
+
+        seeds = []
+        for _ in range(50):  # 预读最多 50 个种子
+            mid = self._pop_seed()
+            if mid is None:
+                break
+            if mid not in self._seen_mids:
+                seeds.append(mid)
+
+        if not seeds:
+            logger.info("No user seeds in Redis. Entering idle mode, waiting for seeds...")
+            return
+
+        logger.info(f"Starting with {len(seeds)} user seed(s)")
+        for mid in seeds:
+            self._seen_mids.add(mid)
+            yield self._request_user_info(mid)
+
+    # ================================================================
+    #  Step A: 用户画像 → UserInfoItem
+    # ================================================================
+
+    def _request_user_info(self, mid: int):
+        """请求用户空间基本信息。"""
+        url = get_user_info_url(mid)
+        return scrapy.Request(
+            url,
+            callback=self.parse_user_info,
+            meta={"mid": mid},
+            errback=self._handle_error,
+            dont_filter=True,
+        )
+
+    def parse_user_info(self, response):
+        """解析 /x/space/wbi/acc/info 响应，产出 UserInfoItem。"""
+        mid = response.meta["mid"]
+        result = parse_bilibili_response(response)
+
+        if result is None:
+            # API 不可用，跳过此用户但继续下一个
+            logger.warning(f"[mid={mid}] User info API unavailable (code may be -412)")
+            self._fetch_next_user()
+            return
+
+        data = result.get("data", {})
+        if not data:
+            logger.warning(f"[mid={mid}] Empty user data")
+            self._fetch_next_user()
+            return
+
+        # ---- 提取用户画像 ----
+        vip = data.get("vip", {}) or {}
+        official = data.get("official", {}) or {}
+
+        user_item = UserInfoItem(
+            mid=mid,
+            name=data.get("name", ""),
+            sex=data.get("sex", ""),
+            face=data.get("face", ""),
+            sign=data.get("sign", ""),
+            level=data.get("level", 0),
+            birthday=data.get("birthday", ""),  # B站 API 字段名: 实际为注册日期
+            vip_status=vip.get("status", 0),
+            official_verify=json.dumps(official, ensure_ascii=False) if official.get("type", -1) >= 0 else "",
+            follower=0,    # 待 Step B 补充
+            following=0,   # 待 Step B 补充
+            video_count=0, # 待 Step B 补充
+            post_count=0,  # 待 Step B/C 补充
+            upload_count=0, # 别名, 与 video_count 同源
+            crawl_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        )
+
+        # 临时存储 item，等 Step B 补充后统一 yield
+        response.meta["user_info_item"] = user_item
+
+        # 检查该用户是否有投稿 (用于跳过无意义的动态请求)
+        archive_count = data.get("archive_count", -1)
+        if archive_count >= 0:
+            user_item["video_count"] = archive_count
+            user_item["upload_count"] = archive_count
+
+        # ---- Step B: 获取更多统计 (粉丝/关注/投稿数) ----
+        videos_url = get_user_videos_url(mid, page=1, ps=1)  # 只取1条, 获取page.count
+        yield scrapy.Request(
+            videos_url,
+            callback=self.parse_user_videos,
+            meta=response.meta,
+            errback=self._handle_error,
+            dont_filter=True,
+        )
+
+    # ================================================================
+    #  Step B: 投稿列表 → 补充 UserInfoItem
+    # ================================================================
+
+    def parse_user_videos(self, response):
+        """解析 /x/space/wbi/arc/search 响应，补充统计信息。"""
+        mid = response.meta["mid"]
+        user_item = response.meta.get("user_info_item")
+        result = parse_bilibili_response(response)
+
+        if result is not None:
+            data = result.get("data", {})
+            page_info = data.get("page", {})
+            video_count = page_info.get("count", 0)
+
+            if user_item:
+                # 补全投稿数 (以 API 返回为准)
+                if video_count > 0:
+                    user_item["video_count"] = video_count
+                    user_item["upload_count"] = video_count
+
+            # 提取第一条视频的 UP 主统计 (粉丝/关注)
+            vlist = data.get("list", {}).get("vlist", [])
+            if vlist:
+                first_video = vlist[0]
+                if user_item:
+                    if user_item["follower"] == 0:
+                        user_item["follower"] = first_video.get("author_fans", 0) or 0
+
+            logger.debug(f"[mid={mid}] Video count={video_count}, follower={user_item.get('follower', 0) if user_item else '?'}")
+
+        # ---- 产出 UserInfoItem ----
+        if user_item:
+            yield user_item
+
+        self._user_count += 1
+
+        # ---- Step C: 抓取用户动态 ----
+        posts_url = get_user_posts_url(mid)
+        yield scrapy.Request(
+            posts_url,
+            callback=self.parse_user_posts,
+            meta={
+                "mid": mid,
+                "posts_collected": 0,
+                "pages": 1,
+            },
+            errback=self._posts_error,
+            dont_filter=True,
+        )
+
+    # ================================================================
+    #  Step C: 动态列表 → UserPostItem
+    # ================================================================
+
+    def parse_user_posts(self, response):
+        """解析 /x/polymer/web-dynamic/v1/feed/space 响应。"""
+        mid = response.meta["mid"]
+        posts_collected = response.meta.get("posts_collected", 0)
+        page_num = response.meta.get("pages", 1)
+
+        # 非标准 JSON (B站 polymer API 有时返回 text/html)
+        try:
+            result = json.loads(response.text)
+        except json.JSONDecodeError:
+            logger.warning(f"[mid={mid}] Polymer API returned non-JSON (likely auth required)")
+            # 动态 API 可能因未登录返回 HTML，不影响画像采集
+            self._fetch_next_user()
+            return
+
+        code = result.get("code", -1)
+        if code != 0:
+            logger.debug(f"[mid={mid}] Polymer API code={code}, msg={result.get('message', '')}")
+            self._fetch_next_user()
+            return
+
+        data = result.get("data", {})
+        items = data.get("items", [])
+        has_more = data.get("has_more", False)
+        offset = data.get("offset", "")
+
+        # 解析每条动态
+        for item_data in items:
+            if posts_collected >= POSTS_PER_USER:
+                break
+
+            # 提取动态 module
+            modules = item_data.get("modules", {})
+            desc_module = modules.get("module_dynamic", {}) or modules.get("module_desc", {})
+            author_module = modules.get("module_author", {})
+
+            # 动态文本
+            desc = desc_module.get("text") if isinstance(desc_module, dict) else ""
+            if not desc:
+                # 尝试从 desc 字段提取
+                desc_data = desc_module.get("desc") if isinstance(desc_module, dict) else None
+                desc = desc_data.get("text", "") if desc_data else ""
+
+            # 动态类型
+            dyn_type = item_data.get("type", "")
+            # DYNAMIC_TYPE_WORD=4, DYNAMIC_TYPE_DRAW=2, DYNAMIC_TYPE_AV=8, DYNAMIC_TYPE_ARTICLE=64
+            # DYNAMIC_TYPE_FORWARD=1 (转发)
+
+            # 判断是否转发
+            is_repost = (dyn_type == "DYNAMIC_TYPE_FORWARD") or (item_data.get("orig") is not None)
+
+            # 提取纯文本 (去除 HTML 标签和 B站表情)
+            content_text = self._strip_html(desc)
+
+            if content_text:
+                post_item = UserPostItem(
+                    mid=mid,
+                    dynamic_id=item_data.get("id_str", str(item_data.get("id", ""))),
+                    content=content_text,
+                    timestamp=author_module.get("pub_ts", 0) if isinstance(author_module, dict) else 0,
+                    is_repost=is_repost,
+                    post_type=dyn_type,
+                    crawl_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                )
+                yield post_item
+                posts_collected += 1
+                self._total_posts += 1
+
+        # 翻页
+        if has_more and offset and posts_collected < POSTS_PER_USER and page_num < MAX_POSTS_PAGES:
+            next_url = get_user_posts_url(mid, offset=offset)
+            yield scrapy.Request(
+                next_url,
+                callback=self.parse_user_posts,
+                meta={
+                    "mid": mid,
+                    "posts_collected": posts_collected,
+                    "pages": page_num + 1,
+                },
+                errback=self._posts_error,
+                dont_filter=True,
+            )
+        else:
+            logger.debug(
+                f"[mid={mid}] Posts done: {posts_collected} collected "
+                f"(pages={page_num}, has_more={has_more})"
+            )
+            self._fetch_next_user()
+
+    # ================================================================
+    #  辅助方法
+    # ================================================================
+
+    def _fetch_next_user(self):
+        """从 Redis 取下一个 MID，继续爬取。"""
+        if self._user_count >= MAX_USERS_PER_RUN:
+            logger.info(f"Reached MAX_USERS_PER_RUN ({MAX_USERS_PER_RUN}), stopping")
+            return
+
+        mid = self._pop_seed()
+        if mid and mid not in self._seen_mids:
+            self._seen_mids.add(mid)
+            return self._request_user_info(mid)
+
+        # 无新种子，进入空闲等待
+        if self._idle_start_time is None:
+            self._idle_start_time = time.time()
+            logger.info("Queue empty. Waiting for new seeds...")
+        return None
+
+    def _handle_error(self, failure):
+        """用户画像 / 视频列表请求失败时的通用处理。"""
+        request = failure.request
+        mid = request.meta.get("mid", "?")
+        logger.warning(f"[mid={mid}] Request failed: {failure.value}")
+        self._fetch_next_user()
+
+    def _posts_error(self, failure):
+        """动态 API 请求失败时的处理 (不影响画像采集, 静默跳过)。"""
+        request = failure.request
+        mid = request.meta.get("mid", "?")
+        logger.debug(f"[mid={mid}] Posts API failed: {failure.value}")
+        self._fetch_next_user()
+
+    def _strip_html(self, text: str) -> str:
+        """移除 HTML 标签和 B站表情，返回纯文本。"""
+        import re
+        if not text:
+            return ""
+        # 移除 HTML 标签
+        text = re.sub(r'<[^>]+>', '', text)
+        # 移除 B站表情 [xxx]
+        text = re.sub(r'\[[^\]]+\]', '', text)
+        # 规范化空白
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    # ================================================================
+    #  Spider Idle — 等待新种子
+    # ================================================================
+
+    def spider_idle(self):
+        """
+        空闲时检查 Redis 是否有新种子。
+        参考 bilibili_comment_spider 的实现。
+        """
+        # 先检查是否还有待处理种子
+        mid = self._pop_seed()
+        if mid and mid not in self._seen_mids:
+            self._seen_mids.add(mid)
+            req = self._request_user_info(mid)
+            if req:
+                self.crawler.engine.crawl(req)
+                raise DontCloseSpider("New user seed found, continue crawling")
+
+        # 检查超时
+        if self._idle_start_time and (time.time() - self._idle_start_time) > MAX_IDLE_TIME:
+            logger.info(
+                f"Idle timeout ({MAX_IDLE_TIME}s). "
+                f"Collected {self._user_count} users, {self._total_posts} posts."
+            )
+            return  # 允许关闭
+
+        # 等待新种子
+        self.crawler.engine.downloader.total_concurrency = 1  # 降低并发等新种子
+        raise DontCloseSpider("Waiting for new user seeds...")
+
+    # ================================================================
+    #  统计
+    # ================================================================
+
+    def closed(self, reason):
+        logger.info(
+            f"Spider closed ({reason}). "
+            f"Users: {self._user_count}, Posts: {self._total_posts}"
+        )

@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+.env
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Project data (runtime)
+data/videos/
+data/comments/
+data/users/
+data/danmaku/
+data/reports/
+data/logs/
+data/cookies.json
+data/analysis_state.json
+
+# Config with secrets
+config/llm_config.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Windows reserved names
+nul
+报告

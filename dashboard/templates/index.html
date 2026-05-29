@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}系统总览{% endblock %}
+{% block content %}
+
+<!-- 系统健康卡片 -->
+<div class="row mb-3" id="health-cards">
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card health-card" id="card-proxy">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div><i class="bi bi-hdd-network health-icon"></i>
+                        <h6 class="card-title mb-0">代理池</h6>
+                    </div>
+                    <span class="badge bg-secondary" id="proxy-badge">--</span>
+                </div>
+                <div class="health-detail mt-2" id="proxy-detail">加载中...</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card health-card" id="card-cache">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div><i class="bi bi-lightning health-icon"></i>
+                        <h6 class="card-title mb-0">缓存</h6>
+                    </div>
+                    <span class="badge bg-secondary" id="cache-badge">--</span>
+                </div>
+                <div class="health-detail mt-2" id="cache-detail">加载中...</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card health-card" id="card-login">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div><i class="bi bi-person-check health-icon"></i>
+                        <h6 class="card-title mb-0">登录状态</h6>
+                    </div>
+                    <span class="badge bg-secondary" id="login-badge">--</span>
+                </div>
+                <div class="health-detail mt-2" id="login-detail">加载中...</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card health-card" id="card-store">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div><i class="bi bi-database health-icon"></i>
+                        <h6 class="card-title mb-0">存储层</h6>
+                    </div>
+                    <span class="badge bg-secondary" id="store-badge">--</span>
+                </div>
+                <div class="health-detail mt-2" id="store-detail">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 数据统计卡片 -->
+<div class="row mb-4">
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number" id="stat-videos">0</div>
+                <div class="stat-label">监控视频</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number" id="stat-analyzed">0</div>
+                <div class="stat-label">已分析</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-danger" id="stat-high-risk">0</div>
+                <div class="stat-label">高风险账号</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-2">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number" id="stat-monitored">0</div>
+                <div class="stat-label">评论监测条数</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 模块状态面板（可折叠） -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center" data-bs-toggle="collapse" data-bs-target="#sys-detail" style="cursor:pointer">
+        <span><i class="bi bi-diagram-3 me-2"></i>系统模块状态</span>
+        <i class="bi bi-chevron-down" id="sys-chevron"></i>
+    </div>
+    <div class="collapse" id="sys-detail">
+        <div class="card-body" id="sys-detail-body">加载中...</div>
+    </div>
+</div>
+
+<!-- 视频列表 -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0"><i class="bi bi-camera-video me-2"></i>视频监控列表</h5>
+    <button class="btn btn-sm btn-outline-danger" id="btn-clear-all" onclick="clearAllData()" title="清空所有爬取数据">
+        <i class="bi bi-archive-fill"></i> 清空数据
+    </button>
+</div>
+<div class="row" id="video-grid">
+    <div class="col-12 text-center py-4 text-muted">加载中...</div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// ---- 系统健康卡片更新 ----
+function updateHealthCards() {
+    fetch('/api/system/status')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) return;
+
+            // 代理池
+            const p = d.data.proxy;
+            const pBadge = document.getElementById('proxy-badge');
+            const pDetail = document.getElementById('proxy-detail');
+            const pCard = document.getElementById('card-proxy');
+            if (p.available) {
+                pBadge.textContent = p.active + ' IP';
+                pBadge.className = 'badge bg-success';
+                pDetail.innerHTML = `活跃 <b>${p.active}</b> / 失效 ${p.failed}`;
+                pCard.style.borderLeft = '3px solid var(--success)';
+            } else {
+                pBadge.textContent = '未启用';
+                pBadge.className = 'badge bg-secondary';
+                pDetail.textContent = p.message || '未启用';
+                pCard.style.borderLeft = '3px solid var(--secondary)';
+            }
+
+            // 缓存
+            const c = d.data.cache;
+            const cBadge = document.getElementById('cache-badge');
+            const cDetail = document.getElementById('cache-detail');
+            const cCard = document.getElementById('card-cache');
+            if (c.available) {
+                cBadge.textContent = (c.hit_rate * 100).toFixed(0) + '%';
+                cBadge.className = 'badge bg-info';
+                cDetail.innerHTML = `条目 ${c.size} / 命中率 ${(c.hit_rate * 100).toFixed(0)}%`;
+                cCard.style.borderLeft = '3px solid var(--info)';
+            } else {
+                cBadge.textContent = '未启用';
+                cBadge.className = 'badge bg-secondary';
+                cDetail.textContent = c.message || '未启用';
+                cCard.style.borderLeft = '3px solid var(--secondary)';
+            }
+
+            // 登录
+            const l = d.data.login;
+            const lBadge = document.getElementById('login-badge');
+            const lDetail = document.getElementById('login-detail');
+            const lCard = document.getElementById('card-login');
+            if (l.is_logged_in) {
+                lBadge.textContent = '已登录';
+                lBadge.className = 'badge bg-success';
+                lDetail.innerHTML = 'SESSDATA <span class="text-success">有效</span>';
+                lCard.style.borderLeft = '3px solid var(--success)';
+            } else {
+                lBadge.textContent = '未登录';
+                lBadge.className = 'badge bg-warning text-dark';
+                lDetail.innerHTML = '请前往 <a href="/crawler">爬虫控制</a> 扫码登录';
+                lCard.style.borderLeft = '3px solid var(--warning)';
+            }
+
+            // 存储层
+            const s = d.data.store;
+            const sBadge = document.getElementById('store-badge');
+            const sDetail = document.getElementById('store-detail');
+            const sCard = document.getElementById('card-store');
+            sBadge.textContent = s.current.toUpperCase();
+            sBadge.className = 'badge bg-primary';
+            sDetail.innerHTML = `当前: <b>${s.current}</b> / 支持: ${s.supported.join(', ')}`;
+            sCard.style.borderLeft = '3px solid var(--primary)';
+
+            // 详情面板
+            const detail = document.getElementById('sys-detail-body');
+            detail.innerHTML = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>代理池</h6>
+                        <pre class="sys-pre">${JSON.stringify(p, null, 2)}</pre>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>缓 存</h6>
+                        <pre class="sys-pre">${JSON.stringify(c, null, 2)}</pre>
+                    </div>
+                    <div class="col-md-6 mt-2">
+                        <h6>登 录</h6>
+                        <pre class="sys-pre">${JSON.stringify(l, null, 2)}</pre>
+                    </div>
+                    <div class="col-md-6 mt-2">
+                        <h6>存 储</h6>
+                        <pre class="sys-pre">${JSON.stringify(s, null, 2)}</pre>
+                    </div>
+                </div>`;
+        })
+        .catch(e => console.error('Health check failed:', e));
+}
+
+// ---- 视频列表 ----
+function loadVideos() {
+    fetch('/api/videos')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) return;
+            const grid = document.getElementById('video-grid');
+            if (d.data.length === 0) {
+                grid.innerHTML = '<div class="col-12 text-center py-5 text-muted"><i class="bi bi-inbox display-4 d-block mb-2"></i>暂无监控视频<br><small>请前往爬虫控制台采集数据</small></div>';
+                return;
+            }
+            grid.innerHTML = d.data.map(v => `
+                <div class="col-xl-3 col-lg-4 col-md-6 mb-3">
+                    <div class="card video-card h-100" onclick="location.href='/video/${v.bvid}'" style="cursor:pointer">
+                        <button class="video-card-delete" onclick="event.stopPropagation(); deleteVideo('${v.bvid}', '${(v.title || '').replace(/'/g, "\\'")}')" title="删除此视频数据">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                        <div class="video-card-img">
+                            ${v.pic ? `<img src="${v.pic}" alt="${v.title}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="video-card-placeholder" style="display:none"><i class="bi bi-play-btn"></i></div>` : `<div class="video-card-placeholder"><i class="bi bi-play-btn"></i></div>`}
+                            ${v.has_report ? '<span class="badge bg-success video-card-badge">已分析</span>' : '<span class="badge bg-secondary video-card-badge">待分析</span>'}
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <h6 class="card-title text-truncate flex-grow-1 me-1" title="${v.title}">${v.title}</h6>
+                                <a href="https://www.bilibili.com/video/${v.bvid}" target="_blank"
+                                   class="text-decoration-none text-muted flex-shrink-0" title="在B站打开"
+                                   onclick="event.stopPropagation()" style="font-size:1.1em;">
+                                    <i class="bi bi-box-arrow-up-right"></i>
+                                </a>
+                            </div>
+                            <p class="card-text small text-muted mb-2">
+                                <i class="bi bi-person"></i> ${v.owner_name}
+                            </p>
+                            <div class="d-flex justify-content-between small text-muted">
+                                <span><i class="bi bi-play-fill"></i> ${formatNum(v.view_count)}</span>
+                                <span title="B站评论总数（含未抓取）"><i class="bi bi-chat-dots"></i> ${formatNum(v.reply_count)}</span>
+                                <span title="已抓取评论数"><i class="bi bi-download"></i> ${v.comment_count}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>`).join('');
+
+            // 更新统计
+            const analyzed = d.data.filter(v => v.has_report).length;
+            let highRisk = 0, monitored = 0;
+            d.data.forEach(v => { monitored += v.comment_count; });
+            document.getElementById('stat-videos').textContent = d.data.length;
+            document.getElementById('stat-analyzed').textContent = analyzed;
+            document.getElementById('stat-monitored').textContent = formatNum(monitored);
+
+            // 异步加载报告统计
+            loadReportStats(d.data);
+        });
+}
+
+function loadReportStats(videos) {
+    let highRisk = 0;
+    let done = 0;
+    const analyzed = videos.filter(v => v.has_report);
+    if (analyzed.length === 0) {
+        document.getElementById('stat-high-risk').textContent = '0';
+        return;
+    }
+    analyzed.forEach(v => {
+        fetch('/api/report/' + v.bvid)
+            .then(r => r.json())
+            .then(d => {
+                if (d.success && d.data && d.data.statistics) {
+                    highRisk += d.data.statistics.high_risk_count || 0;
+                }
+                done++;
+                if (done >= analyzed.length) {
+                    document.getElementById('stat-high-risk').textContent = highRisk;
+                }
+            })
+            .catch(() => { done++; });
+    });
+}
+
+function formatNum(n) {
+    if (!n) return '0';
+    if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+    return n.toLocaleString();
+}
+
+// 折叠面板箭头旋转
+document.addEventListener('DOMContentLoaded', () => {
+    const sysDetail = document.getElementById('sys-detail');
+    if (sysDetail) {
+        sysDetail.addEventListener('show.bs.collapse', () => document.getElementById('sys-chevron').style.transform = 'rotate(180deg)');
+        sysDetail.addEventListener('hide.bs.collapse', () => document.getElementById('sys-chevron').style.transform = 'rotate(0deg)');
+    }
+});
+
+// 初始化
+updateHealthCards();
+loadVideos();
+setInterval(updateHealthCards, 30000);
+setInterval(loadVideos, 60000);
+
+// ---- 删除单个视频数据 ----
+function deleteVideo(bvid, title) {
+    confirmDelete(
+        `确定要删除「${title || bvid}」的所有数据吗？\n\n这将删除：\n  - 视频信息\n  - 评论数据\n  - 分析报告\n\n此操作不可撤销！`,
+        () => fetch(`/api/data/video/${bvid}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    loadVideos(); // 刷新列表
+                } else {
+                    showToast(d.message || '删除失败', 'error');
+                    throw new Error(d.message);
+                }
+            })
+    );
+}
+
+// ---- 清空所有数据 ----
+function clearAllData() {
+    confirmDelete(
+        '确定要清空所有已爬取的数据吗？\n\n此操作将删除全部：\n  - 视频信息文件\n  - 评论数据文件\n  - 分析报告文件\n\n此操作不可撤销！建议先备份重要数据。',
+        () => fetch('/api/data/all', { method: 'DELETE' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    const detail = Object.entries(d.deleted || {})
+                        .map(([k, v]) => `${k}: ${v} 个文件`).join(', ');
+                    showToast(`${d.message}（${detail}）`, 'success');
+                    loadVideos(); // 刷新列表
+                } else {
+                    showToast('清空失败', 'error');
+                    throw new Error('clear failed');
+                }
+            })
+    );
+}
+</script>
+{% endblock %}

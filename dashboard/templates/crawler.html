@@ -1,0 +1,544 @@
+{% extends "base.html" %}
+{% block title %}爬虫控制台{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- ====== 左侧：爬虫控制 ====== -->
+    <div class="col-lg-7">
+        <h5 class="mb-3"><i class="bi bi-gear me-2"></i>爬虫进程控制</h5>
+
+        <div class="row mb-3">
+            <!-- 视频爬虫 -->
+            <div class="col-md-3 mb-3">
+                <div class="card spider-card" id="spider-video">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6><i class="bi bi-camera-video"></i> 视频爬虫</h6>
+                            <span class="spider-status badge bg-secondary" id="vs-status">--</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            <div>PID: <span id="vs-pid">--</span></div>
+                            <div>启动: <span id="vs-started">--</span></div>
+                        </div>
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_video')" id="vs-start">
+                                <i class="bi bi-play-fill"></i> 启动
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_video')" id="vs-stop">
+                                <i class="bi bi-stop-fill"></i> 停止
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_video')">
+                                <i class="bi bi-file-text"></i> 日志
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 评论爬虫 -->
+            <div class="col-md-3 mb-3">
+                <div class="card spider-card" id="spider-comment">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6><i class="bi bi-chat-dots"></i> 评论爬虫</h6>
+                            <span class="spider-status badge bg-secondary" id="cs-status">--</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            <div>PID: <span id="cs-pid">--</span></div>
+                            <div>启动: <span id="cs-started">--</span></div>
+                        </div>
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_comment')" id="cs-start">
+                                <i class="bi bi-play-fill"></i> 启动
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_comment')" id="cs-stop">
+                                <i class="bi bi-stop-fill"></i> 停止
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_comment')">
+                                <i class="bi bi-file-text"></i> 日志
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 用户爬虫 (v2.1) -->
+            <div class="col-md-3 mb-3">
+                <div class="card spider-card" id="spider-user">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6><i class="bi bi-person-badge"></i> 用户爬虫</h6>
+                            <span class="spider-status badge bg-secondary" id="us-status">--</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            <div>PID: <span id="us-pid">--</span></div>
+                            <div>启动: <span id="us-started">--</span></div>
+                        </div>
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_user')" id="us-start">
+                                <i class="bi bi-play-fill"></i> 启动
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_user')" id="us-stop">
+                                <i class="bi bi-stop-fill"></i> 停止
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_user')">
+                                <i class="bi bi-file-text"></i> 日志
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 弹幕爬虫 (v2.2) -->
+            <div class="col-md-3 mb-3">
+                <div class="card spider-card" id="spider-danmaku">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6><i class="bi bi-chat-square-text"></i> 弹幕爬虫</h6>
+                            <span class="spider-status badge bg-secondary" id="ds-status">--</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            <div>PID: <span id="ds-pid">--</span></div>
+                            <div>启动: <span id="ds-started">--</span></div>
+                        </div>
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_danmaku')" id="ds-start">
+                                <i class="bi bi-play-fill"></i> 启动
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_danmaku')" id="ds-stop">
+                                <i class="bi bi-stop-fill"></i> 停止
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_danmaku')">
+                                <i class="bi bi-file-text"></i> 日志
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 一键操作 -->
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <button class="btn btn-success" onclick="fetch('/api/crawler/start-both',{method:'POST'}).then(()=>refresh())">
+                <i class="bi bi-play-circle"></i> 启动全部
+            </button>
+            <button class="btn btn-danger" onclick="fetch('/api/crawler/stop-all',{method:'POST'}).then(()=>refresh())">
+                <i class="bi bi-stop-circle"></i> 停止全部
+            </button>
+            <button class="btn btn-outline-warning" onclick="clearQueues()">
+                <i class="bi bi-trash"></i> 清空队列
+            </button>
+            <button class="btn btn-outline-info" onclick="refreshAll()">
+                <i class="bi bi-arrow-repeat"></i> 刷新全部
+            </button>
+        </div>
+
+        <!-- 种子注入 -->
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-plus-circle"></i> 种子注入</div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <button class="btn btn-outline-primary w-100" onclick="injectSeed('hot',{pages:3})">
+                            <i class="bi bi-fire"></i> 热门排行 (3页)
+                        </button>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group">
+                            <input type="text" class="form-control form-control-sm" id="bvid-input" placeholder="BV1xx411c7mD">
+                            <button class="btn btn-outline-primary btn-sm" onclick="injectSeed('bvid',{bvid:document.getElementById('bvid-input').value})">注入</button>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group">
+                            <input type="text" class="form-control form-control-sm" id="kw-input" placeholder="搜索关键词">
+                            <button class="btn btn-outline-primary btn-sm" onclick="injectSeed('keyword',{keyword:document.getElementById('kw-input').value,pages:1})">搜索</button>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group input-group-sm">
+                            <input type="text" class="form-control" id="uid-input" placeholder="用户UID，逗号分隔">
+                            <button class="btn btn-outline-info" onclick="injectUserSeeds()">
+                                <i class="bi bi-person-plus"></i> 注入用户
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志控制台 -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-terminal"></i> 日志控制台</span>
+                <div class="d-flex align-items-center gap-2">
+                    <small class="text-muted" id="log-title">--</small>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshLog()" id="btn-refresh-log" style="display:none" title="刷新日志">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="stopAutoRefresh()" id="btn-stop-refresh" style="display:none" title="停止自动刷新">
+                        <i class="bi bi-stop-circle"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <pre class="log-console" id="log-console">点击爬虫卡片的"日志"按钮查看输出...</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 右侧：系统面板 ====== -->
+    <div class="col-lg-5">
+        <!-- 代理池状态 -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-hdd-network me-2"></i>代理池</span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="refreshProxy()" title="刷新代理池">
+                    <i class="bi bi-arrow-repeat"></i>
+                </button>
+            </div>
+            <div class="card-body" id="proxy-panel">
+                <div class="text-muted small">加载中...</div>
+            </div>
+        </div>
+
+        <!-- B站登录 -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-person-check me-2"></i>B站登录</span>
+                <button class="btn btn-sm btn-outline-primary" onclick="showLoginModal()" id="btn-login-action">
+                    <i class="bi bi-qr-code"></i> 扫码登录
+                </button>
+            </div>
+            <div class="card-body" id="login-panel">
+                <div class="text-muted small">加载中...</div>
+            </div>
+        </div>
+
+        <!-- 缓存状态 -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-lightning me-2"></i>缓存</span>
+                <button class="btn btn-sm btn-outline-danger" onclick="clearCache()">
+                    <i class="bi bi-trash"></i> 清空
+                </button>
+            </div>
+            <div class="card-body" id="cache-panel">
+                <div class="text-muted small">加载中...</div>
+            </div>
+        </div>
+
+        <!-- 数据统计 -->
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-bar-chart me-2"></i>采集统计</div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col">
+                        <div class="fs-4 fw-bold" id="stat-videos">--</div>
+                        <small class="text-muted">视频</small>
+                    </div>
+                    <div class="col">
+                        <div class="fs-4 fw-bold" id="stat-comments">--</div>
+                        <small class="text-muted">评论</small>
+                    </div>
+                    <div class="col">
+                        <div class="fs-4 fw-bold" id="stat-users">--</div>
+                        <small class="text-muted">用户</small>
+                    </div>
+                    <div class="col">
+                        <div class="fs-4 fw-bold" id="stat-danmaku">--</div>
+                        <small class="text-muted">弹幕</small>
+                    </div>
+                    <div class="col">
+                        <div class="fs-4 fw-bold" id="stat-reports">--</div>
+                        <small class="text-muted">报告</small>
+                    </div>
+                </div>
+                <hr>
+                <div class="small">
+                    <div>视频种子: <span class="fw-bold" id="q-seeds">--</span></div>
+                    <div>评论种子: <span class="fw-bold" id="q-comment-seeds">--</span></div>
+                    <div>用户种子: <span class="fw-bold" id="q-user-seeds">--</span></div>
+                    <div>待爬: <span class="fw-bold" id="q-pending">--</span></div>
+                    <div>去重: <span class="fw-bold" id="q-dupe">--</span></div>
+                    <div class="mt-1"><span class="badge bg-success" id="redis-ok">Redis: 检测中</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ====== 登录二维码弹窗 ====== -->
+<div class="modal fade" id="loginModal" tabindex="-1">
+    <div class="modal-dialog modal-sm modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title"><i class="bi bi-qr-code"></i> B站扫码登录</h6>
+                <button class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <div id="qrcode-container">
+                    <div class="spinner-border text-primary my-4"></div>
+                    <p class="text-muted small">正在生成二维码...</p>
+                </div>
+                <p class="text-muted small mt-2" id="qrcode-status">请使用B站客户端扫描二维码</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// ===== 数据刷新 =====
+        function refresh() {
+            fetch('/api/crawler/status').then(r=>r.json()).then(d=>{
+                if (!d.success) return;
+                const s = d.data;
+                // 爬虫状态
+                const spiderMap = [
+                    {name:'bilibili_video', prefix:'vs', card:'spider-video'},
+                    {name:'bilibili_comment', prefix:'cs', card:'spider-comment'},
+                    {name:'bilibili_user', prefix:'us', card:'spider-user'},
+                    {name:'bilibili_danmaku', prefix:'ds', card:'spider-danmaku'},
+                ];
+                spiderMap.forEach(({name, prefix, card}) => {
+                    const sp = s.spiders[name] || {};
+                    const el = document.getElementById(prefix+'-status');
+                    const alive = sp.alive;
+                    const isStuck = sp.is_idle_stuck;
+                    if (alive && isStuck) {
+                        el.textContent = '等待新种子...';
+                        el.className = 'spider-status badge bg-warning text-dark spider-pulse';
+                    } else if (alive) {
+                        el.textContent = '运行中';
+                        el.className = 'spider-status badge bg-success spider-pulse';
+                    } else {
+                        el.textContent = '已停止';
+                        el.className = 'spider-status badge bg-secondary';
+                    }
+                    document.getElementById(prefix+'-pid').textContent = sp.pid || '--';
+                    document.getElementById(prefix+'-started').textContent = sp.started_at ? sp.started_at.slice(11,19) : '--';
+                    const cardEl = document.getElementById(card);
+                    const borderColor = (alive && isStuck) ? 'var(--warning)' : (alive ? 'var(--success)' : 'var(--secondary)');
+                    cardEl.style.borderLeft = '3px solid ' + borderColor;
+                });
+        // 统计
+        const st = s.stats || {};
+        document.getElementById('stat-videos').textContent = st.videos_collected || 0;
+        document.getElementById('stat-comments').textContent = st.comments_collected || 0;
+        document.getElementById('stat-users').textContent = st.users_collected || 0;
+        document.getElementById('stat-danmaku').textContent = st.danmaku_collected || 0;
+        document.getElementById('stat-reports').textContent = st.reports_generated || 0;
+        // 队列
+        const q = s.queues || {};
+        document.getElementById('q-seeds').textContent = q.video_seeds || 0;
+        document.getElementById('q-comment-seeds').textContent = q.comment_seeds || 0;
+        document.getElementById('q-user-seeds').textContent = q.user_seeds || 0;
+        document.getElementById('q-pending').textContent = q.pending_requests || 0;
+        document.getElementById('q-dupe').textContent = q.dupefilter || 0;
+        const rOk = document.getElementById('redis-ok');
+        rOk.textContent = q.redis_ok ? 'Redis: 正常' : ('Redis: '+(q.error||'异常'));
+        rOk.className = 'badge ' + (q.redis_ok ? 'bg-success' : 'bg-danger');
+    }).catch(()=>{});
+}
+
+// ===== 子系统面板 =====
+function refreshPanels() {
+    fetch('/api/system/status').then(r=>r.json()).then(d=>{
+        if (!d.success) return;
+        // 代理池
+        const p = d.data.proxy;
+        document.getElementById('proxy-panel').innerHTML = p.enabled
+            ? `<div class="d-flex justify-content-between mb-1"><span>活跃IP</span><b>${p.active||0}</b></div>
+               <div class="d-flex justify-content-between mb-1"><span>失效计数</span><span class="text-danger">${p.failed||0}</span></div>
+               <div class="d-flex justify-content-between mb-1"><span>状态</span><span class="text-success">正常</span></div>`
+            : `<p class="text-muted small mb-0">代理池未启用。前往 <a href="/settings">系统设置</a> 开启 ENABLE_IP_PROXY</p>`;
+
+        // 登录
+        const l = d.data.login;
+        const loginPanel = document.getElementById('login-panel');
+        const loginBtn = document.getElementById('btn-login-action');
+        if (l.is_logged_in) {
+            loginPanel.innerHTML = `<p class="mb-0"><span class="text-success"><i class="bi bi-check-circle"></i> 已登录</span> — SESSDATA 有效</p>`;
+            loginBtn.innerHTML = '<i class="bi bi-box-arrow-right"></i> 重新登录';
+        } else {
+            loginPanel.innerHTML = `<p class="text-muted small mb-0">未登录。登录后可获取更完整的用户数据（VIP状态、等级等）。</p>`;
+            loginBtn.innerHTML = '<i class="bi bi-qr-code"></i> 扫码登录';
+        }
+
+        // 缓存
+        const c = d.data.cache;
+        document.getElementById('cache-panel').innerHTML = c.available
+            ? `<div class="d-flex justify-content-between mb-1"><span>条目数</span><b>${c.size}</b></div>
+               <div class="d-flex justify-content-between mb-1"><span>命中率</span><b>${(c.hit_rate*100).toFixed(1)}%</b></div>
+               <div class="d-flex justify-content-between mb-1"><span>最大容量</span><span>${c.max_size}</span></div>`
+            : `<p class="text-muted small mb-0">缓存未启用</p>`;
+    });
+}
+
+function refreshAll() {
+    refresh();
+    refreshPanels();
+}
+
+// ===== 爬虫操作 =====
+function startSpider(name) {
+    fetch('/api/crawler/start/'+name, {method:'POST'}).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'warning');
+        if (d.success) refresh();
+    });
+}
+function stopSpider(name) {
+    fetch('/api/crawler/stop/'+name, {method:'POST'}).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'warning');
+        refresh();
+    });
+}
+function clearQueues() {
+    if (!confirm('确定清空所有Redis队列？')) return;
+    fetch('/api/crawler/clear', {method:'POST'}).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'error');
+        refresh();
+    });
+}
+function injectSeed(type, opts) {
+    fetch('/api/crawler/inject', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({type, ...opts})
+    }).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'error');
+        if (d.success) refresh();
+    });
+}
+// ===== 注入用户种子（UID 输入框）=====
+function injectUserSeeds() {
+    const raw = document.getElementById('uid-input').value.trim();
+    if (!raw) { showToast('请输入用户 UID', 'warning'); return; }
+    // 支持逗号、空格、换行分隔
+    const mids = [...new Set(
+        raw.split(/[,\s\n]+/).map(s => s.trim()).filter(Boolean).map(Number).filter(id => id > 0)
+    )];
+    if (mids.length === 0) { showToast('未识别到有效 UID', 'warning'); return; }
+    fetch('/api/crawler/inject', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ type: 'user_uid', mids: mids })
+    }).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'error');
+        if (d.success) { refresh(); document.getElementById('uid-input').value = ''; }
+    });
+}
+
+// ===== 日志控制台 =====
+let _logAutoRefreshTimer = null;
+let _currentLogSpider = null;
+
+function showLog(name) {
+    _currentLogSpider = name;
+    document.getElementById('btn-refresh-log').style.display = '';
+    document.getElementById('btn-stop-refresh').style.display = '';
+    fetchLog(name);
+    // 自动每 3 秒刷新
+    stopAutoRefresh();
+    _logAutoRefreshTimer = setInterval(() => fetchLog(name, true), 3000);
+}
+
+function fetchLog(name, silent) {
+    const title = document.getElementById('log-title');
+    const console = document.getElementById('log-console');
+    if (!silent) {
+        title.textContent = name;
+        console.textContent = '加载中...';
+    }
+    fetch('/api/crawler/log/'+name+'?lines=100').then(r=>r.json()).then(d=>{
+        if (d.success) {
+            console.textContent = d.data.recent || '(暂无日志输出)';
+            const total = d.data.total_lines;
+            title.textContent = name + ' (' + total + ' 行)';
+            // 自动滚动到底部
+            console.scrollTop = console.scrollHeight;
+        } else {
+            if (!silent) console.textContent = d.message;
+        }
+    }).catch(()=>{ if (!silent) console.textContent = '加载失败'; });
+}
+
+function refreshLog() {
+    if (_currentLogSpider) fetchLog(_currentLogSpider);
+}
+
+function stopAutoRefresh() {
+    if (_logAutoRefreshTimer) {
+        clearInterval(_logAutoRefreshTimer);
+        _logAutoRefreshTimer = null;
+    }
+}
+
+// ===== 代理/缓存操作 =====
+function refreshProxy() {
+    fetch('/api/proxy/refresh', {method:'POST'}).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'warning');
+        refreshPanels();
+    });
+}
+function clearCache() {
+    if (!confirm('确定清空缓存？')) return;
+    fetch('/api/cache/clear', {method:'POST'}).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'warning');
+        refreshPanels();
+    });
+}
+
+// ===== 登录弹窗 =====
+function showLoginModal() {
+    const modal = new bootstrap.Modal(document.getElementById('loginModal'));
+    modal.show();
+
+    const container = document.getElementById('qrcode-container');
+    const statusEl = document.getElementById('qrcode-status');
+    container.innerHTML = '<div class="spinner-border text-primary my-4"></div><p class="text-muted small">正在生成二维码...</p>';
+    statusEl.textContent = '请使用B站客户端扫描二维码';
+
+    // 1. 生成二维码
+    fetch('/api/login/qrcode', {method:'POST'}).then(r=>r.json()).then(d=>{
+        if (!d.success) {
+            container.innerHTML = '<p class="text-danger">生成失败: '+d.message+'</p>';
+            return;
+        }
+        const qr = d.data;
+        // 显示二维码图片 (使用第三方API生成QR码)
+        container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qr.qrcode_url)}" class="img-fluid" alt="QR Code">
+            <p class="text-muted small mt-2">有效期3分钟</p>`;
+
+        // 2. 轮询扫码状态
+        let pollCount = 0;
+        const poller = setInterval(() => {
+            fetch('/api/login/poll/'+qr.qrcode_key).then(r=>r.json()).then(d=>{
+                if (!d.success) return;
+                if (d.data.status === 'success') {
+                    clearInterval(poller);
+                    statusEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> 登录成功！</span>';
+                    container.innerHTML += '<p class="text-success fw-bold mt-2">登录成功！</p>';
+                    showToast('B站登录成功', 'success');
+                    setTimeout(() => { modal.hide(); refreshPanels(); }, 1500);
+                } else if (d.data.status === 'scanned') {
+                    statusEl.innerHTML = '<span class="text-info"><i class="bi bi-phone"></i> 已扫码，请在手机上确认</span>';
+                } else if (d.data.status === 'expired') {
+                    clearInterval(poller);
+                    statusEl.innerHTML = '<span class="text-danger">二维码已过期，请关闭重新生成</span>';
+                }
+            });
+            pollCount++;
+            if (pollCount > 120) { clearInterval(poller); statusEl.textContent = '轮询超时'; }
+        }, 1500);
+    });
+}
+
+// 初始化
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+{% endblock %}

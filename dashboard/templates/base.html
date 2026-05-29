@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <title>{% block title %}B站哨兵{% endblock %} — 水军检测系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-shield-check"></i> B站哨兵
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="nav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">
+                            <i class="bi bi-speedometer2"></i> 总览
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path.startswith('/video') %}active{% endif %}" href="/">
+                            <i class="bi bi-camera-video"></i> 视频监控
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/crawler' %}active{% endif %}" href="/crawler">
+                            <i class="bi bi-gear"></i> 爬虫控制
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/settings' %}active{% endif %}" href="/settings">
+                            <i class="bi bi-sliders"></i> 系统设置
+                        </a>
+                    </li>
+                </ul>
+                <span class="navbar-text" id="system-status-bar">
+                    <span class="status-dot status-loading"></span> 加载中...
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mt-3 mb-5">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- 全局删除确认 Modal -->
+    <div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill"></i> 确认删除</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="deleteConfirmBody">
+                    确定要删除这些数据吗？此操作不可撤销。
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-danger" id="deleteConfirmBtn">
+                        <i class="bi bi-trash-fill"></i> 确认删除
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    {# ---- 右下角调试控制台 ---- #}
+    <div id="debug-fab" class="position-fixed" style="bottom:24px;right:24px;z-index:1090;display:none">
+        <button class="btn btn-dark rounded-circle shadow d-flex align-items-center justify-content-center"
+                style="width:52px;height:52px" onclick="toggleDebugPanel()" title="调试控制台">
+            <i class="bi bi-terminal fs-5"></i>
+        </button>
+    </div>
+
+    <div id="debug-panel" class="position-fixed bg-dark text-light border border-secondary rounded-3 shadow-lg"
+         style="display:none;bottom:86px;right:24px;width:480px;max-height:70vh;z-index:1091;flex-direction:column;overflow:hidden">
+        <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom border-secondary bg-black bg-opacity-25">
+            <span class="small fw-bold"><i class="bi bi-terminal"></i> 调试控制台</span>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="clearDebugLog()" title="清空">🗑</button>
+                <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="toggleDebugPanel()" title="关闭">✕</button>
+            </div>
+        </div>
+        <div id="debug-log" class="p-2 overflow-auto flex-grow-1" style="font-family:monospace;font-size:12px;line-height:1.6;max-height:55vh"></div>
+        <div class="px-2 py-1 border-top border-secondary bg-black bg-opacity-10 d-flex gap-2">
+            <button class="btn btn-sm btn-outline-success py-0" onclick="debugFetch('/api/system/health')">Health</button>
+            <button class="btn btn-sm btn-outline-info py-0" onclick="debugFetch('/api/system/status')">Status</button>
+            <button class="btn btn-sm btn-outline-warning py-0" onclick="debugFetch('/api/llm/status')">LLM</button>
+        </div>
+    </div>
+
+    <script>
+    // ---- 全局调试日志 ----
+    const _debugLogs = [];
+    let _debugPanelOpen = false;
+
+    function initDebugFab() {
+        // 只在 localhost / 开发环境显示
+        const fab = document.getElementById('debug-fab');
+        if (fab) fab.style.display = 'block';
+        // 劫持 fetch 自动记录
+        if (!window.__debugFetchPatched) {
+            const _origFetch = window.fetch;
+            window.fetch = function(...args) {
+                const [url, opts] = args;
+                const method = (opts && opts.method) || 'GET';
+                const start = Date.now();
+                return _origFetch.apply(this, args).then(resp => {
+                    const ms = Date.now() - start;
+                    const entry = {
+                        t: new Date().toLocaleTimeString(),
+                        method, url: typeof url === 'string' ? url : url.url,
+                        status: resp.status, ms, ok: resp.ok
+                    };
+                    _debugLogs.unshift(entry);
+                    if (_debugLogs.length > 200) _debugLogs.pop();
+                    renderDebugLog();
+                    return resp;
+                }).catch(err => {
+                    const entry = {
+                        t: new Date().toLocaleTimeString(),
+                        method, url: typeof url === 'string' ? url : url.url,
+                        status: 0, ms: Date.now()-start, ok: false, err: err.message
+                    };
+                    _debugLogs.unshift(entry);
+                    renderDebugLog();
+                    throw err;
+                });
+            };
+            window.__debugFetchPatched = true;
+        }
+    }
+    document.addEventListener('DOMContentLoaded', initDebugFab);
+
+    function toggleDebugPanel() {
+        _debugPanelOpen = !_debugPanelOpen;
+        const panel = document.getElementById('debug-panel');
+        if (panel) panel.style.display = _debugPanelOpen ? 'flex' : 'none';
+        if (_debugPanelOpen) renderDebugLog();
+    }
+
+    function renderDebugLog() {
+        const el = document.getElementById('debug-log');
+        if (!el || !_debugPanelOpen) return;
+        el.innerHTML = _debugLogs.slice(0, 80).map(e => {
+            const color = e.ok ? '#4ade80' : '#f87171';
+            const errTag = e.err ? ` <span style="color:#fbbf24">${e.err}</span>` : '';
+            return `<div style="border-bottom:1px solid #1e293b;padding:2px 0">
+                <span class="text-muted">${e.t}</span>
+                <span style="color:#38bdf8">${e.method}</span>
+                <span style="color:${color}">${e.status}</span>
+                <span class="text-muted">${e.ms}ms</span>
+                <span style="word-break:break-all">${e.url.split('?')[0]}</span>
+                ${errTag}
+            </div>`;
+        }).join('') || '<div class="text-muted small p-2">暂无请求日志</div>';
+    }
+
+    function clearDebugLog() {
+        _debugLogs.length = 0;
+        renderDebugLog();
+    }
+
+    async function debugFetch(url) {
+        const el = document.getElementById('debug-log');
+        if (el) el.innerHTML += `<div class="text-info small">➤ GET ${url}</div>`;
+        try {
+            const r = await fetch(url);
+            const d = await r.json();
+            if (el) el.innerHTML += `<div class="text-success small">✓ ${JSON.stringify(d).substring(0,300)}</div>`;
+        } catch(e) {
+            if (el) el.innerHTML += `<div class="text-danger small">✗ ${e.message}</div>`;
+        }
+    }
+    </script>
+
+    <script>
+    // 全局系统状态轮询
+    function updateSystemStatusBar() {
+        fetch('/api/system/status')
+            .then(r => r.json())
+            .then(d => {
+                if (!d.success) return;
+                const bar = document.getElementById('system-status-bar');
+                if (!bar) return;
+                const s = d.data;
+                const ok = s.modules_healthy;
+                bar.innerHTML = ok
+                    ? '<span class="status-dot status-ok"></span> 系统正常'
+                    : '<span class="status-dot status-warn"></span> 部分异常';
+                bar.className = 'navbar-text' + (ok ? ' status-healthy' : ' status-warn');
+            })
+            .catch(() => {
+                const bar = document.getElementById('system-status-bar');
+                if (bar) {
+                    bar.innerHTML = '<span class="status-dot status-err"></span> 离线';
+                    bar.className = 'navbar-text status-error';
+                }
+            });
+    }
+    document.addEventListener('DOMContentLoaded', updateSystemStatusBar);
+    setInterval(updateSystemStatusBar, 30000);
+
+    // 全局 Toast
+    function showToast(msg, type) {
+        type = type || 'info';
+        const icon = {'success':'check-circle','error':'exclamation-circle','warning':'exclamation-triangle','info':'info-circle'}[type] || 'info-circle';
+        const color = {'success':'#198754','error':'#dc3545','warning':'#fd7e14','info':'#0d6efd'}[type] || '#0d6efd';
+        const container = document.querySelector('.toast-container');
+        const id = 't' + Date.now();
+        container.innerHTML += `<div id="${id}" class="toast" role="alert"><div class="toast-header">
+            <i class="bi bi-${icon} me-2" style="color:${color}"></i>
+            <strong class="me-auto">${type === 'error' ? '错误' : type === 'success' ? '成功' : '提示'}</strong>
+            <button class="btn-close btn-close-sm" data-bs-dismiss="toast"></button>
+        </div><div class="toast-body">${msg}</div></div>`;
+        const el = document.getElementById(id);
+        const toast = new bootstrap.Toast(el, {delay: 4000});
+        toast.show();
+        el.addEventListener('hidden.bs.toast', () => el.remove());
+    }
+
+    // 全局删除确认弹窗
+    function confirmDelete(message, onConfirm) {
+        const modal = new bootstrap.Modal(document.getElementById('deleteConfirmModal'));
+        document.getElementById('deleteConfirmBody').textContent = message;
+        const btn = document.getElementById('deleteConfirmBtn');
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
+        newBtn.addEventListener('click', () => {
+            newBtn.disabled = true;
+            newBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 删除中...';
+            onConfirm()
+                .then(() => modal.hide())
+                .catch(() => { newBtn.disabled = false; newBtn.innerHTML = '<i class="bi bi-trash-fill"></i> 确认删除'; });
+        });
+        modal.show();
+    }
+    </script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

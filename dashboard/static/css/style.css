@@ -1,0 +1,427 @@
+/* ============================================================
+   B站哨兵 Dashboard v2.0 — 全局样式
+   ============================================================ */
+
+:root {
+    --primary: #0d6efd;
+    --success: #198754;
+    --danger: #dc3545;
+    --warning: #fd7e14;
+    --info: #0dcaf0;
+    --secondary: #6c757d;
+    --dark: #212529;
+    --bg: #f5f7fa;
+    --card-bg: #ffffff;
+    --border-radius: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,.08);
+    --shadow-hover: 0 4px 12px rgba(0,0,0,.12);
+}
+
+body {
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--dark);
+}
+
+/* ---- 导航栏 ---- */
+.navbar {
+    background: var(--card-bg);
+    box-shadow: var(--shadow);
+    border-bottom: 1px solid #e9ecef;
+}
+.navbar-brand {
+    font-weight: 600;
+    color: var(--primary) !important;
+}
+.navbar-brand i { color: var(--success); }
+.nav-link { font-size: 14px; }
+.nav-link.active { font-weight: 600; color: var(--primary) !important; }
+
+/* ---- 系统状态栏 ---- */
+#system-status-bar { font-size: 13px; }
+.status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+.status-ok { background: var(--success); }
+.status-warn { background: var(--warning); }
+.status-err { background: var(--danger); }
+.status-loading { background: var(--secondary); animation: pulse-dot 1.5s infinite; }
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .3; }
+}
+.status-healthy { color: var(--success) !important; }
+.status-error { color: var(--danger) !important; }
+
+/* ---- 卡片通用 ---- */
+.card {
+    border: 1px solid #e9ecef;
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow);
+    transition: box-shadow .2s;
+}
+.card:hover { box-shadow: var(--shadow-hover); }
+.card-header {
+    background: var(--card-bg);
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid #e9ecef;
+}
+.card-body { padding: 16px; }
+
+/* ---- 健康卡片 ---- */
+.health-card {
+    border-left: 3px solid var(--secondary);
+    transition: border-color .3s;
+}
+.health-icon { font-size: 20px; margin-right: 8px; color: var(--secondary); vertical-align: middle; }
+.health-card .card-title { display: inline; font-size: 14px; }
+.health-detail { font-size: 13px; color: #6c757d; }
+
+/* ---- 统计卡片 ---- */
+.stat-card { text-align: center; }
+.stat-number {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.stat-label {
+    font-size: 13px;
+    color: #6c757d;
+    margin-top: 2px;
+}
+
+/* ---- 视频卡片 ---- */
+.video-card {
+    cursor: pointer;
+    overflow: hidden;
+    transition: transform .2s ease, box-shadow .2s ease;
+}
+.video-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18) !important;
+}
+/* 16:9 封面区域 */
+.video-card-img {
+    position: relative;
+    width: 100%;
+    padding-top: 56.25%;
+    overflow: hidden;
+    background: #1a1a2e;
+}
+.video-card-img img {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform .3s ease;
+}
+.video-card:hover .video-card-img img {
+    transform: scale(1.04);
+}
+.video-card-placeholder {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6c757d;
+    font-size: 36px;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+}
+.video-card-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 11px;
+    z-index: 2;
+}
+.video-card .card-title { font-size: 14px; line-height: 1.4; }
+
+/* ---- 风险卡片 ---- */
+.risk-card .card-body { padding: 12px; }
+.risk-card h6 { font-size: 13px; margin-bottom: 4px; }
+.risk-card h2 { font-size: 28px; font-weight: 700; margin: 0; }
+
+/* ---- 聚类卡片 ---- */
+.cluster-card {
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color .2s, box-shadow .2s;
+}
+.cluster-card:hover {
+    border-color: #b8d4fe;
+    box-shadow: 0 2px 8px rgba(13,110,253,0.08);
+}
+
+.cluster-card-header {
+    background: #f8f9fa;
+    cursor: pointer;
+    user-select: none;
+    transition: background .2s;
+}
+.cluster-card-header:hover {
+    background: #e9ecef;
+}
+
+.cluster-index {
+    font-size: 12px;
+    min-width: 32px;
+}
+
+.cluster-chevron {
+    transition: transform .3s;
+    font-size: 14px;
+}
+
+.cluster-expand-text {
+    font-size: 12px;
+}
+
+.cluster-detail {
+    padding: 0;
+    border-top: 1px solid #e9ecef;
+}
+
+.cluster-detail .table {
+    margin-bottom: 0;
+}
+
+.cluster-detail .table th {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6c757d;
+    white-space: nowrap;
+    border-top: none;
+}
+
+.cluster-member-row {
+    transition: background .15s;
+}
+
+.cluster-member-row:hover {
+    background: rgba(13,110,253,0.04);
+}
+
+.cluster-comment-text {
+    display: block;
+    max-width: 400px;
+    line-height: 1.5;
+    word-break: break-all;
+}
+
+.cluster-time {
+    white-space: nowrap;
+}
+
+/* ---- 深度分析 Modal ---- */
+.deep-modal-stats .card {
+    border: none;
+    background: #f0f6ff;
+    border-radius: 6px;
+}
+.deep-modal-slider {
+    accent-color: #0dcaf0;
+}
+.deep-modal-result {
+    background: #f8fffe;
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+.deep-analyze-btn {
+    white-space: nowrap;
+}
+
+/* ---- 爬虫控制 ---- */
+.spider-card {
+    border-left: 3px solid var(--secondary);
+    transition: border-color .3s;
+}
+.spider-status { font-size: 12px; }
+.spider-pulse { animation: pulse 2s infinite; }
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .6; }
+}
+
+/* ---- 日志控制台 ---- */
+.log-console {
+    background: #1a1a2e;
+    color: #a8d8a8;
+    font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 12px;
+    margin: 0;
+    max-height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* ---- 进度条 ---- */
+.progress {
+    background: #e9ecef;
+    border-radius: 3px;
+}
+.progress-bar { background: var(--primary); }
+
+/* ---- 面包屑 ---- */
+.breadcrumb { font-size: 13px; }
+.breadcrumb-item a { color: var(--primary); text-decoration: none; }
+
+/* ---- 表格 ---- */
+.table th { font-size: 13px; white-space: nowrap; }
+.table td { font-size: 13px; vertical-align: middle; }
+.table-dark { background: #343a40; }
+.table-danger { --bs-table-bg: #fff5f5; }
+.table-warning { --bs-table-bg: #fffdf0; }
+
+/* ---- 系统设置 ---- */
+.sys-pre {
+    background: #f8f9fa;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* ---- 视频封面占位 ---- */
+.video-thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    color: #6c757d;
+    font-size: 40px;
+}
+
+/* ---- Toast ---- */
+.toast {
+    font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.15);
+}
+
+/* ---- 响应式 ---- */
+@media (max-width: 768px) {
+    .stat-number { font-size: 22px; }
+    /* 16:9 时不覆盖 padding-top，移除旧的固定高度 */
+    .log-console { max-height: 250px; font-size: 11px; }
+    .navbar-brand { font-size: 16px; }
+}
+
+/* ---- 评论列表 ---- */
+.comment-item {
+    transition: background .15s;
+}
+.comment-item:hover {
+    background: #f8f9fa;
+}
+.comment-avatar {
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.comment-content {
+    font-size: 14px;
+    line-height: 1.6;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+#comment-list {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+#comment-list::-webkit-scrollbar { width: 6px; }
+#comment-list::-webkit-scrollbar-thumb {
+    background: #dee2e6;
+    border-radius: 3px;
+}
+#comment-list::-webkit-scrollbar-thumb:hover { background: #adb5bd; }
+
+/* ---- LLM 分析标签 ---- */
+.llm-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+}
+.llm-type-1 { background: #ffe0e0; color: #c00; }   /* 模板刷评 */
+.llm-type-2 { background: #ffe8cc; color: #d80; }   /* 情绪引导 */
+.llm-type-3 { background: #e0d4ff; color: #60c; }   /* AI生成 */
+.llm-type-4 { background: #d4f0ff; color: #069; }   /* 引流广告 */
+.llm-type-5 { background: #ffe0f0; color: #c06; }   /* 批量操控 */
+.llm-type-6 { background: #d4ffe0; color: #080; }   /* 养号 */
+.llm-type-7 { background: #fff4d4; color: #a60; }   /* 引战 */
+
+/* ---- 用户详情触发器 ---- */
+.user-detail-trigger {
+    transition: all 0.15s ease;
+    border: 1px solid transparent;
+}
+.user-detail-trigger:hover {
+    transform: scale(1.08);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    border-color: rgba(0,0,0,0.2);
+}
+.user-detail-btn {
+    transition: all 0.15s ease;
+}
+.user-detail-btn:hover {
+    transform: scale(1.15);
+}
+
+/* ---- 视频卡片删除按钮 ---- */
+.video-card {
+    position: relative;
+    overflow: hidden;
+}
+.video-card-delete {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 10;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(220, 53, 69, 0.85);
+    border: none;
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.video-card:hover .video-card-delete,
+.video-card:focus-within .video-card-delete {
+    opacity: 1;
+    transform: scale(1);
+}
+.video-card-delete:hover {
+    background: rgba(185, 28, 28, 0.95);
+    transform: scale(1.15) !important;
+}
+
+/* ---- 视频详情页删除按钮 ---- */
+.btn-delete-video {
+    transition: all 0.2s ease;
+}
+.btn-delete-video:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+}

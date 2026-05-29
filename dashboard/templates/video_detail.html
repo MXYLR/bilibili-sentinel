@@ -1,0 +1,1305 @@
+{% extends "base.html" %}
+{% block title %}{{ video.get('title', '视频详情') }}{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">总览</a></li>
+        <li class="breadcrumb-item active">{{ bvid }}</li>
+    </ol>
+</nav>
+
+<div class="row mb-4">
+    <div class="col-lg-3 col-md-4">
+        {% set pic = video.get('pic', '') %}
+        {% if pic %}
+        <img src="{{ pic }}" class="img-fluid rounded shadow" alt="封面"
+             referrerpolicy="no-referrer"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+        <div class="video-thumb-placeholder rounded" style="height:180px;display:none">
+            <i class="bi bi-camera-video-off"></i>
+        </div>
+        {% else %}
+        <div class="video-thumb-placeholder rounded" style="height:180px">
+            <i class="bi bi-camera-video-off"></i>
+        </div>
+        {% endif %}
+    </div>
+    <div class="col-lg-9 col-md-8">
+        <h3 class="mb-2">
+            {{ video.get('title', 'N/A') }}
+            <a href="https://www.bilibili.com/video/{{ bvid }}" target="_blank" class="text-decoration-none ms-2"
+               title="在B站打开原视频" style="font-size:0.8em;">
+                <i class="bi bi-box-arrow-up-right"></i> 原视频
+            </a>
+        </h3>
+        <div class="mb-2">
+            <a href="https://www.bilibili.com/video/{{ bvid }}" target="_blank" class="text-decoration-none">
+                <span class="badge bg-info me-2">BV: {{ bvid }} <i class="bi bi-box-arrow-up-right"></i></span>
+            </a>
+            <span class="text-muted me-3"><i class="bi bi-person"></i> {{ video.get('owner', {}).get('name', video.get('owner_name', 'N/A')) }}</span>
+            <span class="text-muted me-3"><i class="bi bi-play-circle"></i> {{ (video.get('stat', {}).get('view', video.get('view_count', 0)))|int }} 播放</span>
+            <span class="text-muted me-3" title="B站统计的评论总数（含楼中楼，可能超过已抓取数量）">
+                <i class="bi bi-chat-dots"></i> {{ (video.get('stat', {}).get('reply', video.get('reply_count', 0)))|int }} 评论
+            </span>
+            <span class="text-muted me-3" title="本地已抓取到的评论条数">
+                <i class="bi bi-download"></i> {{ comment_count }} 已抓取
+            </span>
+            <span class="text-muted"><i class="bi bi-chat-square-text"></i> {{ (video.get('stat', {}).get('danmaku', video.get('danmaku_count', 0)))|int }} 弹幕</span>
+        </div>
+        <p class="text-muted small">{{ video.get('desc', video.get('description', ''))[:200] }}</p>
+        <div>
+            {% if report %}
+            <span class="badge bg-success fs-6"><i class="bi bi-check-circle"></i> 分析完成</span>
+            <span class="text-muted small ms-2">生成时间: {{ report.report_meta.generated_at[:19] }}</span>
+            {% else %}
+            <span class="badge bg-secondary fs-6" id="analysis-badge"><i class="bi bi-hourglass"></i> 尚未分析</span>
+            <button class="btn btn-sm btn-outline-primary ms-2" id="btn-analysis" onclick="runAnalysis()">
+                <i class="bi bi-play"></i> 开始分析
+            </button>
+            <div class="mt-2" id="progress-container" style="display:none">
+                <div class="progress" style="height:6px">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="progress-bar" style="width:0%"></div>
+                </div>
+                <small class="text-muted" id="progress-text"></small>
+            </div>
+            {% endif %}
+            <div class="mt-2">
+                <button class="btn btn-sm btn-outline-danger btn-delete-video" onclick="deleteThisVideo()">
+                    <i class="bi bi-trash-fill"></i> 删除数据
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 评论列表 ===== -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <span><i class="bi bi-chat-dots-fill"></i> 评论详情</span>
+                    <span class="ms-2" id="comment-stat-summary">
+                        <span class="text-muted small">{{ comment_count }} 条</span>
+                    </span>
+                </div>
+                <div class="btn-group btn-group-sm" id="comment-pager" style="display:none">
+                    <button class="btn btn-outline-secondary" id="comment-prev" onclick="loadComments(currentPage-1)" disabled>上一页</button>
+                    <span class="btn btn-outline-secondary disabled" id="comment-page-info">1/1</span>
+                    <button class="btn btn-outline-secondary" id="comment-next" onclick="loadComments(currentPage+1)" disabled>下一页</button>
+                </div>
+            </div>
+            <div class="card-body p-0" id="comment-list">
+                <div class="text-center py-5 text-muted" id="comment-loading">
+                    <div class="spinner-border spinner-border-sm me-2"></div>加载评论中...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if report %}
+<div class="row mb-4">
+    <div class="col-md-3 col-6 mb-3">
+        <div class="card risk-card" style="border-left:3px solid var(--danger)">
+            <div class="card-body text-center">
+                <h6 class="text-muted">高风险账号</h6>
+                <h2 class="text-danger">{{ report.statistics.high_risk_count }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6 mb-3">
+        <div class="card risk-card" style="border-left:3px solid var(--warning)">
+            <div class="card-body text-center">
+                <h6 class="text-muted">中风险账号</h6>
+                <h2 class="text-warning">{{ report.statistics.medium_risk_count }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6 mb-3">
+        <div class="card risk-card" style="border-left:3px solid var(--success)">
+            <div class="card-body text-center">
+                <h6 class="text-muted">低风险账号</h6>
+                <h2 class="text-success">{{ report.statistics.low_risk_count }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6 mb-3">
+        <div class="card risk-card" style="border-left:3px solid var(--info)">
+            <div class="card-body text-center">
+                <h6 class="text-muted">总评分数</h6>
+                <h2>{{ report.statistics.total_users }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-lg-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><i class="bi bi-bar-chart"></i> 水军评分分布</div>
+            <div class="card-body"><canvas id="scoreChart" height="250"></canvas></div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><i class="bi bi-graph-up"></i> 评论时间线</div>
+            <div class="card-body"><canvas id="timelineChart" height="250"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-radar"></i> 十五大水军特征触发比例</div>
+            <div class="card-body"><canvas id="featuresChart" height="120"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-robot"></i> AI 分析摘要</div>
+            <div class="card-body"><p class="mb-0 fs-6">{{ report.ai_summary }}</p></div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-trophy"></i> 嫌疑账号排行榜 (Top 20)</span>
+                <div>
+                    {% set deep_count = report.top_suspects | selectattr('deep_analyzed', 'equalto', true) | list | length if report and report.top_suspects else 0 %}
+                    {% if deep_count > 0 %}
+                    <span class="badge bg-success me-2"><i class="bi bi-check-circle"></i> 已深度分析 {{ deep_count }} 人</span>
+                    <button class="btn btn-sm btn-outline-info deep-analyze-btn"
+                            onclick="openDeepAnalyzeModal()"
+                            title="使用自定义阈值重新深度分析">
+                        <i class="bi bi-arrow-repeat"></i> 重新分析
+                    </button>
+                    {% else %}
+                    <button class="btn btn-sm btn-info deep-analyze-btn"
+                            onclick="openDeepAnalyzeModal()"
+                            title="手动触发 AICU 历史数据深度分析">
+                        <i class="bi bi-search"></i> 深度分析
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th style="width:50px">排名</th>
+                                <th>用户</th>
+                                <th style="width:70px">评分</th>
+                                <th style="width:80px">风险等级</th>
+                                <th style="width:100px">LLM判断</th>
+                                <th style="width:65px">评论数</th>
+                                <th style="width:50px">等级</th>
+                                <th>Top 3 可疑特征</th>
+                                <th style="width:80px">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for user in report.top_suspects %}
+                            <tr class="{% if user.risk_level == 'high' %}table-danger{% elif user.risk_level == 'medium' %}table-warning{% endif %}">
+                                <td>
+                                    {% if user.rank == 1 %}<span class="badge bg-danger">TOP</span>
+                                    {% elif user.rank <= 3 %}<span class="badge bg-warning text-dark">{{ user.rank }}</span>
+                                    {% else %}{{ user.rank }}{% endif %}
+                                </td>
+                                <td><strong>{{ user.uname }}</strong><br><small class="text-muted">MID: {{ user.mid }}</small></td>
+                                <td><span class="fw-bold {% if user.score >= 70 %}text-danger{% elif user.score >= 40 %}text-warning{% else %}text-success{% endif %}">{{ user.score }}</span></td>
+                                <td>
+                                    {% if user.risk_level == 'high' %}<span class="badge bg-danger">高风险</span>
+                                    {% elif user.risk_level == 'medium' %}<span class="badge bg-warning text-dark">中风险</span>
+                                    {% else %}<span class="badge bg-success">低风险</span>{% endif %}
+                                </td>
+                                <td>
+                                    {% if user.llm_type_id and user.llm_type_id > 0 %}
+                                    <span class="llm-badge llm-type-{{ user.llm_type_id }} user-detail-trigger"
+                                          onclick="showUserDetail({{ loop.index0 }})"
+                                          style="cursor:pointer"
+                                          title="点击查看 LLM + AICU 详细分析">🔍 {{ user.llm_type_name }}</span>
+                                    <small class="text-muted d-block">{{ user.llm_confidence }}%</small>
+                                    {% else %}
+                                    <small class="text-muted">-</small>
+                                    {% endif %}
+                                </td>
+                                <td>{{ user.comment_count }}</td>
+                                <td>Lv{{ user.level }}</td>
+                                <td>{% for feat in user.top_features[:3] %}<span class="badge bg-secondary me-1">{{ feat.name }}: {{ feat.score }}%</span>{% endfor %}</td>
+                                <td class="text-center">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="showUserDetail({{ loop.index0 }})" title="查看详情">
+                                        <i class="bi bi-eye"></i> 详情
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 用户详情 Modal ===== -->
+<div class="modal fade" id="userDetailModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title" id="userDetailTitle"><i class="bi bi-person-badge"></i> 账号分析详情</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="userDetailBody">
+                <div class="text-center py-5 text-muted">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 深度分析 Modal ===== -->
+<div class="modal fade" id="deepAnalyzeModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-search"></i> 手动深度分析 (AICU)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="deepAnalyzeBody">
+                <!-- 统计区 -->
+                <div class="deep-modal-stats mb-3">
+                    <div class="row g-2">
+                        <div class="col-4">
+                            <div class="card bg-light text-center py-2">
+                                <div class="small text-muted">候选用户</div>
+                                <div class="fs-5 fw-bold" id="deep-candidate-count">--</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card bg-light text-center py-2">
+                                <div class="small text-muted">已分析</div>
+                                <div class="fs-5 fw-bold" id="deep-done-count">--</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card bg-light text-center py-2">
+                                <div class="small text-muted">最高分</div>
+                                <div class="fs-5 fw-bold" id="deep-max-score">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 阈值选择 -->
+                <div class="mb-3">
+                    <label class="form-label fw-bold">分析阈值</label>
+                    <div class="d-flex align-items-center gap-3">
+                        <input type="range" class="form-range deep-modal-slider flex-grow-1"
+                               id="deep-threshold-slider" min="20" max="70" value="30" step="5"
+                               oninput="document.getElementById('deep-threshold-val').textContent = this.value">
+                        <span class="badge bg-info fs-6" id="deep-threshold-val" style="min-width:40px">30</span>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        仅分析评分 <strong class="text-danger">≥ <span id="deep-threshold-display">30</span></strong> 的用户
+                        （自动分析默认 70）
+                    </div>
+                </div>
+
+                <!-- AICU 爬取时机说明 -->
+                <div class="alert alert-light border mb-3 p-2 small">
+                    <strong><i class="bi bi-info-circle-fill text-info"></i> AICU 爬取时机：</strong><br>
+                    AICU 仅当 <strong>手动点击分析按钮</strong> 时才会爬取用户历史评论和弹幕数据：<br>
+                    <span class="text-muted ms-2">
+                        ① 点击上方「<strong>开始分析</strong>」→ 批量深度分析所有候选用户<br>
+                        ② 在用户表格每行的 <strong>🔍 AICU</strong> 按钮 → 单用户深度分析<br>
+                    </span>
+                    未手动触发的用户 <strong>不会</strong> 自动爬取 AICU 数据。
+                </div>
+
+                <!-- 结果区 -->
+                <div class="deep-modal-result d-none" id="deep-result-box">
+                    <hr>
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi text-success fs-5" id="deep-result-icon"></i>
+                        <strong id="deep-result-title"></strong>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-3"><small class="text-muted">深度分析:</small><br><strong id="deep-r-analyzed">--</strong></div>
+                        <div class="col-3"><small class="text-muted">确认水军:</small><br><strong id="deep-r-confirmed">--</strong></div>
+                        <div class="col-3"><small class="text-muted">AICU成功:</small><br><strong id="deep-r-aicu-ok">--</strong></div>
+                        <div class="col-3"><small class="text-muted">AICU失败:</small><br><strong id="deep-r-aicu-fail">--</strong></div>
+                    </div>
+                    <div id="deep-summary-text" class="small text-muted mt-2 border-start border-3 border-info ps-2" style="display:none"></div>
+                </div>
+
+                <!-- 错误提示 -->
+                <div class="alert alert-danger d-none mt-3" id="deep-error-box"></div>
+
+                <!-- 加载动画 -->
+                <div class="text-center d-none py-4" id="deep-loading-box">
+                    <div class="spinner-border text-info mb-2" role="status"></div>
+                    <div class="text-muted">正在抓取 AICU 历史数据并进行深度语义分析...</div>
+                    <div class="small text-muted mt-1">预计耗时 30-120 秒</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-info" id="deep-start-btn" onclick="startDeepAnalyze()">
+                    <i class="bi bi-play-fill"></i> 开始分析
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if report.similarity_clusters %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-diagram-3"></i> 相似评论聚类 (疑似模板化评论)</span>
+                <small class="text-muted">{{ report.similarity_clusters|length }} 组聚类</small>
+            </div>
+            <div class="card-body">
+                {% for cluster in report.similarity_clusters[:10] %}
+                {% set cluster_id = "cluster-" ~ loop.index %}
+                <div class="cluster-card mb-3">
+                    <div class="cluster-card-header d-flex align-items-center justify-content-between p-3"
+                         data-bs-toggle="collapse" data-bs-target="#{{ cluster_id }}"
+                         role="button" aria-expanded="false" aria-controls="{{ cluster_id }}"
+                         onclick="toggleClusterIcon(this, '{{ cluster_id }}')">
+                        <div class="d-flex align-items-center gap-3">
+                            <span class="cluster-index badge bg-secondary rounded-pill">#{{ loop.index }}</span>
+                            <div>
+                                <strong class="text-danger">{{ cluster.size }}</strong>
+                                <span class="text-muted ms-1">条相似评论</span>
+                            </div>
+                            <div>
+                                <span class="badge bg-info">{{ cluster.member_rpids|length }} 个账号</span>
+                            </div>
+                            {% if cluster.members and cluster.members|length > 0 %}
+                            <div class="text-muted small d-none d-md-block">
+                                <span class="text-truncate d-inline-block" style="max-width:300px">
+                                    "{{ cluster.members[0].content[:50] }}{% if cluster.members[0].content|length > 50 %}...{% endif %}"
+                                </span>
+                            </div>
+                            {% endif %}
+                        </div>
+                        <div>
+                            <i class="bi bi-chevron-down cluster-chevron" id="icon-{{ cluster_id }}"></i>
+                            <span class="cluster-expand-text small text-muted ms-1" id="text-{{ cluster_id }}">展开详情</span>
+                        </div>
+                    </div>
+                    <div class="collapse" id="{{ cluster_id }}">
+                        <div class="cluster-detail">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-hover mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:40px">#</th>
+                                            <th style="width:120px">账号</th>
+                                            <th style="width:90px">MID</th>
+                                            <th>评论内容</th>
+                                            <th style="width:150px">时间</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% if cluster.members %}
+                                        {% for m in cluster.members %}
+                                        <tr class="cluster-member-row">
+                                            <td class="text-muted small">{{ loop.index }}</td>
+                                            <td>
+                                                <a href="https://space.bilibili.com/{{ m.mid }}" target="_blank"
+                                                   class="text-decoration-none fw-bold"
+                                                   title="在B站查看用户空间">
+                                                    {{ m.uname[:12] }}{% if m.uname|length > 12 %}...{% endif %}
+                                                    <i class="bi bi-box-arrow-up-right small ms-1"></i>
+                                                </a>
+                                            </td>
+                                            <td><code class="small">{{ m.mid }}</code></td>
+                                            <td>
+                                                <span class="cluster-comment-text"
+                                                      title="{{ m.content }}">
+                                                    {{ m.content[:80] }}{% if m.content|length > 80 %}...{% endif %}
+                                                </span>
+                                            </td>
+                                            <td class="text-muted small">
+                                                {% if m.ctime %}
+                                                <span class="cluster-time" data-timestamp="{{ m.ctime }}">{{ m.ctime }}</span>
+                                                {% else %}
+                                                -
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                        {% else %}
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted py-4">
+                                                <i class="bi bi-info-circle"></i> 暂无详细评论数据（旧版报告，请重新分析以获取完整信息）
+                                            </td>
+                                        </tr>
+                                        {% endif %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="text-center py-5">
+    <i class="bi bi-clipboard-data display-1 text-muted"></i>
+    <h4 class="text-muted mt-3">尚未进行水军分析</h4>
+    <p class="text-muted">点击下方按钮或使用命令行进行分析</p>
+    <button class="btn btn-primary btn-lg me-2" id="btn-analysis-big" onclick="runAnalysis()">
+        <i class="bi bi-play-fill"></i> 开始分析
+    </button>
+    <div class="mt-3" id="progress-container-big" style="display:none;max-width:400px;margin:0 auto">
+        <div class="progress" style="height:8px">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" id="progress-bar-big" style="width:0%"></div>
+        </div>
+        <small class="text-muted mt-1 d-block" id="progress-text-big"></small>
+    </div>
+    <code class="d-block mt-3">python deploy/run_analyzer.py --bvid {{ bvid }}</code>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let currentPage = 1;
+let totalPages = 1;
+let scoredUsers = {{ (report.top_suspects if report and report.top_suspects else []) | tojson | safe }};
+
+// 构建 mid -> score 查表
+const riskMap = {};
+scoredUsers.forEach(u => { if (u.mid) riskMap[u.mid] = { score: u.score || u.suspicious_score || 0, level: u.risk_level || 'low' }; });
+
+function getRiskBadge(mid) {
+    const r = riskMap[mid];
+    if (!r) return '';
+    if (r.level === 'high') return `<span class="badge bg-danger ms-1" title="水军评分: ${r.score}">高风险 ${r.score}分</span>`;
+    if (r.level === 'medium') return `<span class="badge bg-warning text-dark ms-1" title="水军评分: ${r.score}">中风险 ${r.score}分</span>`;
+    return `<span class="badge bg-success ms-1" title="评分: ${r.score}">低风险</span>`;
+}
+
+function timeAgo(ts) {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 1000);
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
+    if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
+    if (diff < 2592000) return Math.floor(diff / 86400) + '天前';
+    return d.toLocaleDateString('zh-CN');
+}
+
+// ---- 聚类卡片展开/收起 ----
+function toggleClusterIcon(el, clusterId) {
+    const icon = document.getElementById('icon-' + clusterId);
+    const text = document.getElementById('text-' + clusterId);
+    if (!icon || !text) return;
+    setTimeout(() => {
+        const target = document.getElementById(clusterId);
+        const isOpen = target && target.classList.contains('show');
+        if (isOpen) {
+            icon.classList.remove('bi-chevron-down');
+            icon.classList.add('bi-chevron-up');
+            text.textContent = '收起';
+        } else {
+            icon.classList.remove('bi-chevron-up');
+            icon.classList.add('bi-chevron-down');
+            text.textContent = '展开详情';
+        }
+    }, 50);
+}
+
+// 监听 Bootstrap collapse 事件保持图标同步
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.collapse[id^="cluster-"]').forEach(el => {
+        el.addEventListener('show.bs.collapse', () => {
+            const clusterId = el.id;
+            const icon = document.getElementById('icon-' + clusterId);
+            const text = document.getElementById('text-' + clusterId);
+            if (icon) { icon.classList.remove('bi-chevron-down'); icon.classList.add('bi-chevron-up'); }
+            if (text) text.textContent = '收起';
+        });
+        el.addEventListener('hide.bs.collapse', () => {
+            const clusterId = el.id;
+            const icon = document.getElementById('icon-' + clusterId);
+            const text = document.getElementById('text-' + clusterId);
+            if (icon) { icon.classList.remove('bi-chevron-up'); icon.classList.add('bi-chevron-down'); }
+            if (text) text.textContent = '展开详情';
+        });
+    });
+
+    // 格式化时间戳
+    document.querySelectorAll('.cluster-time').forEach(el => {
+        const ts = parseInt(el.dataset.timestamp);
+        if (ts && ts > 0) {
+            el.textContent = timeAgo(ts);
+        }
+    });
+});
+
+function renderComment(c, isSub = false) {
+    const avatar = c.avatar || 'https://static.hdslb.com/images/member/noface.gif';
+    const level = c.level || 0;
+    const riskBadge = getRiskBadge(c.mid);
+    const content = (c.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const indentClass = isSub ? 'sub-comment' : '';
+    const indentStyle = isSub ? 'margin-left: 22px; border-left: 2px solid #e9ecef; padding-left: 14px;' : '';
+
+    let html = `
+<div class="comment-item d-flex p-3 border-bottom ${indentClass}" style="${indentStyle}">
+    <img src="${avatar}" class="comment-avatar rounded-circle me-3 flex-shrink-0" width="${isSub?30:40}" height="${isSub?30:40}"
+         onerror="this.src='https://static.hdslb.com/images/member/noface.gif'"
+         alt="${c.uname || '用户'}" loading="lazy">
+    <div class="flex-grow-1 min-width-0">
+        <div class="d-flex align-items-center flex-wrap mb-1">
+            <strong class="me-2${isSub?' small':''}">${c.uname || '匿名用户'}</strong>
+            ${level > 0 ? `<span class="badge bg-info me-1" style="font-size:0.7em">Lv${level}</span>` : ''}
+            ${riskBadge}
+            ${isSub ? '<small class="text-muted ms-1">回复</small>' : ''}
+        </div>
+        <div class="comment-content mb-2${isSub?' small':''}">${content}</div>
+        <div class="d-flex align-items-center text-muted small">
+            <span class="me-3"><i class="bi bi-hand-thumbs-up"></i> ${c.like_count || 0}</span>
+            <span><i class="bi bi-clock"></i> ${timeAgo(c.ctime)}</span>
+        </div>`;
+
+    // 子回复展开按钮
+    const replies = c.replies || [];
+    const replyCount = replies.length;
+    if (!isSub && replyCount > 0) {
+        const uid = `replies-${c.rpid}`;
+        html += `
+        <div class="mt-2">
+            <button class="btn btn-sm btn-link text-decoration-none p-0 toggle-replies"
+                    onclick="toggleReplies('${uid}', this)" data-expanded="false">
+                <i class="bi bi-chevron-down"></i> 展开回复 (${replyCount})
+            </button>
+            <div id="${uid}" class="replies-container mt-2" style="display:none">
+                ${replies.map(r => renderComment(r, true)).join('')}
+            </div>
+        </div>`;
+    }
+
+    html += `</div></div>`;
+    return html;
+}
+
+function toggleReplies(uid, btn) {
+    const container = document.getElementById(uid);
+    const expanded = btn.getAttribute('data-expanded') === 'true';
+    if (expanded) {
+        container.style.display = 'none';
+        btn.innerHTML = `<i class="bi bi-chevron-down"></i> 展开回复 (${container.querySelectorAll('.comment-item').length})`;
+        btn.setAttribute('data-expanded', 'false');
+    } else {
+        container.style.display = 'block';
+        btn.innerHTML = `<i class="bi bi-chevron-up"></i> 收起回复`;
+        btn.setAttribute('data-expanded', 'true');
+    }
+}
+
+async function loadComments(page = 1) {
+    currentPage = page;
+    const list = document.getElementById('comment-list');
+    list.innerHTML = '<div class="text-center py-5 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>加载评论中...</div>';
+
+    try {
+        const resp = await fetch(`/api/comments/{{ bvid }}?page=${page}&per_page=20`);
+        const json = await resp.json();
+        const { data, total, top_level_total, page: pg, per_page } = json;
+
+        // 使用主评论数计算分页
+        const topTotal = top_level_total || total;
+        totalPages = Math.ceil(topTotal / per_page);
+
+        if (!data || data.length === 0) {
+            list.innerHTML = '<div class="text-center py-5 text-muted"><i class="bi bi-inbox display-4 d-block mb-2"></i>暂无评论数据</div>';
+            return;
+        }
+
+        // 统计：主评论 + 子评论总数
+        let subCount = 0;
+        let html = data.map(c => {
+            const replies = c.replies || [];
+            subCount += replies.length;
+            return renderComment(c, false);
+        }).join('');
+
+        list.innerHTML = html;
+
+        // 分页信息栏
+        const pager = document.getElementById('comment-pager');
+        pager.style.display = totalPages > 1 ? 'block' : 'none';
+        document.getElementById('comment-page-info').textContent = `${pg}/${totalPages}`;
+        document.getElementById('comment-prev').disabled = pg <= 1;
+        document.getElementById('comment-next').disabled = pg >= totalPages;
+
+        // 更新计数标签
+        const statEl = document.getElementById('comment-stat-summary');
+        if (statEl) {
+            statEl.innerHTML = `
+                <span class="text-muted small">主评论 ${topTotal || 0} 条 · 含子回复共 ${total || 0} 条</span>`;
+        }
+    } catch(e) {
+        list.innerHTML = '<div class="text-center py-5 text-danger">加载失败: ' + e.message + '</div>';
+    }
+}
+
+// 首次加载
+document.addEventListener('DOMContentLoaded', () => {
+    loadComments(1);
+});
+
+{% if report %}
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const resp = await fetch('/api/score-distribution/{{ bvid }}');
+        const { data } = await resp.json();
+        const buckets = data.buckets;
+        const labels = Object.keys(buckets);
+        const values = Object.values(buckets);
+        new Chart(document.getElementById('scoreChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels, datasets: [{
+                    label: '账号数量', data: values,
+                    backgroundColor: labels.map(l => {
+                        const mid = parseInt(l.split('-')[0]);
+                        if (mid >= 70) return 'rgba(220,53,69,0.7)';
+                        if (mid >= 40) return 'rgba(255,193,7,0.7)';
+                        return 'rgba(40,167,69,0.7)';
+                    }),
+                    borderColor: labels.map(l => {
+                        const mid = parseInt(l.split('-')[0]);
+                        if (mid >= 70) return '#dc3545';
+                        if (mid >= 40) return '#ffc107';
+                        return '#28a745';
+                    }),
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    } catch(e) { console.error('Score chart failed:', e); }
+
+    try {
+        const resp = await fetch('/api/timeline/{{ bvid }}');
+        const { data } = await resp.json();
+        if (data && data.length > 0) {
+            new Chart(document.getElementById('timelineChart').getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: data.map(d => d.time || d.slot || ''),
+                    datasets: [{
+                        label: '评论数',
+                        data: data.map(d => d.count || d.total || 0),
+                        borderColor: '#0d6efd',
+                        backgroundColor: 'rgba(13,110,253,0.1)',
+                        fill: true, tension: 0.3,
+                        pointRadius: 3, pointHoverRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+    } catch(e) { console.error('Timeline failed:', e); }
+
+    try {
+        const topSuspects = {{ report.top_suspects | tojson | safe }};
+        const featureCounts = {};
+        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','批量注册','互动小圈子','VIP异常','账号骨架','转发抽奖','敏感内容','商业引流'].forEach(n => featureCounts[n] = 0);
+        topSuspects.forEach(user => {
+            user.top_features.forEach(f => {
+                if (featureCounts[f.name] !== undefined) featureCounts[f.name]++;
+            });
+        });
+        new Chart(document.getElementById('featuresChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: Object.keys(featureCounts),
+                datasets: [{
+                    label: '触发次数', data: Object.values(featureCounts),
+                    backgroundColor: 'rgba(13,110,253,0.7)',
+                    borderColor: '#0d6efd', borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y', responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    } catch(e) { console.error('Features chart failed:', e); }
+});
+{% endif %}
+
+async function runAnalysis() {
+    // 更新所有按钮
+    const btns = document.querySelectorAll('#btn-analysis, #btn-analysis-big');
+    btns.forEach(b => { b.disabled = true; b.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 启动分析...'; });
+
+    // 显示进度条
+    const progressContainers = document.querySelectorAll('#progress-container, #progress-container-big');
+    progressContainers.forEach(c => c.style.display = 'block');
+
+    const progressTexts = document.querySelectorAll('#progress-text, #progress-text-big');
+    const progressBars = document.querySelectorAll('#progress-bar, #progress-bar-big');
+
+    try {
+        const resp = await fetch('/api/run-analysis/{{ bvid }}', { method: 'POST' });
+        const result = await resp.json();
+
+        if (!result.success && resp.status !== 409) {
+            showToast(result.message, 'error');
+            btns.forEach(b => { b.disabled = false; b.innerHTML = '<i class="bi bi-play"></i> 开始分析'; });
+            return;
+        }
+
+        let dots = 0;
+        let pct = 0;
+        const pollInterval = setInterval(async () => {
+            try {
+                const sr = await fetch('/api/analysis-status/{{ bvid }}');
+                const sd = await sr.json();
+                const data = sd.data;
+                dots = (dots + 1) % 4;
+
+                if (data.status === 'done') {
+                    clearInterval(pollInterval);
+                    progressTexts.forEach(t => t.textContent = '分析完成！刷新中...');
+                    progressBars.forEach(b => b.style.width = '100%');
+                    setTimeout(() => location.reload(), 500);
+
+                } else if (data.status === 'error') {
+                    clearInterval(pollInterval);
+                    showToast(data.error || '分析失败', 'error');
+                    btns.forEach(b => { b.disabled = false; b.innerHTML = '<i class="bi bi-play"></i> 开始分析'; });
+                    progressContainers.forEach(c => c.style.display = 'none');
+
+                } else {
+                    const progress = data.progress || '分析中';
+                    pct = Math.min(pct + 1, 85);
+                    progressBars.forEach(b => b.style.width = pct + '%');
+                    progressTexts.forEach(t => t.textContent = progress + '.'.repeat(dots));
+                    btns.forEach(b => b.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + progress + '.'.repeat(dots));
+                }
+            } catch(e) {}
+        }, 1500);
+
+    } catch(e) {
+        showToast('请求失败: ' + e.message, 'error');
+        btns.forEach(b => { b.disabled = false; b.innerHTML = '<i class="bi bi-play"></i> 开始分析'; });
+    }
+}
+
+// ---- 用户详情 Modal ----
+const LLM_TYPE_NAMES = {
+    1: '模板刷评', 2: '情绪引导', 3: 'AI生成', 4: '引流广告',
+    5: '批量操控', 6: '养号', 7: '引战', 8: '敏感内容'
+};
+const LLM_TYPE_COLORS = {
+    1: '#c00', 2: '#d80', 3: '#60c', 4: '#069',
+    5: '#c06', 6: '#080', 7: '#a60', 8: '#900'
+};
+const FEATURE_NAMES_ALL = {
+    'f1_account_age':'账号年龄','f2_follow_ratio':'粉丝/关注比','f3_level_score':'用户等级',
+    'f4_avatar_verify':'头像/认证','f5_content_similarity':'内容相似度','f6_time_burst':'时间爆发',
+    'f7_sentiment_extreme':'情感极端','f8_like_ratio':'赞评比异常','f9_registration_batch':'批量注册',
+    'f10_interaction_ring':'互动小圈子','f11_vip_anomaly':'VIP异常','f12_account_skeleton':'账号骨架',
+    'f13_lottery_repost':'转发抽奖','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流'
+};
+
+const FEATURE_DESCRIPTIONS = {
+    '账号年龄':   '注册时间越新+评论越频繁→越可疑。注册<30天且评论多则高分',
+    '粉丝/关注比': '关注数百但粉丝极少→刷粉号模式。粉丝<50+关注>500得0.9分',
+    '用户等级':   '低等级(Lv0-2)+高频评论→典型水军行为。等级越低基础分越高',
+    '头像/认证':   '无头像/无认证/无签名→"三无"账号。每缺失一项+0.34分',
+    '内容相似度':  '评论内容与其他用户高度雷同→模板化刷评。由相似度检测器计算',
+    '时间爆发':   '短时间窗口内密集评论→定时控评。基于滑动窗口Z-score检测',
+    '情感极端':   '评论情感100%正面或100%负面→立场预设的机械行为。无真实观点',
+    '赞评比异常':  '发大量评论但几乎零赞→低质量刷评。平均赞<10则高分',
+    '批量注册':   '注册日期集中在某几天→批量注册账号池。由注册日期集中度计算',
+    '互动小圈子':  '反复@相同几个账号互相评论→小团体刷量。Top2占80%+即高分',
+    'VIP异常':    '低等级+购买大会员→伪装水军。月费会员比年费更可疑(成本低)',
+    '账号骨架':   '无头像+ID乱码+无动态+无投稿→四要素全中=100%水军号',
+    '转发抽奖':   '无投稿+动态全是转发抽奖→抽奖专用僵尸号。转发比>80%=0.85',
+    '敏感内容':   '历史动态含女拳/国际政治/造谣抹黑→高级水军。任意命中=1.0',
+    '商业引流':   '评论含赌博/色情/加微信/刷单等硬广告→广告水军。赌博/色情=1.0'
+};
+
+// ---- 深度分析手动触发 ----
+const DEEP_ANALYZE_URL = '/api/video/{{ bvid }}/deep-analyze';
+let deepAnalyzeModal = null;
+
+function openDeepAnalyzeModal() {
+    if (!deepAnalyzeModal) {
+        deepAnalyzeModal = new bootstrap.Modal(document.getElementById('deepAnalyzeModal'));
+    }
+
+    // 计算统计
+    const total = scoredUsers.length;
+    const done = scoredUsers.filter(u => u.deep_analyzed).length;
+    const maxScore = scoredUsers.length > 0
+        ? Math.max(...scoredUsers.map(u => u.score || 0)).toFixed(1)
+        : '--';
+    const threshold = parseInt(document.getElementById('deep-threshold-slider').value);
+
+    document.getElementById('deep-candidate-count').textContent = total;
+    document.getElementById('deep-done-count').textContent = done;
+    document.getElementById('deep-max-score').textContent = maxScore;
+
+    // 更新阈值显示
+    document.getElementById('deep-threshold-val').textContent = threshold;
+    document.getElementById('deep-threshold-display').textContent = threshold;
+
+    // 重置状态
+    document.getElementById('deep-result-box').classList.add('d-none');
+    document.getElementById('deep-error-box').classList.add('d-none');
+    document.getElementById('deep-loading-box').classList.add('d-none');
+    document.getElementById('deep-start-btn').disabled = false;
+
+    deepAnalyzeModal.show();
+}
+
+// 滑块更新阈值显示
+document.getElementById('deep-threshold-slider').addEventListener('input', function() {
+    const v = this.value;
+    document.getElementById('deep-threshold-val').textContent = v;
+    document.getElementById('deep-threshold-display').textContent = v;
+});
+
+async function startDeepAnalyze() {
+    const threshold = parseInt(document.getElementById('deep-threshold-slider').value);
+
+    // 显示加载
+    document.getElementById('deep-start-btn').disabled = true;
+    document.getElementById('deep-loading-box').classList.remove('d-none');
+    document.getElementById('deep-result-box').classList.add('d-none');
+    document.getElementById('deep-error-box').classList.add('d-none');
+
+    try {
+        const resp = await fetch(DEEP_ANALYZE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ threshold: threshold }),
+        });
+        const data = await resp.json();
+
+        document.getElementById('deep-loading-box').classList.add('d-none');
+
+        if (data.success) {
+            // 显示结果
+            document.getElementById('deep-result-box').classList.remove('d-none');
+            document.getElementById('deep-result-icon').className = 'bi bi-check-circle-fill text-success fs-5';
+            document.getElementById('deep-result-title').textContent =
+                `深度分析完成！新增 ${data.newly_analyzed} 个用户`;
+            document.getElementById('deep-r-analyzed').textContent = data.deep_stats.deep_analyzed || '--';
+            document.getElementById('deep-r-confirmed').textContent = data.deep_confirmed || '--';
+            document.getElementById('deep-r-aicu-ok').textContent = data.deep_stats.aicu_success || '--';
+            document.getElementById('deep-r-aicu-fail').textContent = data.deep_stats.aicu_failed || '--';
+
+            if (data.deep_summary) {
+                const summaryEl = document.getElementById('deep-summary-text');
+                summaryEl.textContent = data.deep_summary;
+                summaryEl.style.display = 'block';
+            }
+
+            // 自动刷新页面
+            setTimeout(() => location.reload(), 2500);
+        } else {
+            // 显示错误
+            document.getElementById('deep-error-box').classList.remove('d-none');
+            document.getElementById('deep-error-box').textContent =
+                '分析失败: ' + (data.error || '未知错误');
+            document.getElementById('deep-start-btn').disabled = false;
+        }
+    } catch (err) {
+        document.getElementById('deep-loading-box').classList.add('d-none');
+        document.getElementById('deep-error-box').classList.remove('d-none');
+        document.getElementById('deep-error-box').textContent = '网络错误: ' + err.message;
+        document.getElementById('deep-start-btn').disabled = false;
+    }
+}
+
+// ---- 单用户 LLM 分析 ----
+
+// ---- 单用户 LLM 分析（弹窗内原地刷新） ----
+async function runLLMAnalyzeInModal(mid) {
+    const btn = document.getElementById('llm-analyze-btn');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> LLM 分析中...';
+
+    try {
+        const resp = await fetch('/api/video/{{ bvid }}/user/' + mid + '/llm-analyze', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(`LLM 分析完成: ${data.llm_type_name || '未知'} (${data.llm_confidence}%)`, 'success');
+            // 原地刷新：重新渲染弹窗
+            const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+            if (idx >= 0) {
+                const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
+                if (r.ok) {
+                    const d = await r.json();
+                    if (d.success) {
+                        scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
+                    }
+                }
+                showUserDetail(idx);
+            } else {
+                location.reload();
+            }
+        } else {
+            showToast('LLM 分析失败: ' + (data.error || '未知错误'), 'error');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cpu"></i> 重试 LLM 分析';
+        }
+    } catch (err) {
+        showToast('网络错误: ' + err.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-cpu"></i> 重试 LLM 分析';
+    }
+}
+
+// ---- 单用户 AICU 深度分析（弹窗内原地刷新） ----
+async function runAICUAnalyzeInModal(mid) {
+    const btn = document.getElementById('aicu-analyze-btn');
+    if (!btn) return;
+    if (!confirm(`对 MID=${mid} 执行 AICU 深度分析？\n会爬取该用户历史评论，预计 5-20 秒。`)) return;
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 深度分析中...';
+
+    try {
+        const resp = await fetch('/api/video/{{ bvid }}/user/' + mid + '/deep-analyze', { method: 'POST' });
+        const data = await resp.json();
+        console.log('[AICU] deep-analyze response:', data);
+        if (data.success) {
+            const parts = [];
+            if (data.deep_analyzed) parts.push(`深度类型: ${data.deep_type_name || '正常用户'}`);
+            if (data.aicu_comment_count) parts.push(`历史评论: ${data.aicu_comment_count}条`);
+            if (data.aicu_device) parts.push(`设备: ${data.aicu_device}`);
+            if (data.aicu_waf_blocked) parts.push(`⚠️ AICU API 被 WAF 拦截`);
+            showToast('AICU 分析完成: ' + (parts.join(', ') || '完成'), 'success');
+            // 原地刷新弹窗
+            const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+            console.log('[AICU] findIndex for mid=' + mid + ' → idx=' + idx);
+            if (idx >= 0) {
+                const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
+                console.log('[AICU] detail API status:', r.status);
+                if (r.ok) {
+                    const d = await r.json();
+                    console.log('[AICU] detail data keys:', Object.keys(d.data || {}));
+                    console.log('[AICU] deep_analyzed before merge:', scoredUsers[idx].deep_analyzed);
+                    if (d.success) {
+                        scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
+                        console.log('[AICU] deep_analyzed after merge:', scoredUsers[idx].deep_analyzed);
+                        console.log('[AICU] deep_type_id after merge:', scoredUsers[idx].deep_type_id);
+                    }
+                }
+                showUserDetail(idx);
+            } else {
+                console.log('[AICU] mid not in scoredUsers, force reload');
+                location.reload();
+            }
+        } else {
+            showToast('AICU 分析失败: ' + (data.error || '未知错误'), 'error');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search"></i> 重试深度分析';
+        }
+    } catch (err) {
+        showToast('网络错误: ' + err.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-search"></i> 重试深度分析';
+    }
+}
+
+// ---- 用户详情 ----
+function showUserDetail(index) {
+    const user = scoredUsers[index];
+    if (!user) return;
+
+    const modalTitle = document.getElementById('userDetailTitle');
+    const modalBody = document.getElementById('userDetailBody');
+
+    modalTitle.innerHTML = `<i class="bi bi-person-badge"></i> ${user.uname || '未知用户'} <small class="text-white-50">MID: ${user.mid}</small>`;
+
+    // --- Risk & Score row ---
+    const riskColor = user.score >= 70 ? 'danger' : (user.score >= 40 ? 'warning' : 'success');
+    const riskLabel = user.score >= 70 ? '高风险' : (user.score >= 40 ? '中风险' : '低风险');
+
+    // --- Feature breakdown ---
+    let featuresHtml = '';
+    if (user.features) {
+        const sorted = Object.entries(user.features)
+            .filter(([k]) => FEATURE_NAMES_ALL[k])
+            .sort((a, b) => b[1] - a[1]);
+        featuresHtml = sorted.map(([key, val]) => {
+            const pct = Math.round(val * 100);
+            const barColor = pct >= 70 ? 'bg-danger' : (pct >= 40 ? 'bg-warning' : 'bg-secondary');
+            const fname = FEATURE_NAMES_ALL[key] || key;
+            const fdesc = FEATURE_DESCRIPTIONS[fname] || '';
+            return `<div class="d-flex align-items-center mb-2">
+                <span class="text-nowrap me-1" style="width:110px;font-size:0.85em">
+                    ${fname}
+                    <i class="bi bi-info-circle text-muted" style="font-size:0.7em;cursor:help"
+                       data-bs-toggle="tooltip" data-bs-placement="top"
+                       title="${fdesc}"></i>
+                </span>
+                <div class="flex-grow-1 me-2" style="height:8px">
+                    <div class="progress" style="height:8px"><div class="progress-bar ${barColor}" style="width:${Math.min(pct,100)}%"></div></div>
+                </div>
+                <span class="text-muted small" style="width:35px;text-align:right">${pct}%</span>
+            </div>`;
+        }).join('');
+    }
+
+    // --- LLM analysis ---
+    let llmHtml = '';
+    if (user.llm_analyzed) {
+        const typeId = user.llm_type_id || 0;
+        if (typeId > 0) {
+            // 判定为水军类型
+            const typeColor = LLM_TYPE_COLORS[typeId] || '#666';
+            llmHtml = `<div class="card mb-3 border-start border-4" style="border-left-color:${typeColor}">
+                <div class="card-body">
+                    <h6 class="card-title">
+                        <span class="badge" style="background:${typeColor};color:#fff">${user.llm_type_name}</span>
+                        <span class="ms-2 text-muted small">LLM 置信度: ${user.llm_confidence}%</span>
+                    </h6>
+                    <p class="card-text small mb-2">${(user.llm_reasoning || '无详细推理').replace(/</g,'&lt;')}</p>
+                    <button class="btn btn-sm btn-outline-primary" id="llm-analyze-btn" onclick="runLLMAnalyzeInModal(${user.mid})">
+                        <i class="bi bi-arrow-repeat"></i> 重新 LLM 分析
+                    </button>
+                </div>
+            </div>`;
+        } else {
+            // 判定为正常用户
+            llmHtml = `<div class="card mb-3 border-start border-4" style="border-left-color:#198754">
+                <div class="card-body">
+                    <h6 class="card-title">
+                        <span class="badge bg-success">正常用户</span>
+                        <span class="ms-2 text-muted small">LLM 置信度: ${user.llm_confidence}%</span>
+                    </h6>
+                    <p class="card-text small mb-2">${(user.llm_reasoning || 'LLM 判定该用户行为正常，未发现水军特征').replace(/</g,'&lt;')}</p>
+                    <button class="btn btn-sm btn-outline-primary" id="llm-analyze-btn" onclick="runLLMAnalyzeInModal(${user.mid})">
+                        <i class="bi bi-arrow-repeat"></i> 重新 LLM 分析
+                    </button>
+                </div>
+            </div>`;
+        }
+    } else {
+        llmHtml = `<div class="card mb-3 border-start border-4" style="border-left-color:#999">
+            <div class="card-body">
+                <h6 class="card-title text-muted"><i class="bi bi-robot"></i> LLM 未分析</h6>
+                <p class="card-text small text-muted mb-2">该用户评分未达到 LLM 分析阈值，或 LLM 未启用</p>
+                <button class="btn btn-sm btn-outline-primary" id="llm-analyze-btn" onclick="runLLMAnalyzeInModal(${user.mid})">
+                    <i class="bi bi-cpu"></i> 执行 LLM 分析
+                </button>
+            </div>
+        </div>`;
+    }
+
+    // --- AICU Deep Analysis ---
+    let deepHtml = '';
+    if (user.deep_analyzed && user.deep_type_id > 0) {
+        // 判定为水军（type_id 1-8）
+        const dTypeColor = LLM_TYPE_COLORS[user.deep_type_id] || '#666';
+        const evidenceHtml = (user.deep_key_evidence || []).map(e =>
+            `<li class="small">${(e||'').replace(/</g,'&lt;')}</li>`
+        ).join('') || '<li class="small text-muted">无具体证据</li>';
+
+        const confirmedBadge = user.deep_risk_confirmed
+            ? '<span class="badge bg-danger ms-1"><i class="bi bi-exclamation-triangle"></i> 深度确认高风险</span>'
+            : '<span class="badge bg-warning text-dark ms-1"><i class="bi bi-question-circle"></i> 待进一步确认</span>';
+
+        deepHtml = `<div class="card mb-3 border-start border-4" style="border-left-color:${dTypeColor}">
+            <div class="card-body">
+                <h6 class="card-title">
+                    <span class="badge" style="background:${dTypeColor};color:#fff">${user.deep_type_name}</span>
+                    <span class="ms-2 text-muted small">AICU 深度置信度: ${user.deep_confidence || 0}%</span>
+                    ${confirmedBadge}
+                </h6>
+                <p class="card-text small mb-2">${(user.deep_reasoning || '无详细推理').replace(/</g,'&lt;')}</p>
+                <div class="mt-2"><strong class="small"><i class="bi bi-journal-text"></i> 关键证据:</strong></div>
+                <ul class="mb-3 ps-3">${evidenceHtml}</ul>
+                <button class="btn btn-sm btn-outline-warning" id="aicu-analyze-btn" onclick="runAICUAnalyzeInModal(${user.mid})">
+                    <i class="bi bi-arrow-repeat"></i> 重新 AICU 深度分析
+                </button>
+            </div>
+        </div>`;
+
+        // AICU metadata（始终显示，只要做过深度分析）
+        if (user.deep_analyzed) {
+            const aicuParts = [];
+            if (user.aicu_comment_count != null && user.aicu_comment_count > 0) aicuParts.push(`历史评论: ${user.aicu_comment_count} 条`);
+            else if (user.aicu_comment_count === 0) aicuParts.push(`历史评论: 0 条（无历史评论）`);
+            if (user.aicu_device) aicuParts.push(`设备: ${user.aicu_device}`);
+            if (user.aicu_names && user.aicu_names.length > 0) aicuParts.push(`曾用名: ${user.aicu_names.join(', ')}`);
+            const stats = user.aicu_stats || {};
+            if (Object.keys(stats).length > 0) {
+                const st = [];
+                if (stats.total_comments) st.push(`总评${stats.total_comments}`);
+                if (stats.sign) st.push(`签名"${stats.sign}"`);
+                if (st.length > 0) aicuParts.push(st.join('，'));
+            }
+            let aicuNote = aicuParts.length > 0 ? aicuParts.join(' | ') : '已抓取，但无显著特征数据';
+            if (user.aicu_waf_blocked) aicuNote = '⚠️ AICU API 被 WAF 拦截，无法获取历史数据（LLM 仍基于本地评论完成分析）';
+            deepHtml += `<div class="row mb-3">
+                <div class="col-md-12"><small class="text-muted">📊 AICU 深度数据:</small><br><strong>${aicuNote}</strong></div>
+            </div>`;
+        }
+    } else if (user.deep_analyzed) {
+        // 已分析但 type_id=0 → LLM 判定为正常用户/非水军
+        deepHtml = `<div class="card mb-3 border-start border-4" style="border-left-color:#28a745">
+            <div class="card-body">
+                <h6 class="card-title">
+                    <span class="badge bg-success"><i class="bi bi-check-circle"></i> ${user.deep_type_name || '正常用户'}</span>
+                    <span class="ms-2 text-muted small">AICU 深度置信度: ${user.deep_confidence || 0}%</span>
+                    <span class="badge bg-success ms-1"><i class="bi bi-shield-check"></i> 非水军</span>
+                </h6>
+                <p class="card-text small mb-2">${(user.deep_reasoning || '经 AICU 历史数据深度分析，该用户未发现水军行为特征。').replace(/</g,'&lt;')}</p>
+                <button class="btn btn-sm btn-outline-warning" id="aicu-analyze-btn" onclick="runAICUAnalyzeInModal(${user.mid})">
+                    <i class="bi bi-arrow-repeat"></i> 重新 AICU 深度分析
+                </button>
+            </div>
+        </div>`;
+
+        // AICU metadata（正常用户也显示，始终渲染）
+        if (user.deep_analyzed) {
+            const aicuParts = [];
+            if (user.aicu_comment_count) aicuParts.push(`历史评论: ${user.aicu_comment_count} 条`);
+            if (user.aicu_device) aicuParts.push(`设备: ${user.aicu_device}`);
+            if (user.aicu_names && user.aicu_names.length > 0) aicuParts.push(`曾用名: ${user.aicu_names.join(', ')}`);
+            const stats = user.aicu_stats || {};
+            if (Object.keys(stats).length > 0) {
+                const st = [];
+                if (stats.total_comments) st.push(`总评${stats.total_comments}`);
+                if (stats.signs) st.push(`签名"${stats.signs}"`);
+                if (st.length > 0) aicuParts.push(st.join('，'));
+            }
+            let aicuNote = aicuParts.length > 0 ? aicuParts.join(' | ') : '已抓取，但无显著特征数据';
+            if (user.aicu_waf_blocked) aicuNote = '⚠️ AICU API 被 WAF 拦截，无法获取历史数据（LLM 仍基于本地评论完成分析）';
+            deepHtml += `<div class="row mb-3">
+                <div class="col-md-12"><small class="text-muted">📊 AICU 深度数据:</small><br><strong>${aicuNote}</strong></div>
+            </div>`;
+        }
+    } else {
+        // 未分析 → 显示执行按钮
+        deepHtml = `<div class="card mb-3 border-start border-4" style="border-left-color:#ccc">
+            <div class="card-body">
+                <h6 class="card-title text-muted"><i class="bi bi-search"></i> AICU 深度分析</h6>
+                <p class="card-text small text-muted mb-2">未启用深度分析，或该用户评分未达到深度分析阈值</p>
+                <button class="btn btn-sm btn-outline-warning" id="aicu-analyze-btn" onclick="runAICUAnalyzeInModal(${user.mid})">
+                    <i class="bi bi-search"></i> 执行 AICU 深度分析
+                </button>
+            </div>
+        </div>`;
+    }
+
+    // --- Sample comments ---
+    let commentsHtml = '';
+    if (user.sample_comments && user.sample_comments.length > 0) {
+        commentsHtml = `<div class="card mb-3">
+            <div class="card-header small"><i class="bi bi-chat-left-text"></i> 样本评论 (${user.sample_comments.length} 条)</div>
+            <div class="card-body p-0" style="max-height:300px;overflow-y:auto">
+                ${user.sample_comments.map((c,i) => `
+                    <div class="p-2 border-bottom small">
+                        <span class="text-muted">#${i+1}</span>&nbsp;
+                        ${(c.content||c||'').replace(/</g,'&lt;').substring(0,200)}
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    }
+
+    // --- Metadata ---
+    const reportTime = '{{ (report.report_meta.generated_at[:19] if report else "") }}';
+
+    // --- Assemble modal body ---
+    modalBody.innerHTML = `
+        <div class="row mb-3">
+            <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">综合评分</div><h3 class="text-${riskColor} mb-0">${user.score}</h3></div></div>
+            <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">风险等级</div><h4 class="mb-0"><span class="badge bg-${riskColor} fs-6">${riskLabel}</span></h4></div></div>
+            <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">Lv${user.level} · ${user.comment_count}条评论</div><h5 class="mb-0 text-muted">${reportTime}</h5></div></div>
+        </div>
+
+        <h6><i class="bi bi-bar-chart-steps"></i> 15维特征评分 <small class="text-muted">(鼠标悬停 <i class="bi bi-info-circle"></i> 查看含义)</small></h6>
+        <div class="mb-3">${featuresHtml}</div>
+
+        <h6><i class="bi bi-robot"></i> LLM 初筛分析</h6>
+        ${llmHtml}
+
+        <h6><i class="bi bi-search"></i> AICU 深度分析 <small class="text-muted">(历史评论/弹幕回溯)</small></h6>
+        ${deepHtml}
+
+        ${commentsHtml}
+    `;
+
+    // Show modal via Bootstrap
+    const modal = new bootstrap.Modal(document.getElementById('userDetailModal'));
+    modal.show();
+
+    // 初始化特征说明 tooltips（动态渲染后需要手动激活）
+    setTimeout(() => {
+        const tooltips = modalBody.querySelectorAll('[data-bs-toggle="tooltip"]');
+        tooltips.forEach(el => {
+            const existing = bootstrap.Tooltip.getInstance(el);
+            if (existing) existing.dispose();
+            new bootstrap.Tooltip(el, { container: 'body' });
+        });
+    }, 300);
+}
+
+// ---- 删除当前视频数据 ----
+function deleteThisVideo() {
+    const title = '{{ (video.get("title", "") or "").replace("'", "\\'") }}';
+    confirmDelete(
+        `确定要删除「${title || '{{ bvid }}'}」的所有数据吗？\n\n这将删除：\n  - 视频信息\n  - {{ comment_count }} 条评论数据\n  - 分析报告（如有）\n\n此操作不可撤销！`,
+        () => fetch('/api/data/video/{{ bvid }}', { method: 'DELETE' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    setTimeout(() => { window.location.href = '/'; }, 800);
+                } else {
+                    showToast(d.message || '删除失败', 'error');
+                    throw new Error(d.message);
+                }
+            })
+    );
+}
+</script>
+{% endblock %}

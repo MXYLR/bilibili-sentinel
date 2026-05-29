@@ -1,0 +1,20 @@
+# B站哨兵系统 — 依赖
+# 参考 MediaCrawler 的依赖管理架构优化
+
+# === 核心爬虫 (Scrapy-Redis 分布式) ===
+scrapy>=2.11,<3.0
+scrapy-redis>=0.7
+redis>=5.0
+
+# === Dashboard ===
+flask>=3.0,<4.0
+
+# === 存储扩展 (Phase 3: SQLite) ===
+# aiosqlite>=0.19  # SQLite异步驱动（Scrapy同步模式下使用标准sqlite3）
+
+# === 反检测增强 (Phase 5: Playwright) ===
+playwright>=1.40  # 浏览器自动化 + CDP模式
+# playwright install chromium  # 首次使用需安装浏览器
+
+# === 工具 ===
+httpx>=0.25,<1.0  # 异步HTTP客户端 (也可用于代理验证)

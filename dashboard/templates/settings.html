@@ -1,0 +1,729 @@
+{% extends "base.html" %}
+{% block title %}系统设置{% endblock %}
+
+{% block content %}
+<h5 class="mb-3"><i class="bi bi-sliders me-2"></i>系统设置</h5>
+
+<!-- 功能开关 -->
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-toggle-on me-2"></i>功能开关</div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:200px">配置项</th>
+                        <th>当前值</th>
+                        <th>说明</th>
+                        <th style="width:120px">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="switch-table">
+                    <tr><td colspan="4" class="text-muted text-center">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <small class="text-muted"><i class="bi bi-info-circle"></i> 运行时修后重启 Dashboard 恢复默认。永久生效请修改 <code>config/base_config.py</code>。</small>
+    </div>
+</div>
+
+<!-- LLM 分析引擎配置 -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-cpu me-2"></i>大语言模型分析引擎</span>
+        <span id="llm-live-badge" class="badge bg-secondary">检测中...</span>
+    </div>
+    <div class="card-body">
+        <!-- Provider + Model -->
+        <div class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label fw-bold">服务商</label>
+                <select class="form-select" id="llm-provider" onchange="onProviderChange()">
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="custom">自定义端点</option>
+                </select>
+                <div class="form-text">选择 API 服务商</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label fw-bold">模型</label>
+                <select class="form-select" id="llm-model">
+                </select>
+                <div class="form-text" id="llm-model-hint"></div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label fw-bold">API Key</label>
+                <div class="input-group">
+                    <input type="password" class="form-control" id="llm-api-key"
+                           placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                           style="font-family:monospace">
+                    <button class="btn btn-outline-secondary" type="button" id="llm-key-toggle"
+                            onclick="toggleApiKeyVisibility()" title="显示/隐藏">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                </div>
+                <div class="form-text" id="llm-key-hint">
+                    <span class="provider-deepseek">在 <a href="https://platform.deepseek.com/api_keys" target="_blank">platform.deepseek.com</a> 获取</span>
+                    <span class="provider-openai" style="display:none">在 <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a> 获取</span>
+                    <span class="provider-custom" style="display:none">输入自定义端点的 API Key</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Base URL (自定义时显示) -->
+        <div class="row g-3 mt-0" id="llm-baseurl-row" style="display:none">
+            <div class="col-12">
+                <label class="form-label fw-bold">API Base URL</label>
+                <input type="text" class="form-control" id="llm-base-url"
+                       placeholder="https://your-api.com/v1" style="font-family:monospace">
+                <div class="form-text">OpenAI 兼容的 API 端点地址（需要以 /v1 结尾）</div>
+            </div>
+        </div>
+
+        <div class="row g-3 mt-3">
+            <div class="col-md-3">
+                <label class="form-label fw-bold">筛选阈值</label>
+                <div class="input-group">
+                    <input type="range" class="form-range" id="llm-threshold" min="10" max="70" step="5" value="30"
+                           oninput="document.getElementById('llm-threshold-val').textContent=this.value">
+                    <span class="input-group-text" style="min-width:3em" id="llm-threshold-val">30</span>
+                </div>
+                <div class="form-text">评分≥此值的账号才送LLM分析</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label fw-bold">引擎权重</label>
+                <div class="input-group">
+                    <input type="number" class="form-control" id="llm-engine-weight"
+                           min="0" max="1" step="0.05" value="0.75">
+                    <span class="input-group-text">× 特征评分</span>
+                </div>
+                <div class="form-text">14特征引擎所占权重</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label fw-bold">LLM权重</label>
+                <div class="input-group">
+                    <input type="number" class="form-control" id="llm-llm-weight"
+                           min="0" max="1" step="0.05" value="0.25">
+                    <span class="input-group-text">× AI置信度</span>
+                </div>
+                <div class="form-text">大模型判断所占权重</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label fw-bold">批量控制</label>
+                <div class="d-flex gap-2">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text">每批</span>
+                        <input type="number" class="form-control" id="llm-users-per-batch"
+                               min="1" max="10" value="5">
+                        <span class="input-group-text">人</span>
+                    </div>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text">上限</span>
+                        <input type="number" class="form-control" id="llm-max-batches"
+                               min="1" max="20" value="10">
+                        <span class="input-group-text">批</span>
+                    </div>
+                </div>
+                <div class="form-text">单次分析≤50人, 控制API费用</div>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-primary" onclick="saveLLMConfig()">
+                <i class="bi bi-check-lg"></i> 保存配置
+            </button>
+            <button class="btn btn-outline-secondary" onclick="testLLMConnection()" id="llm-test-btn">
+                <i class="bi bi-lightning-charge"></i> 测试连接
+            </button>
+            <span id="llm-save-status" class="align-self-center ms-2 small"></span>
+        </div>
+
+        <div id="llm-test-result" class="mt-3" style="display:none"></div>
+    </div>
+</div>
+
+<!-- AICU 深度分析配置 -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-search-heart me-2"></i>AICU 深度分析</span>
+        <span id="aicu-live-badge" class="badge bg-secondary">未启用</span>
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-4">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="aicu-enabled"
+                           onchange="document.getElementById('aicu-live-badge').className = this.checked ? 'badge bg-success' : 'badge bg-secondary'; document.getElementById('aicu-live-badge').textContent = this.checked ? '已启用' : '未启用'">
+                    <label class="form-check-label fw-bold" for="aicu-enabled">启用 AICU 深度分析</label>
+                </div>
+                <div class="form-text">
+                    对 LLM 初筛标记的高风险用户（引擎评分 ≥ <span id="aicu-threshold-display">70</span>），
+                    通过 aicu.cc 抓取其历史评论数据进行第二轮深度分析。
+                </div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label fw-bold">深度分析阈值</label>
+                <div class="input-group">
+                    <input type="range" class="form-range" id="aicu-threshold" min="50" max="90" step="5" value="70"
+                           oninput="document.getElementById('aicu-threshold-display').textContent=this.value">
+                    <span class="input-group-text" style="min-width:3em" id="aicu-threshold-val">70</span>
+                </div>
+                <div class="form-text">引擎评分 ≥ 此值的用户才送深度分析</div>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label fw-bold">AICU Cookie <small class="text-muted">(可选)</small></label>
+                <div class="input-group">
+                    <input type="password" class="form-control" id="aicu-cookie"
+                           placeholder="登录 aicu.cc 后从浏览器复制" style="font-family:monospace">
+                    <button class="btn btn-outline-secondary" type="button" id="aicu-cookie-toggle"
+                            onclick="toggleAicuCookieVisibility()" title="显示/隐藏">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                </div>
+                <div class="form-text">
+                    登录 <a href="https://www.aicu.cc/" target="_blank">aicu.cc</a> 后获取，可提升数据质量。不填也可以使用。
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-primary" onclick="saveLLMConfig()">
+                <i class="bi bi-check-lg"></i> 保存配置
+            </button>
+            <button class="btn btn-outline-info" onclick="testAicuConnection()" id="aicu-test-btn">
+                <i class="bi bi-search"></i> 测试 AICU 连接
+            </button>
+            <span id="aicu-test-status" class="align-self-center ms-2 small"></span>
+        </div>
+        <div id="aicu-test-result" class="mt-3" style="display:none"></div>
+    </div>
+</div>
+
+<!-- Clash 代理配置 -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-router me-2"></i>Clash Verge 代理配置</span>
+        <span id="clash-live-badge" class="badge bg-secondary">检测中...</span>
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-8">
+                <label class="form-label fw-bold">代理地址</label>
+                <input type="text" class="form-control" id="clash-proxy-url"
+                       placeholder="socks5://192.168.1.104:7897" style="font-family:monospace">
+                <div class="form-text">Clash Verge SOCKS5 代理地址。影响 <code>BilibiliRequestsFallbackMiddleware</code> 的 requests 直连请求。</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label fw-bold">代理状态</label>
+                <div id="clash-proxy-status" class="form-control-plaintext">
+                    <small class="text-muted">点击测试按钮检测连通性</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-primary" onclick="saveClashConfig()">
+                <i class="bi bi-check-lg"></i> 保存代理地址
+            </button>
+            <button class="btn btn-outline-secondary" onclick="testClashProxy()" id="clash-test-btn">
+                <i class="bi bi-lightning-charge"></i> 测试连通性
+            </button>
+            <span id="clash-save-status" class="align-self-center ms-2 small"></span>
+        </div>
+        <div id="clash-test-result" class="mt-3" style="display:none"></div>
+    </div>
+</div>
+<div class="row mb-4">
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header"><i class="bi bi-puzzle me-2"></i>模块加载状态</div>
+            <div class="card-body" id="module-status">
+                <div class="text-muted small">加载中...</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header"><i class="bi bi-info-circle me-2"></i>当前配置参数</div>
+            <div class="card-body" id="config-params">
+                <div class="text-muted small">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 爬虫参数 -->
+<div class="card">
+    <div class="card-header"><i class="bi bi-gear me-2"></i>爬虫运行参数</div>
+    <div class="card-body" id="crawler-params">
+        <div class="text-muted small">加载中...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function loadSettings() {
+    fetch('/api/config/view').then(r=>r.json()).then(d=>{
+        if (!d.success) return;
+        const cfg = d.data;
+
+        // 功能开关表
+        const switches = cfg.switches || {};
+        const switchRow = (key, desc) => {
+            const val = switches[key];
+            const isBool = typeof val === 'boolean';
+            const display = isBool ? (val ? '<span class="text-success"><i class="bi bi-check-circle"></i> 开启</span>' : '<span class="text-secondary"><i class="bi bi-x-circle"></i> 关闭</span>') : `<code>${val}</code>`;
+            const toggleBtn = isBool
+                ? `<button class="btn btn-sm ${val?'btn-outline-danger':'btn-outline-success'}" onclick="toggleSwitch('${key}',${!val})">${val?'关闭':'开启'}</button>`
+                : `<button class="btn btn-sm btn-outline-secondary" disabled>只读</button>`;
+            return `<tr>
+                <td><code>${key}</code></td>
+                <td id="val-${key}">${display}</td>
+                <td><small class="text-muted">${desc}</small></td>
+                <td>${toggleBtn}</td>
+            </tr>`;
+        };
+
+        document.getElementById('switch-table').innerHTML =
+            switchRow('ENABLE_IP_PROXY', '启用IP代理池（需配置代理供应商）') +
+            switchRow('ENABLE_CDP_MODE', '启用浏览器反检测（需安装Playwright）') +
+            switchRow('ENABLE_CACHE_DEDUP', '启用缓存去重（Redis去重 + 本地LRU缓存）') +
+            switchRow('SAVE_LOGIN_STATE', '保存并复用B站登录态') +
+            switchRow('CLASH_PROXY_ENABLED', '启用 Clash Verge 代理（影响 BilibiliRequestsFallback 中间件）') +
+            switchRow('ENABLE_LLM_ANALYSIS', '启用大语言模型水军语义分析（需配置DeepSeek API Key）') +
+            '<tr><td><code>SAVE_DATA_OPTION</code></td><td id="val-SAVE_DATA_OPTION"><code>'+(switches.SAVE_DATA_OPTION||'json')+'</code></td><td><small class="text-muted">存储后端: json / sqlite</small></td><td><button class="btn btn-sm btn-outline-secondary" onclick="toggleSwitch(\'SAVE_DATA_OPTION\',\''+(switches.SAVE_DATA_OPTION==='json'?'sqlite':'json')+'\')">切换</button></td></tr>' +
+            '<tr><td><code>LOGIN_TYPE</code></td><td id="val-LOGIN_TYPE"><code>'+(switches.LOGIN_TYPE||'qrcode')+'</code></td><td><small class="text-muted">登录方式: qrcode / cookie</small></td><td><button class="btn btn-sm btn-outline-secondary" disabled>只读</button></td></tr>';
+
+        // 同步 Clash 代理配置到输入框
+        const proxyUrl = switches.CLASH_PROXY_URL || 'socks5://192.168.1.104:7897';
+        const proxyEnabled = switches.CLASH_PROXY_ENABLED;
+        document.getElementById('clash-proxy-url').value = proxyUrl;
+        const badge = document.getElementById('clash-live-badge');
+        if (proxyEnabled) {
+            badge.className = 'badge bg-success';
+            badge.textContent = '已启用';
+        } else {
+            badge.className = 'badge bg-secondary';
+            badge.textContent = '已禁用';
+        }
+
+        // 爬虫参数
+        const cp = cfg.crawler || {};
+        document.getElementById('crawler-params').innerHTML = Object.entries(cp).map(([k,v]) =>
+            `<div class="d-flex justify-content-between py-1 border-bottom">
+                <code>${k}</code> <b>${v}</b>
+            </div>`).join('');
+
+        // 模块状态
+        fetch('/api/system/status').then(r=>r.json()).then(sd=>{
+            if (!sd.success) return;
+            const s = sd.data;
+            document.getElementById('module-status').innerHTML = [
+                {name:'代理池 Proxy', ...s.proxy},
+                {name:'缓存 Cache', ...s.cache},
+                {name:'存储层 Store', ...s.store},
+                {name:'登录 Login', ...s.login},
+                {name:'LLM 分析', ...(s.llm||{}), icon: (s.llm||{}).available?'check-circle text-success':'info-circle text-secondary'},
+            ].map(m => {
+                const icon = m.icon || (m.available ? 'check-circle text-success' : 'x-circle text-danger');
+                return `<div class="d-flex align-items-center mb-2">
+                    <i class="bi bi-${icon} me-2"></i>
+                    <div><b>${m.name}</b><br><small class="text-muted">${m.message||''}</small></div>
+                </div>`;
+            }).join('');
+        });
+
+        // 完整配置参数
+        document.getElementById('config-params').innerHTML = Object.entries(switches).map(([k,v]) =>
+            `<div class="d-flex justify-content-between py-1 border-bottom">
+                <code>${k}</code> <span>${JSON.stringify(v)}</span>
+            </div>`).join('');
+    });
+}
+
+function toggleSwitch(key, value) {
+    fetch('/api/config/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key, value})
+    }).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'error');
+        if (d.success) setTimeout(loadSettings, 500);
+    });
+}
+
+let _llmLiveAvailable = false;  // LLM 连接状态缓存
+
+document.addEventListener('DOMContentLoaded', () => { loadSettings(); loadLLMConfig(); });
+setInterval(loadSettings, 30000);
+setInterval(loadLLMConfig, 60000);  // LLM 配置每60秒刷新
+
+// ===== LLM 配置管理 =====
+
+// 缓存的 providers 信息
+let _llmProviders = {};
+
+function loadLLMConfig() {
+    fetch('/api/llm/config/view').then(r=>r.json()).then(d=>{
+        if (!d.success) return;
+        const c = d.data;
+
+        // 缓存 providers 信息
+        _llmProviders = c.providers || {};
+        _llmLiveAvailable = c.live_available;
+
+        // 如果返回的是脱敏 key（含星号），清空输入框，让用户重新输入真实 key
+        const apiKeyVal = c.api_key || '';
+        document.getElementById('llm-api-key').value = apiKeyVal.includes('*') ? '' : apiKeyVal;
+        document.getElementById('llm-provider').value = c.provider || 'deepseek';
+        document.getElementById('llm-base-url').value = c.base_url || '';
+        document.getElementById('llm-threshold').value = c.score_threshold || 30;
+        document.getElementById('llm-threshold-val').textContent = c.score_threshold || 30;
+        document.getElementById('llm-engine-weight').value = c.engine_weight || 0.75;
+        document.getElementById('llm-llm-weight').value = c.llm_weight || 0.25;
+        document.getElementById('llm-max-batches').value = c.max_batches || 10;
+        document.getElementById('llm-users-per-batch').value = c.users_per_batch || 5;
+
+        // AICU 深度分析字段
+        document.getElementById('aicu-enabled').checked = c.deep_analysis_enabled || false;
+        document.getElementById('aicu-cookie').value = c.aicu_cookie || '';
+        document.getElementById('aicu-threshold').value = c.deep_score_threshold || 70;
+        document.getElementById('aicu-threshold-val').textContent = c.deep_score_threshold || 70;
+        document.getElementById('aicu-threshold-display').textContent = c.deep_score_threshold || 70;
+
+        // 更新 AICU badge
+        var aicuBadge = document.getElementById('aicu-live-badge');
+        if (c.deep_analysis_enabled) {
+            aicuBadge.className = 'badge bg-success';
+            aicuBadge.textContent = '已启用';
+        } else {
+            aicuBadge.className = 'badge bg-secondary';
+            aicuBadge.textContent = '未启用';
+        }
+
+        // 刷新 provider 相关的 UI
+        onProviderChange();
+
+        // 设置当前模型（在 onProviderChange 之后，确保下拉已填充）
+        setTimeout(() => {
+            const modelSelect = document.getElementById('llm-model');
+            const savedModel = c.model || 'deepseek-v4-pro';
+            // 如果 savedModel 在下拉中，选中它；否则选中第一个
+            if ([...modelSelect.options].some(o => o.value === savedModel)) {
+                modelSelect.value = savedModel;
+            }
+        }, 0);
+
+        updateLiveBadge();
+    });
+}
+
+function onProviderChange() {
+    const provider = document.getElementById('llm-provider').value;
+    const modelSelect = document.getElementById('llm-model');
+    const baseUrlRow = document.getElementById('llm-baseurl-row');
+    const modelHint = document.getElementById('llm-model-hint');
+
+    // 清空模型下拉
+    modelSelect.innerHTML = '';
+
+    if (provider === 'custom') {
+        // 自定义：显示 base_url 输入框，模型手动输入
+        baseUrlRow.style.display = '';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control';
+        input.id = 'llm-model';
+        input.placeholder = '输入模型名称，如 gpt-4o';
+        input.style.fontFamily = 'monospace';
+        modelSelect.parentNode.replaceChild(input, modelSelect);
+        modelHint.textContent = '输入自定义端点支持的模型名称';
+    } else {
+        // 预设 provider：隐藏 base_url，显示模型下拉
+        baseUrlRow.style.display = 'none';
+        // 如果之前是 custom (input)，需要换回 select
+        const currentModel = document.getElementById('llm-model');
+        if (currentModel && currentModel.tagName === 'INPUT') {
+            const select = document.createElement('select');
+            select.className = 'form-select';
+            select.id = 'llm-model';
+            currentModel.parentNode.replaceChild(select, currentModel);
+        }
+
+        const preset = _llmProviders[provider];
+        if (preset && preset.models) {
+            preset.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = `${m.id} (${m.label})`;
+                modelSelect.appendChild(opt);
+            });
+        }
+        // 自动填充 base_url
+        if (preset && preset.base_url) {
+            document.getElementById('llm-base-url').value = preset.base_url;
+        }
+        modelHint.textContent = provider === 'deepseek' ? 'V4 Pro推理增强, V4 Flash快速文本' : '';
+    }
+
+    // 切换 API Key 提示
+    ['deepseek', 'openai', 'custom'].forEach(p => {
+        const el = document.querySelector(`.provider-${p}`);
+        if (el) el.style.display = (p === provider) ? '' : 'none';
+    });
+}
+
+function updateLiveBadge() {
+    const badge = document.getElementById('llm-live-badge');
+    const apiKey = document.getElementById('llm-api-key').value.trim();
+    if (_llmLiveAvailable) {
+        badge.className = 'badge bg-success';
+        badge.textContent = '已连接';
+    } else if (apiKey) {
+        badge.className = 'badge bg-warning text-dark';
+        badge.textContent = 'Key 无效';
+    } else {
+        badge.className = 'badge bg-secondary';
+        badge.textContent = '未配置';
+    }
+}
+
+function _getCurrentModel() {
+    const el = document.getElementById('llm-model');
+    return el ? el.value : '';
+}
+
+function saveLLMConfig() {
+    const provider = document.getElementById('llm-provider').value;
+    const body = {
+        provider: provider,
+        api_key: document.getElementById('llm-api-key').value.trim(),
+        model: _getCurrentModel(),
+        base_url: document.getElementById('llm-base-url').value.trim(),
+        score_threshold: parseInt(document.getElementById('llm-threshold').value),
+        engine_weight: parseFloat(document.getElementById('llm-engine-weight').value),
+        llm_weight: parseFloat(document.getElementById('llm-llm-weight').value),
+        max_batches: parseInt(document.getElementById('llm-max-batches').value),
+        users_per_batch: parseInt(document.getElementById('llm-users-per-batch').value),
+        enabled: !!document.getElementById('llm-api-key').value.trim(),
+        // AICU 深度分析
+        deep_analysis_enabled: document.getElementById('aicu-enabled').checked,
+        aicu_cookie: document.getElementById('aicu-cookie').value.trim(),
+        deep_score_threshold: parseInt(document.getElementById('aicu-threshold').value),
+    };
+
+    const status = document.getElementById('llm-save-status');
+    status.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 保存中...';
+    document.getElementById('llm-test-btn').disabled = true;
+
+    fetch('/api/llm/config/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    }).then(r=>r.json()).then(d=>{
+        document.getElementById('llm-test-btn').disabled = false;
+        if (d.success) {
+            status.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + d.message + '</span>';
+            loadLLMConfig();
+            loadSettings();
+        } else {
+            status.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.message + '</span>';
+        }
+    });
+}
+
+function testLLMConnection() {
+    const apiKey = document.getElementById('llm-api-key').value.trim();
+    if (!apiKey) {
+        showToast('请先输入 API Key', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('llm-test-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>测试中...';
+
+    const result = document.getElementById('llm-test-result');
+    result.style.display = 'block';
+    const providerLabel = document.getElementById('llm-provider').value;
+    result.innerHTML = `<div class="alert alert-info small"><div class="spinner-border spinner-border-sm me-1"></div>正在连接 ${providerLabel} API...</div>`;
+
+    fetch('/api/llm/config/test', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            api_key: apiKey,
+            provider: document.getElementById('llm-provider').value,
+            model: _getCurrentModel(),
+            base_url: document.getElementById('llm-base-url').value.trim(),
+        })
+    }).then(r=>r.json()).then(d=>{
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-lightning-charge"></i> 测试连接';
+        if (d.success) {
+            result.innerHTML = `<div class="alert alert-success small mb-0">
+                <i class="bi bi-check-circle-fill"></i> <b>连接成功!</b>
+                服务商: <code>${d.provider || ''}</code>,
+                模型: <code>${d.model}</code>,
+                回复: "${(d.message||'').split('回复: ')[1]||''}",
+                消耗: ${(d.usage||{}).prompt_tokens + (d.usage||{}).completion_tokens || 0} tokens
+            </div>`;
+            _llmLiveAvailable = true;
+            updateLiveBadge();
+        } else {
+            result.innerHTML = `<div class="alert alert-danger small mb-0">
+                <i class="bi bi-x-circle-fill"></i> <b>连接失败:</b> ${d.message}
+            </div>`;
+            _llmLiveAvailable = false;
+            updateLiveBadge();
+        }
+    }).catch(e=>{
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-lightning-charge"></i> 测试连接';
+        result.innerHTML = `<div class="alert alert-danger small mb-0">请求异常: ${e.message}</div>`;
+        _llmLiveAvailable = false;
+        updateLiveBadge();
+    });
+}
+
+// ===== AICU 深度分析管理 =====
+
+function testAicuConnection() {
+    const btn = document.getElementById('aicu-test-btn');
+    const result = document.getElementById('aicu-test-result');
+    const status = document.getElementById('aicu-test-status');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>测试中...';
+    result.style.display = 'block';
+    result.innerHTML = '<div class="alert alert-info small"><div class="spinner-border spinner-border-sm me-1"></div>正在连接 AICU API...</div>';
+
+    fetch('/api/llm/aicu/test', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search"></i> 测试 AICU 连接';
+            if (d.success) {
+                result.innerHTML = `<div class="alert alert-success small mb-0">
+                    <i class="bi bi-check-circle-fill"></i> <b>AICU API 可用!</b>
+                    测试 MID: <code>${d.test_mid}</code>,
+                    获取到 ${d.comment_count} 条历史评论,
+                    延迟: ${d.latency_ms}ms
+                </div>`;
+                status.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> 连接正常</span>';
+            } else {
+                result.innerHTML = `<div class="alert alert-warning small mb-0">
+                    <i class="bi bi-exclamation-triangle-fill"></i> <b>AICU 连接异常:</b> ${d.message}
+                    <br><small class="text-muted">不影响基本功能，深度分析将在 AICU 恢复后自动生效</small>
+                </div>`;
+                status.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> 连接异常</span>';
+            }
+        })
+        .catch(e => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search"></i> 测试 AICU 连接';
+            result.innerHTML = `<div class="alert alert-danger small mb-0">请求异常: ${e.message}</div>`;
+            status.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> 不可用</span>';
+        });
+}
+
+function toggleAicuCookieVisibility() {
+    const input = document.getElementById('aicu-cookie');
+    const btn = document.getElementById('aicu-cookie-toggle');
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.innerHTML = '<i class="bi bi-eye-slash"></i>';
+    } else {
+        input.type = 'password';
+        btn.innerHTML = '<i class="bi bi-eye"></i>';
+    }
+}
+
+function toggleApiKeyVisibility() {
+    const input = document.getElementById('llm-api-key');
+    const btn = document.getElementById('llm-key-toggle');
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.innerHTML = '<i class="bi bi-eye-slash"></i>';
+    } else {
+        input.type = 'password';
+        btn.innerHTML = '<i class="bi bi-eye"></i>';
+    }
+}
+
+// ===== Clash 代理配置管理 =====
+function saveClashConfig() {
+    const url = document.getElementById('clash-proxy-url').value.trim();
+    if (!url) {
+        showToast('请输入代理地址', 'error');
+        return;
+    }
+
+    const status = document.getElementById('clash-save-status');
+    status.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 保存中...';
+
+    // 先保存代理地址
+    fetch('/api/config/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: 'CLASH_PROXY_URL', value: url})
+    }).then(r=>r.json()).then(d=>{
+        if (d.success) {
+            status.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + d.message + '</span>';
+            loadSettings();
+        } else {
+            status.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.message + '</span>';
+        }
+    });
+}
+
+function testClashProxy() {
+    const url = document.getElementById('clash-proxy-url').value.trim();
+    if (!url) {
+        showToast('请先输入代理地址', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('clash-test-btn');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>测试中...';
+
+    const resultDiv = document.getElementById('clash-test-result');
+    const statusDiv = document.getElementById('clash-proxy-status');
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<div class="alert alert-info small"><div class="spinner-border spinner-border-sm me-1"></div>正在通过代理连接 B站 API...</div>';
+
+    fetch('/api/proxy/clash-test', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({proxy_url: url})
+    }).then(r=>r.json()).then(d=>{
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        if (d.success) {
+            resultDiv.innerHTML = `<div class="alert alert-success small mb-0">
+                <i class="bi bi-check-circle-fill"></i> <b>代理连通!</b>
+                B站 API 状态: <code>${d.api_code}</code>,
+                耗时: <code>${d.elapsed_ms}ms</code>
+            </div>`;
+            statusDiv.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> 连通正常</span>';
+            document.getElementById('clash-live-badge').className = 'badge bg-success';
+            document.getElementById('clash-live-badge').textContent = '在线';
+        } else {
+            resultDiv.innerHTML = `<div class="alert alert-danger small mb-0">
+                <i class="bi bi-x-circle-fill"></i> <b>连接失败:</b> ${d.message}
+            </div>`;
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> 无法连通</span>';
+            document.getElementById('clash-live-badge').className = 'badge bg-danger';
+            document.getElementById('clash-live-badge').textContent = '离线';
+        }
+    }).catch(e=>{
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        resultDiv.innerHTML = `<div class="alert alert-danger small mb-0">请求异常: ${e.message}</div>`;
+    });
+}
+</script>
+{% endblock %}

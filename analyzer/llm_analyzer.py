@@ -322,6 +322,7 @@ class LLMAnalyzer:
                     "comments": user_comments,
                     "features": u.get("features", {}),
                     "suspicious_score": u.get("suspicious_score", 0),
+                    "sign": u.get("sign", ""),  # v2.16
                 })
 
             # 调用 API

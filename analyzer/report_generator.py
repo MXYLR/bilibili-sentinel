@@ -66,6 +66,7 @@ class ReportGenerator:
                 "risk_level": user.get("risk_level", "low"),
                 "comment_count": user.get("comment_count", 0),
                 "level": user.get("level", 0),
+                "sign": user.get("sign", ""),  # v2.16: 个性签名
                 "features": normed_features,
                 "top_features": self._get_top_features(features, 3),
                 "sample_comments": user.get("sample_comments", []),

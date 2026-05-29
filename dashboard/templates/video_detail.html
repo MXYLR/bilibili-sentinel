@@ -56,6 +56,11 @@
             {% if report %}
             <span class="badge bg-success fs-6"><i class="bi bi-check-circle"></i> 分析完成</span>
             <span class="text-muted small ms-2">生成时间: {{ report.report_meta.generated_at[:19] }}</span>
+            <button class="btn btn-sm btn-outline-primary ms-2" id="btn-reanalyze" onclick="runReanalysis()"
+                    title="基于当前评论数据重新执行分析">
+                <i class="bi bi-arrow-repeat"></i> 重新分析
+            </button>
+            <div class="mt-2" id="progress-container" style="display:none"></div>
             {% else %}
             <span class="badge bg-secondary fs-6" id="analysis-badge"><i class="bi bi-hourglass"></i> 尚未分析</span>
             <button class="btn btn-sm btn-outline-primary ms-2" id="btn-analysis" onclick="runAnalysis()">
@@ -584,7 +589,7 @@ function renderComment(c, isSub = false) {
             <strong class="me-2${isSub?' small':''}">${c.uname || '匿名用户'}</strong>
             ${level > 0 ? `<span class="badge bg-info me-1" style="font-size:0.7em">Lv${level}</span>` : ''}
             ${riskBadge}
-            ${isSub ? '<small class="text-muted ms-1">回复</small>' : ''}
+            ${isSub ? '<small class="text-muted ms-1">回复 @' + esc(c.parent_uname || '原评论') + '</small>' : ''}
         </div>
         <div class="comment-content mb-2${isSub?' small':''}">${content}</div>
         <div class="d-flex align-items-center text-muted small">
@@ -829,6 +834,64 @@ async function runAnalysis() {
     }
 }
 
+// ---- 重新分析 (v2.16) — 基于现有评论数据重新执行引擎分析 ----
+async function runReanalysis() {
+    const btn = document.getElementById('btn-reanalyze');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 分析中...'; }
+
+    const container = document.querySelector('#progress-container');
+    if (container) {
+        container.style.display = 'block';
+        container.innerHTML = `<div class="progress mt-1" style="height:6px"><div class="progress-bar progress-bar-striped progress-bar-animated" id="progress-bar" style="width:0%"></div></div><small class="text-muted" id="progress-text">启动分析...</small>`;
+    }
+
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+
+    try {
+        const resp = await fetch('/api/run-analysis/{{ bvid }}', { method: 'POST' });
+        const result = await resp.json();
+
+        if (!result.success && resp.status !== 409) {
+            showToast(result.message, 'error');
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重新分析'; }
+            if (container) container.style.display = 'none';
+            return;
+        }
+
+        let pct = 0;
+        const pollInterval = setInterval(async () => {
+            try {
+                const sr = await fetch('/api/analysis-status/{{ bvid }}');
+                const sd = await sr.json();
+                const data = sd.data;
+
+                if (data.status === 'done') {
+                    clearInterval(pollInterval);
+                    if (progressText) progressText.textContent = '分析完成！刷新中...';
+                    if (progressBar) progressBar.style.width = '100%';
+                    setTimeout(() => location.reload(), 500);
+                } else if (data.status === 'error') {
+                    clearInterval(pollInterval);
+                    showToast(data.error || '分析失败', 'error');
+                    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重新分析'; }
+                    if (container) container.style.display = 'none';
+                } else {
+                    pct = Math.min(pct + 2, 85);
+                    const text = data.progress || '分析中';
+                    if (progressBar) progressBar.style.width = pct + '%';
+                    if (progressText) progressText.textContent = text;
+                    if (btn) btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + text;
+                }
+            } catch(e) {}
+        }, 1500);
+    } catch(e) {
+        showToast('请求失败: ' + e.message, 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重新分析'; }
+        if (container) container.style.display = 'none';
+    }
+}
+
 // ---- 用户详情 Modal ----
 const LLM_TYPE_NAMES = {
     1: '模板刷评', 2: '情绪引导', 3: 'AI生成', 4: '引流广告',
@@ -844,14 +907,14 @@ const FEATURE_NAMES_ALL = {
     'f7_sentiment_extreme':'情感极端','f8_like_ratio':'赞评比异常','f9_registration_batch':'批量注册',
     'f10_interaction_ring':'互动小圈子','f11_vip_anomaly':'VIP异常','f12_account_skeleton':'账号骨架',
     'f13_lottery_repost':'转发抽奖','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流',
-    'f16_time_regularity':'时间规律性','f17_self_similarity':'自评相似度'
+    'f16_time_regularity':'时间规律性','f17_self_similarity':'自评相似度','f18_signature_troll':'签名引战'
 };
 
 const FEATURE_DESCRIPTIONS = {
     '账号年龄':   '注册时间越新+评论越频繁→越可疑。注册<30天且评论多则高分',
     '粉丝/关注比': '关注数百但粉丝极少→刷粉号模式。粉丝<50+关注>500得0.9分',
     '用户等级':   '低等级(Lv0-2)+高频评论→典型水军行为。等级越低基础分越高',
-    '头像/认证':   '无头像/无认证/无签名→"三无"账号。每缺失一项+0.34分',
+    '头像/认证':   '无头像/无认证→"双无"账号。每缺失一项+0.50分。签名检测独立为F18',
     '内容相似度':  '评论内容与其他用户高度雷同→模板化刷评。由相似度检测器计算',
     '时间爆发':   '短时间窗口内密集评论→定时控评。基于滑动窗口Z-score检测',
     '情感极端':   '评论情感100%正面或100%负面→立场预设的机械行为。无真实观点',
@@ -860,11 +923,12 @@ const FEATURE_DESCRIPTIONS = {
     '互动小圈子':  '反复@相同几个账号互相评论→小团体刷量。Top2占80%+即高分',
     'VIP异常':    '低等级+购买大会员→伪装水军。月费会员比年费更可疑(成本低)',
     '账号骨架':   '无头像+ID乱码+无动态+无投稿→四要素全中=100%水军号',
-    '转发抽奖':   '无投稿+动态全是转发抽奖→抽奖专用僵尸号。转发比>80%=0.85',
+    '转发抽奖':   '动态中转发抽奖占比高→抽奖号。投稿越多稀释越多(≤5无影响,20+降50%)',
     '敏感内容':   '历史动态含女拳/国际政治/造谣抹黑→高级水军。任意命中=1.0',
     '商业引流':   '评论含赌博/色情/加微信/刷单等硬广告→广告水军。赌博/色情=1.0',
     '时间规律性':  '评论时间间隔高度规律→"上班式"机器人发帖。变异系数<0.3=0.9分',
-    '自评相似度':  '自己多条评论内容高度相似→模板复制粘贴。平均相似度>0.8=1.0分'
+    '自评相似度':  '自己多条评论内容高度相似→模板复制粘贴。平均相似度>0.8=1.0分',
+    '签名引战':   '个性签名含挑衅/嘲讽/引战话术→"精神胜利法"引战号。多关键词命中累加'
 };
 
 // ---- 深度分析手动触发 ----

@@ -1612,6 +1612,13 @@ def api_comments(bvid: str):
         if root > 0:
             replies_by_root.setdefault(root, []).append(c)
 
+    # Step 2.5: 为子回复富化 parent_uname (v2.16 修复楼中楼"回复: "空白名)
+    for root_rpid, reply_list in replies_by_root.items():
+        for reply in reply_list:
+            parent_rpid = reply.get("parent", 0)
+            if parent_rpid and parent_rpid in comment_map:
+                reply["parent_uname"] = comment_map[parent_rpid].get("uname", "")
+
     # Step 3: 为主评论附加 replies (按时间排序)
     for rc in root_comments:
         rpid = rc.get("rpid")

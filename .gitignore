@@ -47,3 +47,6 @@ config/llm_config.json
 # Windows reserved names
 nul
 报告
+data/spider_state.json
+
+data/water_army/

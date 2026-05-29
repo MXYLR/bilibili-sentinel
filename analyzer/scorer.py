@@ -37,10 +37,7 @@ class WaterArmyScorer:
             按 suspicious_score 降序排列的用户列表,
             每个额外添加 suspicious_score 和 risk_level
 
-        v2.9: 确定性信号加成大幅强化 (F12 权重 0.10→0.15 + 硬加成升级)
-          - F12 (账号骨架) 0.50→0.12, 0.75→0.25, 1.00→0.35
-          - F14 (敏感内容) 1.0 → 硬加成 20 分
-          - F15 (商业引流) 1.0 → 硬加成 20 分
+        v2.16: 新增 F18 签名引战检测 + 硬加成 0.15 (>=0.50)
         """
         for user_data in features_list:
             features = user_data.get("features", {})
@@ -76,6 +73,11 @@ class WaterArmyScorer:
             if features.get("f15_commercial_spam", 0) >= 1.0:
                 decisive_bonus += 0.20
                 decisive_tags.append("商业引流")
+
+            # F18 签名引战命中 → 强化佐证 (v2.16)
+            if features.get("f18_signature_troll", 0) >= 0.50:
+                decisive_bonus += 0.15
+                decisive_tags.append("签名引战")
 
             # 融合: 基础分 + 确定性加成, 封顶100分
             total_raw = min(1.0, raw_score + decisive_bonus)

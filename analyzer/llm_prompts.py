@@ -139,11 +139,15 @@ def build_user_prompt(users_data: list) -> str:
         ]
         comments_str = "\n    ".join(f"[{j+1}] {t[:200]}" for j, t in enumerate(comment_texts))
 
+        # v2.16: 个性签名加入分析
+        sign = user.get("sign", "")
+        sign_line = f"- 个性签名: {sign[:100]}\n" if sign else ""
+
         prompt += f"""### 用户 {i}
 - MID: {user.get('mid', 'unknown')}
 - 用户名: {user.get('uname', 'unknown')}
 - 等级: Lv{user.get('level', 0)}
-- 评论数 (此视频): {len(comments)}
+- 评论数 (此视频): {len(comments)}{sign_line}
 - 特征分数 (0-1, 越高越可疑):
   * 账号年龄: {features.get('f1_account_age', 0):.2f}
   * 粉丝/关注比: {features.get('f2_follow_ratio', 0):.2f}
@@ -159,6 +163,7 @@ def build_user_prompt(users_data: list) -> str:
   * 账号骨架: {features.get('f12_account_skeleton', 0):.2f} (无头像+ID乱码+无动态+无投稿)
   * 转发抽奖: {features.get('f13_lottery_repost', 0):.2f} (无投稿+全转发抽奖)
   * 敏感内容: {features.get('f14_sensitive_content', 0):.2f} (女拳/以乌/造谣)
+  * 签名引战: {features.get('f18_signature_troll', 0):.2f} (签名含挑衅/嘲讽话术)
   * 综合异常分: {features.get('综合异常分', user.get('suspicious_score', 0)):.2f}
 - 评论内容:
     {comments_str if comments_str else '(无评论)'}

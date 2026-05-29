@@ -1,17 +1,15 @@
 """
 水军特征提取器
 
-从评论列表和用户信息中提取 15 个特征 (F1-F15)。
+从评论列表和用户信息中提取 18 个特征 (F1-F18)。
 每个特征返回 0.0 ~ 1.0 分数, 1.0 = 高度可疑。
 
 v2.1 新增 F12-F14: 账号空间画像检测
-  - F12: 账号骨架 (无头像+ID乱码+无动态+无投稿)
-  - F13: 转发抽奖模式 (无投稿+全转发抽奖动态)
-  - F14: 敏感内容 (女拳/以乌/造谣抹黑)
 v2.8 新增 F15: 商业引流 (赌博/色情/加微信/刷单等硬广告)
 v2.10 新增 F16-F17 (来自 CleanX 机器人判断增强版):
-  - F16: 评论时间规律性 (StdDev 分析法, 低标准差=机器人规律发帖)
-  - F17: 自评相似度 (Levenshtein 编辑距离, 高重复率=模板复制)
+  - F16: 评论时间规律性
+  - F17: 自评相似度
+v2.16 新增 F18: 签名引战检测 (个性签名含挑衅/引战话术)
 """
 
 import re
@@ -21,7 +19,7 @@ from datetime import datetime
 
 class FeatureExtractor:
     """
-    17 个水军特征提取器 (F1-F17)。
+    18 个水军特征提取器 (F1-F18)。
 
     输入:
       comments: [CommentItem dict]
@@ -54,6 +52,33 @@ class FeatureExtractor:
     _LOTTERY_KW = {
         "抽奖", "转发", "送", "roll", "揪", "抽", "关注+",
         "三连", "一键三连", "白嫖", "福利", "粉丝福利",
+    }
+
+    # ---- F18 签名引战关键词库 (v2.16) ----
+    # 分类一: 直接挑衅 — 向点击主页的人宣战
+    _SIGN_TROLL_DIRECT_KW = {
+        "查成分", "查你爹", "查爹", "点进主页", "点进来",
+        "你爹", "你妈", "你主子", "你爹成分", "成分查",
+        "视奸", "偷看", "窥屏", "翻主页", "看主页",
+        "精神胜利", "精神胜利法",
+    }
+    # 分类二: 防御/嘲讽 — 预设自己遭到攻击并进行嘲讽
+    _SIGN_TROLL_DEFENSIVE_KW = {
+        "包容别人", "喷子", "键盘侠", "杠精", "举报狗",
+        "拉黑", "黑名单", "加入黑名单",
+        "自认吵不过", "吵不过", "逃避", "自尊心",
+        "你攻击", "有人会理你吗", "你又能怎样",
+        "你又能如何", "你什么都不是",
+        "可怜的自尊心", "满足一下你",
+    }
+    # 分类三: 引战宣言 — "我就是来搞事的"
+    _SIGN_TROLL_PROVOKE_KW = {
+        "我混的圈子", "你攻击啥", "我圈子",
+        "你尽管骂", "随便骂", "随便喷",
+        "无所谓", "不在意", "不痛不痒",
+        "只会口嗨", "口嗨", "网络巨人",
+        "现实唯唯诺诺", "重拳出击", "网络重拳",
+        "来对线", "欢迎对线", "来对骂",
     }
 
     def __init__(self, comments, users, get_user_sim_score,
@@ -128,6 +153,7 @@ class FeatureExtractor:
             features["f15_commercial_spam"] = self._f15_commercial_spam(user_comms)  # v2.8
             features["f16_time_regularity"] = self._f16_time_regularity(user_comms)  # v2.10
             features["f17_self_similarity"] = self._f17_self_similarity(user_comms)  # v2.10
+            features["f18_signature_troll"] = self._f18_signature_troll(mid)         # v2.16
 
             # Gather sample comments
             sample = [c.get("content", "")[:80] for c in user_comms[:3]]
@@ -141,6 +167,7 @@ class FeatureExtractor:
                 "comment_count": len(user_comms),
                 "features": features,
                 "sample_comments": sample,
+                "sign": user_info.get("sign", ""),  # v2.16: 个性签名传给LLM分析
             })
 
         return results
@@ -235,13 +262,13 @@ class FeatureExtractor:
 
     def _f4_avatar_verify(self, mid: int) -> float:
         """
-        特征4: 头像/认证/签名。
+        特征4: 头像/认证。
 
-        水军特征: 无头像 + 无认证 + 无签名
-        每个缺失项 = +0.34, 三项合计 = ~1.0
+        水军特征: 无头像 + 无认证
+        每个缺失项 = +0.50, 两项合计 = 1.0
 
-        注意: VIP（大会员）已从此特征移除，独立为 F11 检测。
-        有大会员不代表不是水军——专业水军团队会批量购买大会员做伪装。
+        注意: 签名检测已独立为 F18 (签名引战度)。
+        VIP（大会员）已从此特征移除，独立为 F11 检测。
         """
         user = self.users.get(mid, {})
 
@@ -253,17 +280,12 @@ class FeatureExtractor:
         # Check avatar
         face = user.get("face", "")
         if not face or "noface" in face:
-            score += 0.34
+            score += 0.50
 
         # Check verification
         official = user.get("official_verify", {})
         if not official or official.get("type", -1) == -1:
-            score += 0.34
-
-        # Check signature
-        sign = user.get("sign", "")
-        if not sign:
-            score += 0.34
+            score += 0.50
 
         return min(1.0, score)
 
@@ -575,27 +597,22 @@ class FeatureExtractor:
         """
         特征13: 转发抽奖模式。
 
-        规则: 无投稿 + 动态全是转发抽奖 → 大概率水军号
+        规则: 动态中转发抽奖内容占比越高 → 水军号概率越大。
+        有视频投稿不再直接排除 — 部分水军号会混入少量投稿伪装。
 
         判定:
-          1. 无动态数据 → 0.0 (数据不足)
-          2. 有投稿 → 0.0 (正常用户, 不在本特征扣分)
-          3. 无投稿 + 转发比 > 80% + 抽奖比 > 50% → 0.85 (大概率)
-          4. 无投稿 + 转发比 > 60% → 0.5
-          5. 无投稿 + 转发比 > 40% → 0.3
+          1. 无动态数据或 <3 条 → 0.0 (数据不足)
+          2. 转发比 > 80% + 抽奖比 > 50% → 0.85 (极高概率)
+          3. 转发比 > 60% → 0.50
+          4. 转发比 > 40% → 0.30
+
+        v2.16 修正: 移除"有投稿→0.0"硬规则。
+        改为投稿稀释: 少量投稿 (≤5) 几乎不降分, 大量投稿 (>20) 最多降 50%。
         """
         user = self.users.get(mid, {})
 
         # 数据不足
-        uploads = user.get("upload_count", -1)
         posts = self._user_posts.get(mid, [])
-        if uploads == -1 and not posts:
-            return 0.0
-
-        # 有投稿 → 正常用户
-        if uploads > 0:
-            return 0.0
-
         if not posts or len(posts) < 3:
             return 0.0
 
@@ -612,7 +629,6 @@ class FeatureExtractor:
             if isinstance(post, dict):
                 is_repost = post.get("is_repost", False)
                 if not is_repost:
-                    # 内容中检测 "转发动态" 或 "转发了"
                     is_repost = "转发" in content[:20]
 
             if is_repost:
@@ -621,20 +637,29 @@ class FeatureExtractor:
                     lottery_count += 1
 
         total = len(posts)
-        if total < 3:
-            return 0.0
-
         repost_ratio = repost_count / total
         lottery_ratio = lottery_count / max(repost_count, 1)
 
+        # 基础分
+        base = 0.0
         if repost_ratio > 0.8 and lottery_ratio > 0.5:
-            return 0.85
+            base = 0.85
         elif repost_ratio > 0.6:
-            return 0.5
+            base = 0.5
         elif repost_ratio > 0.4:
-            return 0.3
+            base = 0.3
+        else:
+            return 0.0
 
-        return 0.0
+        # v2.16: 投稿稀释 (不再直接清零有投稿的账号)
+        uploads = user.get("upload_count", 0)
+        if uploads > 0:
+            # 投稿越多稀释越多, 但最多降 50% (保留基本信号)
+            # ≤5 投稿 ≈ 不稀释, 10 投稿 ≈ 降 20%, 20+ 投稿 ≈ 降 50%
+            dilution = max(0.50, 1.0 - min(uploads, 20) * 0.025)
+            base *= dilution
+
+        return min(1.0, round(base, 2))
 
     # ================================================================
     #  Feature 14: Sensitive Content (敏感内容检测)
@@ -862,6 +887,57 @@ class FeatureExtractor:
             return (avg_sim - 0.3) / 0.5  # Linear map 0.3→0.0, 0.8→1.0
 
     # ================================================================
+    #  Feature 18: Signature Troll Detection (v2.16)
+    # ================================================================
+
+    def _f18_signature_troll(self, mid: int) -> float:
+        """
+        特征18: 签名引战度。
+
+        检测目标账号的个性签名是否包含挑衅/引战话术。
+        水军引战号会在签名中预设攻击对象（"查你爹成分"）、
+        嘲讽点进主页的人（"可怜的自尊心"）、或宣称无所谓态度（"随便骂"）。
+
+        使用三级关键词库递增评分:
+        - 一类 (直接挑衅): 单个 +0.25, 两个+ +0.50
+        - 二类 (防御嘲讽): 单个 +0.15, 两个+ +0.30
+        - 三类 (引战宣言): 单个 +0.10, 两个+ +0.20
+
+        总分 = 0.0~1.0 (封顶1.0)
+        典型"精神胜利法"签名：含2个一类+2个二类+1个三类 → 0.50+0.30+0.10=0.90
+        """
+        user = self.users.get(mid, {})
+        if not user:
+            return 0.0
+
+        sign = user.get("sign", "")
+        if not sign:
+            return 0.0  # 无签名 = 不触发引战检测（由F4三无检测覆盖）
+
+        score = 0.0
+
+        # 一类: 直接挑衅 — 最高权重
+        d1 = sum(1 for kw in self._SIGN_TROLL_DIRECT_KW if kw in sign)
+        if d1 == 1:
+            score += 0.25
+        elif d1 >= 2:
+            score += 0.50
+
+        # 二类: 防御/嘲讽 — 中等权重
+        d2 = sum(1 for kw in self._SIGN_TROLL_DEFENSIVE_KW if kw in sign)
+        if d2 == 1:
+            score += 0.15
+        elif d2 >= 2:
+            score += 0.30
+
+        # 三类: 引战宣言 — 较低权重
+        d3 = sum(1 for kw in self._SIGN_TROLL_PROVOKE_KW if kw in sign)
+        if d3 == 1:
+            score += 0.10
+        elif d3 >= 2:
+            score += 0.20
+
+        return min(1.0, score)
     #  Helper: Levenshtein Ratio (编辑距离相似度)
     # ================================================================
 

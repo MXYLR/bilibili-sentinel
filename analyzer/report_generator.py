@@ -52,7 +52,7 @@ class ReportGenerator:
         """
         # Build top suspects
         top_suspects = []
-        for i, user in enumerate(self.scored_users[:20], 1):
+        for i, user in enumerate(self.scored_users, 1):
             features = user.get("features", {})
             # Score each feature to 0-100 for readability
             normed_features = {

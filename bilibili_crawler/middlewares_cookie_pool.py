@@ -122,6 +122,12 @@ class BilibiliCookiePoolMiddleware:
 
     优先级: 26（在 CookieMiddleware=25 之后，HeaderMiddleware=50 之前）
     当 ENABLE_COOKIE_POOL=True 时生效，同时禁用原 CookieMiddleware。
+
+    v2.12 风控策略:
+    - 主评论 API (/x/v2/reply/main): 不注入 Cookie（避免账号维度风控）
+    - 子评论 API (/x/v2/reply/reply): 注入 Cookie（获取 IP 属地）
+    - 使用 request.cookies dict（非 headers["Cookie"]），
+      由 curl_cffi handler 以 session.cookies={...} 传递
     """
 
     def __init__(self):
@@ -152,15 +158,37 @@ class BilibiliCookiePoolMiddleware:
         if not _cookie_pool:
             return
 
+        # v2.12 规则4: 主评论 API 不带 Cookie
+        # 主评论和楼中楼 IP 风控独立，不带 Cookie 可避免账号维度风控
+        if "/x/v2/reply/main" in request.url:
+            spider.logger.debug(
+                f"[CookiePool] 跳过主评论 Cookie 注入: {request.url[:80]}"
+            )
+            return
+
         result = _get_next_cookie()
         if result is None:
             return
 
         cookie_str, tag = result
-        request.headers["Cookie"] = cookie_str
+
+        # v2.12 规则5+6: 子评论及其他 B站 API 通过 request.cookies 注入
+        # 使用 request.cookies dict，由 curl_cffi handler 以
+        # session.cookies={...} 方式传递（非 headers 方式）
+        if cookie_str:
+            for pair in cookie_str.split("; "):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    request.cookies[k] = v
+
         request.meta["dont_merge_cookies"] = True
         request.meta["_cookie_pool_tag"] = tag
         request.meta["_cookie_pool_time"] = time.time()
+
+        if "/x/v2/reply/reply" in request.url:
+            spider.logger.debug(
+                f"[CookiePool] 子评论注入 Cookie (tag={tag}): {request.url[:80]}"
+            )
 
     def process_response(self, request, response, spider):
         """检测 412，标记账号冷却"""

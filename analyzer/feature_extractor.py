@@ -9,6 +9,9 @@ v2.1 新增 F12-F14: 账号空间画像检测
   - F13: 转发抽奖模式 (无投稿+全转发抽奖动态)
   - F14: 敏感内容 (女拳/以乌/造谣抹黑)
 v2.8 新增 F15: 商业引流 (赌博/色情/加微信/刷单等硬广告)
+v2.10 新增 F16-F17 (来自 CleanX 机器人判断增强版):
+  - F16: 评论时间规律性 (StdDev 分析法, 低标准差=机器人规律发帖)
+  - F17: 自评相似度 (Levenshtein 编辑距离, 高重复率=模板复制)
 """
 
 import re
@@ -18,7 +21,7 @@ from datetime import datetime
 
 class FeatureExtractor:
     """
-    14 个水军特征提取器。
+    17 个水军特征提取器 (F1-F17)。
 
     输入:
       comments: [CommentItem dict]
@@ -123,6 +126,8 @@ class FeatureExtractor:
             features["f13_lottery_repost"] = self._f13_lottery_repost(mid)
             features["f14_sensitive_content"] = self._f14_sensitive_content(mid)
             features["f15_commercial_spam"] = self._f15_commercial_spam(user_comms)  # v2.8
+            features["f16_time_regularity"] = self._f16_time_regularity(user_comms)  # v2.10
+            features["f17_self_similarity"] = self._f17_self_similarity(user_comms)  # v2.10
 
             # Gather sample comments
             sample = [c.get("content", "")[:80] for c in user_comms[:3]]
@@ -734,3 +739,171 @@ class FeatureExtractor:
                 return 0.5
 
         return 0.0
+
+    # ================================================================
+    #  Feature 16: Comment Time Regularity (评论时间规律性) — v2.10
+    #  Source: CleanX 机器人判断增强版 — analyzeUserBehavior
+    # ================================================================
+
+    def _f16_time_regularity(self, user_comms: list) -> float:
+        """
+        特征16: 评论时间规律性。
+
+        来自 CleanX 脚本的行为分析:
+        - 真实用户评论时间间隔随机，标准差大
+        - 机器人/水军按固定频率发帖，时间间隔标准差小 ("上班式"规律)
+        - 仅适用于 ≥ 3 条评论的用户
+
+        算法:
+          1. 提取所有评论时间戳，按时间排序
+          2. 计算相邻时间间隔
+          3. 计算间隔的变异系数 (CV = std/mean)
+          4. CV < 0.5 → 高度规律 → 高分
+
+        归一化: CV=0 → 1.0, CV=1.0 → 0.0
+        """
+        if len(user_comms) < 3:
+            return 0.0
+
+        timestamps = []
+        for c in user_comms:
+            # Support both ctime and created_at field names
+            ts = c.get("ctime") or c.get("created_at") or c.get("timestamp")
+            if ts:
+                try:
+                    timestamps.append(int(ts))
+                except (ValueError, TypeError):
+                    pass
+
+        if len(timestamps) < 3:
+            return 0.0
+
+        timestamps.sort()
+        intervals = [timestamps[i] - timestamps[i - 1] for i in range(1, len(timestamps))]
+
+        if not intervals:
+            return 0.0
+
+        mean_interval = sum(intervals) / len(intervals)
+        if mean_interval == 0:
+            return 0.0  # Same-second timestamps → unreliable
+
+        variance = sum((x - mean_interval) ** 2 for x in intervals) / len(intervals)
+        std_dev = variance ** 0.5
+        coefficient_of_variation = std_dev / mean_interval  # CV = 相对离散度
+
+        # CV < 0.3 → 高度规律(0.9), CV < 0.5 → 中等规律(0.6), CV < 0.8 → 轻微规律(0.3)
+        if coefficient_of_variation < 0.3:
+            return 0.9
+        elif coefficient_of_variation < 0.5:
+            return 0.6
+        elif coefficient_of_variation < 0.8:
+            return 0.3
+        return 0.0
+
+    # ================================================================
+    #  Feature 17: Self-Comment Similarity (自评相似度) — v2.10
+    #  Source: CleanX 机器人判断增强版 — analyzeCommentContent
+    # ================================================================
+
+    def _f17_self_similarity(self, user_comms: list) -> float:
+        """
+        特征17: 自评相似度。
+
+        来自 CleanX 脚本的内容分析:
+        - 真实用户评论内容多样、表达自然
+        - 水军经常复制粘贴同一段话发到不同视频 (模板化发言)
+        - 计算用户自己评论之间的平均相似度
+
+        算法:
+          1. 提取所有评论文本，过滤空/过短内容
+          2. 对所有评论对计算 Levenshtein 比率
+          3. 平均相似度 → 归一化为 0-1 分数
+
+        仅适用于文本长度 ≥ 5 字的内容 (过滤表情/数字回复)。
+        需要 ≥ 3 条有效评论 (否则无法判断模式)。
+        """
+        if len(user_comms) < 3:
+            return 0.0
+
+        # Filter: only keep substantial comments (≥ 5 chars)
+        contents = [
+            c.get("content", "").strip()
+            for c in user_comms
+            if c.get("content", "").strip() and len(c.get("content", "").strip()) >= 5
+        ]
+
+        if len(contents) < 3:
+            return 0.0
+
+        # Pairwise Levenshtein ratio
+        total_sim = 0.0
+        pair_count = 0
+
+        for i in range(len(contents)):
+            for j in range(i + 1, len(contents)):
+                ratio = self._levenshtein_ratio(contents[i], contents[j])
+                total_sim += ratio
+                pair_count += 1
+
+        if pair_count == 0:
+            return 0.0
+
+        avg_sim = total_sim / pair_count
+
+        # High self-similarity = more bot-like
+        # avg_sim ≤ 0.3 → 0.0 (normal diversity)
+        # avg_sim ≥ 0.8 → 1.0 (obvious copypasta)
+        if avg_sim < 0.3:
+            return 0.0
+        elif avg_sim > 0.8:
+            return 1.0
+        else:
+            return (avg_sim - 0.3) / 0.5  # Linear map 0.3→0.0, 0.8→1.0
+
+    # ================================================================
+    #  Helper: Levenshtein Ratio (编辑距离相似度)
+    # ================================================================
+
+    @staticmethod
+    def _levenshtein_ratio(s1: str, s2: str) -> float:
+        """
+        计算两个字符串的 Levenshtein 相似度比率。
+
+        返回值: 0.0 (完全不同) ~ 1.0 (完全相同)
+
+        使用双行滚动数组优化空间复杂度 O(min(m,n))。
+        最大比较长度 2000 字符（性能保护）。
+        """
+        # Truncate long strings for performance
+        s1 = s1[:2000]
+        s2 = s2[:2000]
+
+        if s1 == s2:
+            return 1.0
+        if not s1 or not s2:
+            return 0.0
+
+        # Ensure s1 is the shorter string for O(min) space
+        if len(s1) > len(s2):
+            s1, s2 = s2, s1
+
+        len1, len2 = len(s1), len(s2)
+
+        # Rolling array: previous row
+        prev = list(range(len2 + 1))
+
+        for i in range(1, len1 + 1):
+            curr = [i] + [0] * len2
+            for j in range(1, len2 + 1):
+                cost = 0 if s1[i - 1] == s2[j - 1] else 1
+                curr[j] = min(
+                    prev[j] + 1,       # deletion
+                    curr[j - 1] + 1,   # insertion
+                    prev[j - 1] + cost # substitution
+                )
+            prev = curr
+
+        distance = prev[len2]
+        max_len = max(len1, len2)
+        return 1.0 - (distance / max_len) if max_len > 0 else 1.0

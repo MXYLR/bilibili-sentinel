@@ -37,8 +37,8 @@ class WaterArmyScorer:
             按 suspicious_score 降序排列的用户列表,
             每个额外添加 suspicious_score 和 risk_level
 
-        v2.8: 确定性信号加成 (F12 按命中数比例加成, F14 保留二进制)
-          - F12 (账号骨架) 0.25 → +0.04, 0.50→+0.10, 0.75→+0.16, 1.00→+0.20
+        v2.9: 确定性信号加成大幅强化 (F12 权重 0.10→0.15 + 硬加成升级)
+          - F12 (账号骨架) 0.50→0.12, 0.75→0.25, 1.00→0.35
           - F14 (敏感内容) 1.0 → 硬加成 20 分
           - F15 (商业引流) 1.0 → 硬加成 20 分
         """
@@ -51,15 +51,19 @@ class WaterArmyScorer:
                 for k, v in features.items()
             )
 
-            # ---- v2.8: 确定性信号加成 (F12 比例加成) ----
+            # ---- v2.9: F12 硬加成大幅升级 ----
             decisive_bonus = 0.0
             decisive_tags = []
 
-            # F12 账号骨架: 按命中数比例加成 (2/4+ 即有加成)
+            # F12 账号骨架: 按命中数比例加成 (v2.9 升级: 分段精确)
             f12_val = features.get("f12_account_skeleton", 0)
             if f12_val >= 0.50:
-                # 0.50→0.08, 0.75→0.14, 1.00→0.20
-                f12_bonus = 0.08 + (f12_val - 0.50) * 0.24
+                if f12_val >= 1.0:
+                    f12_bonus = 0.35              # 4/4 铁证
+                elif f12_val >= 0.75:
+                    f12_bonus = 0.25 + (f12_val - 0.75) * 0.40  # 3/4→4/4 区间
+                else:
+                    f12_bonus = 0.12 + (f12_val - 0.50) * 0.52  # 2/4→3/4 区间
                 decisive_bonus += f12_bonus
                 decisive_tags.append(f"账号骨架({int(f12_val * 4)}/4)")
 
@@ -94,8 +98,10 @@ class WaterArmyScorer:
         features_list.sort(key=lambda x: x["suspicious_score"], reverse=True)
         return features_list
 
-    def get_top_suspects(self, scored_users: list, top_n: int = 20) -> list:
-        """获取嫌疑最高的 TOP N"""
+    def get_top_suspects(self, scored_users: list, top_n: int = None) -> list:
+        """获取嫌疑最高的 TOP N，top_n 为 None 时返回全部"""
+        if top_n is None:
+            return scored_users
         return scored_users[:top_n]
 
     def get_statistics(self, scored_users: list) -> dict:

@@ -69,9 +69,14 @@
             </div>
             {% endif %}
             <div class="mt-2">
+                <button class="btn btn-sm btn-outline-info me-2" id="btn-refresh" onclick="refreshVideoData()"
+                        title="重新抓取视频信息和最新评论">
+                    <i class="bi bi-arrow-repeat"></i> 刷新数据
+                </button>
                 <button class="btn btn-sm btn-outline-danger btn-delete-video" onclick="deleteThisVideo()">
                     <i class="bi bi-trash-fill"></i> 删除数据
                 </button>
+                <span class="text-muted small ms-2" id="refresh-status" style="display:none"></span>
             </div>
         </div>
     </div>
@@ -157,7 +162,7 @@
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header"><i class="bi bi-radar"></i> 十五大水军特征触发比例</div>
+            <div class="card-header"><i class="bi bi-radar"></i> 十七大水军特征触发比例</div>
             <div class="card-body"><canvas id="featuresChart" height="120"></canvas></div>
         </div>
     </div>
@@ -176,7 +181,7 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-trophy"></i> 嫌疑账号排行榜 (Top 20)</span>
+                <span><i class="bi bi-trophy"></i> 嫌疑账号排行榜 (全部)</span>
                 <div>
                     {% set deep_count = report.top_suspects | selectattr('deep_analyzed', 'equalto', true) | list | length if report and report.top_suspects else 0 %}
                     {% if deep_count > 0 %}
@@ -739,7 +744,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const topSuspects = {{ report.top_suspects | tojson | safe }};
         const featureCounts = {};
-        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','批量注册','互动小圈子','VIP异常','账号骨架','转发抽奖','敏感内容','商业引流'].forEach(n => featureCounts[n] = 0);
+        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','批量注册','互动小圈子','VIP异常','账号骨架','转发抽奖','敏感内容','商业引流','时间规律性','自评相似度'].forEach(n => featureCounts[n] = 0);
         topSuspects.forEach(user => {
             user.top_features.forEach(f => {
                 if (featureCounts[f.name] !== undefined) featureCounts[f.name]++;
@@ -838,7 +843,8 @@ const FEATURE_NAMES_ALL = {
     'f4_avatar_verify':'头像/认证','f5_content_similarity':'内容相似度','f6_time_burst':'时间爆发',
     'f7_sentiment_extreme':'情感极端','f8_like_ratio':'赞评比异常','f9_registration_batch':'批量注册',
     'f10_interaction_ring':'互动小圈子','f11_vip_anomaly':'VIP异常','f12_account_skeleton':'账号骨架',
-    'f13_lottery_repost':'转发抽奖','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流'
+    'f13_lottery_repost':'转发抽奖','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流',
+    'f16_time_regularity':'时间规律性','f17_self_similarity':'自评相似度'
 };
 
 const FEATURE_DESCRIPTIONS = {
@@ -856,7 +862,9 @@ const FEATURE_DESCRIPTIONS = {
     '账号骨架':   '无头像+ID乱码+无动态+无投稿→四要素全中=100%水军号',
     '转发抽奖':   '无投稿+动态全是转发抽奖→抽奖专用僵尸号。转发比>80%=0.85',
     '敏感内容':   '历史动态含女拳/国际政治/造谣抹黑→高级水军。任意命中=1.0',
-    '商业引流':   '评论含赌博/色情/加微信/刷单等硬广告→广告水军。赌博/色情=1.0'
+    '商业引流':   '评论含赌博/色情/加微信/刷单等硬广告→广告水军。赌博/色情=1.0',
+    '时间规律性':  '评论时间间隔高度规律→"上班式"机器人发帖。变异系数<0.3=0.9分',
+    '自评相似度':  '自己多条评论内容高度相似→模板复制粘贴。平均相似度>0.8=1.0分'
 };
 
 // ---- 深度分析手动触发 ----
@@ -1256,7 +1264,7 @@ function showUserDetail(index) {
             <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">Lv${user.level} · ${user.comment_count}条评论</div><h5 class="mb-0 text-muted">${reportTime}</h5></div></div>
         </div>
 
-        <h6><i class="bi bi-bar-chart-steps"></i> 15维特征评分 <small class="text-muted">(鼠标悬停 <i class="bi bi-info-circle"></i> 查看含义)</small></h6>
+        <h6><i class="bi bi-bar-chart-steps"></i> 17维特征评分 <small class="text-muted">(鼠标悬停 <i class="bi bi-info-circle"></i> 查看含义)</small></h6>
         <div class="mb-3">${featuresHtml}</div>
 
         <h6><i class="bi bi-robot"></i> LLM 初筛分析</h6>
@@ -1268,8 +1276,11 @@ function showUserDetail(index) {
         ${commentsHtml}
     `;
 
-    // Show modal via Bootstrap
-    const modal = new bootstrap.Modal(document.getElementById('userDetailModal'));
+    // Show modal via Bootstrap（复用单例，避免 backdrop 泄漏）
+    const modalEl = document.getElementById('userDetailModal');
+    const existing = bootstrap.Modal.getInstance(modalEl);
+    if (existing) existing.dispose();
+    const modal = new bootstrap.Modal(modalEl);
     modal.show();
 
     // 初始化特征说明 tooltips（动态渲染后需要手动激活）
@@ -1284,6 +1295,72 @@ function showUserDetail(index) {
 }
 
 // ---- 删除当前视频数据 ----
+async function refreshVideoData() {
+    const btn = document.getElementById('btn-refresh');
+    const status = document.getElementById('refresh-status');
+    if (!btn || !status) return;
+
+    // 禁用按钮，显示加载状态
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 刷新中...';
+    status.style.display = 'inline';
+    status.textContent = '正在注入种子并启动爬虫...';
+
+    try {
+        const resp = await fetch('/api/video/{{ bvid }}/refresh', { method: 'POST' });
+        const data = await resp.json();
+
+        if (data.success) {
+            const msg = data.message || '刷新请求已提交';
+            status.textContent = msg + '，约 30-60 秒后自动刷新页面查看新数据...';
+            showToast('刷新请求已提交，爬虫正在运行中', 'success');
+
+            // 轮询等待爬虫完成，最多等 90 秒
+            let waited = 0;
+            const pollInterval = 3000;
+            const maxWait = 90000;
+
+            const poll = async () => {
+                const sresp = await fetch('/api/crawler/status');
+                const sdata = await sresp.json();
+                const spiders = sdata.data?.spiders || {};
+                const videoRunning = spiders.bilibili_video?.status === 'running';
+                const commentRunning = spiders.bilibili_comment?.status === 'running';
+
+                if (!videoRunning && !commentRunning) {
+                    // 爬虫已停止，刷新页面
+                    status.textContent = '爬虫已完成，正在刷新页面...';
+                    setTimeout(() => location.reload(), 500);
+                    return;
+                }
+
+                waited += pollInterval;
+                if (waited >= maxWait) {
+                    status.textContent = '等待超时，请手动刷新页面查看';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 刷新数据';
+                    return;
+                }
+
+                status.textContent = `爬虫运行中... 已等待 ${Math.round(waited/1000)}s`;
+                setTimeout(poll, pollInterval);
+            };
+
+            setTimeout(poll, 2000); // 等2秒让爬虫进程启动
+        } else {
+            status.textContent = '刷新失败: ' + (data.message || '未知错误');
+            showToast(data.message || '刷新失败', 'error');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 刷新数据';
+        }
+    } catch (err) {
+        status.textContent = '请求失败: ' + err.message;
+        showToast('刷新请求失败: ' + err.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 刷新数据';
+    }
+}
+
 function deleteThisVideo() {
     const title = '{{ (video.get("title", "") or "").replace("'", "\\'") }}';
     confirmDelete(
@@ -1301,5 +1378,13 @@ function deleteThisVideo() {
             })
     );
 }
+
+// ---- 账号详情 Modal 关闭时强制清理 backdrop（防止残留黑色蒙版） ----
+document.getElementById('userDetailModal').addEventListener('hidden.bs.modal', () => {
+    document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+    document.body.classList.remove('modal-open');
+    document.body.style.removeProperty('overflow');
+    document.body.style.removeProperty('padding-right');
+});
 </script>
 {% endblock %}

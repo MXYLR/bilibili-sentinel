@@ -200,20 +200,28 @@ class BilibiliWbiRefreshMiddleware:
 
 class BilibiliCookieMiddleware:
     """
-    自动注入 B站 登录 Cookie。
+    B站 登录 Cookie 自动注入中间件。
 
-    B站 评论 API 现在要求登录态（即使WBI签名正确，无Cookie也会返回-352）。
-
-    关键发现 (2026-05-27):
-    Scrapy 内置 CookiesMiddleware 将 request.cookies 转换为 Cookie header 时，
-    与 Python requests 库的格式存在差异，导致 B站 API 翻页请求返回 -352。
-    解决方案: 直接设置 Cookie HTTP Header，绕过 Scrapy 的 Cookie 管理。
+    v2.12 风控策略优化:
+    - 主评论 API (/x/v2/reply/main): 不注入 Cookie
+      原因: 不带 Cookie 也可正常请求，且不受账号维度风控。
+      代价: 丢失主评论的 IP 属地信息。
+    - 子评论 API (/x/v2/reply/reply): 注入 Cookie
+      原因: 带 Cookie 同样不受账号维度风控，且可获取 IP 属地信息。
+    - 其他 B站 API: 通过 request.cookies 注入 Cookie
+      使用 request.cookies dict（而非 headers["Cookie"]），
+      由 curl_cffi handler 读取并以 session.cookies={...} 传递。
+    
+    主评论和楼中楼 IP 风控不共享，同一 IP 可同时请求两个 API。
     """
+
+    # v2.12: 主评论 API 路径（不注入 Cookie）
+    _MAIN_REPLY_PATH = "/x/v2/reply/main"
+    _SUB_REPLY_PATH = "/x/v2/reply/reply"  # 子评论（注入 Cookie）
 
     def __init__(self):
         self._cookies = {}
         self._cookie_file = _COOKIE_FILE
-        self._cookie_str = ""  # 预格式化的 Cookie header 值
         self._loaded = False
 
     @classmethod
@@ -230,32 +238,41 @@ class BilibiliCookieMiddleware:
                 with open(self._cookie_file, "r", encoding="utf-8") as f:
                     self._cookies = json.load(f)
                 if self._cookies:
-                    # 预格式化为标准 Cookie header (与 requests 库行为一致)
-                    self._cookie_str = "; ".join(
-                        f"{k}={v}" for k, v in self._cookies.items()
-                    )
                     logger.info(
-                        f"已加载 Cookie ({len(self._cookies)} 键) → Cookie header, "
+                        f"[Cookie] 已加载 {len(self._cookies)} 个 Cookie 键, "
                         f"SESSDATA={'***' if 'SESSDATA' in self._cookies else 'N/A'}"
                     )
                 else:
-                    logger.warning("Cookie 文件为空")
+                    logger.warning("[Cookie] Cookie 文件为空")
             else:
-                logger.warning(f"Cookie 文件不存在: {self._cookie_file}")
+                logger.warning(f"[Cookie] Cookie 文件不存在: {self._cookie_file}")
         except Exception as e:
-            logger.warning(f"加载Cookie失败: {e}")
+            logger.warning(f"[Cookie] 加载失败: {e}")
 
     def process_request(self, request, spider):
         self._ensure_cookies()
-        if self._cookie_str:
-            # 直接设置 Cookie HTTP header，绕过 Scrapy 的 Cookie 管理系统
-            # 这种方式与 Python requests 库行为一致
-            request.headers["Cookie"] = self._cookie_str
-            # 标记跳过 Scrapy 内置 CookiesMiddleware 的 cookie 合并
-            request.meta["dont_merge_cookies"] = True
-            # 同时保留 request.cookies 用于兼容 WbiRefreshMiddleware 的 replace()
-            for key, value in self._cookies.items():
-                request.cookies[key] = value
+        if not self._cookies:
+            return
+
+        # v2.12 规则4: 主评论 API 不带 Cookie
+        # 主评论和楼中楼 IP 风控独立，不带 Cookie 可避免账号维度风控
+        if self._MAIN_REPLY_PATH in request.url:
+            spider.logger.debug(
+                f"[Cookie] 跳过主评论 Cookie 注入: {request.url[:80]}"
+            )
+            return
+
+        # v2.12 规则5+6: 子评论及其他 B站 API 通过 request.cookies 注入
+        # 使用 request.cookies dict，由 curl_cffi handler 以
+        # session.cookies={...} 方式传递（非 headers 方式）
+        request.cookies.update(self._cookies)
+        request.meta["dont_merge_cookies"] = True
+
+        if self._SUB_REPLY_PATH in request.url:
+            spider.logger.debug(
+                f"[Cookie] 子评论注入 Cookie ({len(self._cookies)} 键): "
+                f"{request.url[:80]}"
+            )
 
 
 class BilibiliHeaderMiddleware:

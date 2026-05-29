@@ -240,8 +240,9 @@ def get_comments_url(oid: int, page: int = 1, sort: int = 0,
     params["pn"] = page
     if next_cursor is not None:
         params["next"] = next_cursor
-    # 评论 API 必须带登录 Cookie，WBI 签名单独不够
-    # Cookie 由 BilibiliCookieMiddleware 在 Scrapy 请求时自动注入
+    # v2.12: 主评论 API WBI 签名 + 不带 Cookie（避免账号维度风控）
+    # 代价: 拿不到 IP 属地信息
+    # Cookie 策略由 BilibiliCookieMiddleware 根据 URL 路径自动判断
     return build_api_url("/x/v2/reply/main", params, use_wbi=True)
 
 
@@ -249,6 +250,11 @@ def get_sub_replies_url(oid: int, root_rpid: int, page: int = 1,
                         page_size: int = None) -> str:
     """
     构造子评论 (楼中楼) API URL。
+
+    v2.12 更新:
+    - 楼中楼 API (/x/v2/reply/reply) 不需要 WBI 签名（主评论独立的风控维度）
+    - 建议带登录 Cookie 以获取 IP 属地信息（Cookie 由中间件按路径注入）
+    - 主评论和楼中楼的 IP 风控不共享，可以同 IP 并行请求
 
     Args:
         oid: 视频 aid
@@ -265,7 +271,7 @@ def get_sub_replies_url(oid: int, root_rpid: int, page: int = 1,
         "pn": page,
         "ps": page_size,
     }
-    return build_api_url("/x/v2/reply/reply", params, use_wbi=True)
+    return build_api_url("/x/v2/reply/reply", params, use_wbi=False)
 
 
 def get_popular_url(page: int = 1, page_size: int = 50) -> str:

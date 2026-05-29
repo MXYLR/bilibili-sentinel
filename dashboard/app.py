@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response, stream_with_context
 
 from config import DATA_DIR, VIDEO_DIR, COMMENT_DIR, REPORT_DIR
 
@@ -751,6 +751,99 @@ class SpiderManager:
             return {"success": True, "message": f"已清空 {deleted} 个队列"}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    def refresh_video(self, bvid: str) -> dict:
+        """刷新单个视频：清除去重记录 + 注入种子 + 启动爬虫。
+
+        清除该 BV 号在 dupefilter 中的指纹记录，
+        然后注入视频+评论种子队列，启动对应爬虫。
+        """
+        bvid = bvid.strip()
+        if not bvid or not bvid.upper().startswith("BV"):
+            return {"success": False, "message": f"无效的 BV 号: {bvid}"}
+
+        try:
+            import redis
+            import hashlib
+            r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+            r.ping()
+        except ImportError:
+            return {"success": False, "message": "redis 模块未安装"}
+        except Exception as e:
+            return {"success": False, "message": f"Redis 连接失败: {str(e)}"}
+
+        # 1. 清除该 BV 号在 dupefilter 中的记录
+        video_url = f"bilibili_bvid://{bvid}"
+        fingerprint = hashlib.sha1(video_url.encode()).hexdigest()
+        dupefilter_key = "bilibili_crawler:dupefilter"
+        removed_count = 0
+        try:
+            if r.sismember(dupefilter_key, fingerprint):
+                r.srem(dupefilter_key, fingerprint)
+                removed_count += 1
+        except Exception:
+            pass
+
+        # 也清除可能存在的其他格式指纹（兼容不同 scrapy-redis 版本）
+        alt_fingerprint = hashlib.sha1(video_url.encode("utf-8")).hexdigest()
+        if alt_fingerprint != fingerprint:
+            try:
+                if r.sismember(dupefilter_key, alt_fingerprint):
+                    r.srem(dupefilter_key, alt_fingerprint)
+                    removed_count += 1
+            except Exception:
+                pass
+
+        # 2. 注入视频种子
+        r.lpush("bilibili_crawler:start_urls", video_url)
+
+        # 3. 获取 aid 并注入评论种子
+        comment_msg = ""
+        try:
+            import requests as req
+            api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+            resp = req.get(api_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
+                "Referer": "https://www.bilibili.com",
+            }, timeout=10)
+            data = resp.json()
+            if data.get("code") == 0:
+                vinfo = data["data"]
+                aid = vinfo.get("aid", 0)
+                reply_count = vinfo.get("stat", {}).get("reply", 0)
+                if aid and reply_count > 0:
+                    seed = json.dumps({"bvid": bvid, "aid": aid, "reply_count": reply_count})
+                    r.lpush("bilibili_crawler:comment_seeds", seed)
+                    # 清除该 aid 对应的评论去重指纹（评论爬虫用 aid 指纹）
+                    comment_fp = hashlib.sha1(f"bilibili_comment://{aid}".encode()).hexdigest()
+                    try:
+                        if r.sismember(dupefilter_key, comment_fp):
+                            r.srem(dupefilter_key, comment_fp)
+                    except Exception:
+                        pass
+                    comment_msg = f"，评论种子已注入 (aid={aid}, {reply_count}条)"
+                elif aid:
+                    comment_msg = f"，视频 aid={aid}（暂无评论数据）"
+        except Exception as e:
+            comment_msg = f"（获取评论种子失败: {str(e)[:50]}）"
+
+        # 4. 启动视频和评论爬虫
+        start_results = {}
+        for spider_name in ("bilibili_video", "bilibili_comment"):
+            result = self.start_spider(spider_name)
+            start_results[spider_name] = {
+                "started": result.get("success", False),
+                "message": result.get("message", ""),
+            }
+
+        return {
+            "success": True,
+            "message": f"已刷新 {bvid}：去重记录清除了 {removed_count} 条，种子已注入{comment_msg}",
+            "bvid": bvid,
+            "fingerprint": fingerprint,
+            "removed_dupefilter": removed_count,
+            "spiders": start_results,
+        }
 
 
 spider_mgr = SpiderManager()
@@ -1629,6 +1722,16 @@ def api_delete_all_data():
     })
 
 
+@app.route("/api/video/<bvid>/refresh", methods=["POST"])
+def api_video_refresh(bvid: str):
+    """刷新单个视频数据：清除去重 + 注入种子 + 启动爬虫。
+
+    用于视频详情页的「刷新数据」按钮。
+    重新抓取当前视频的最新信息和评论。
+    """
+    return jsonify(spider_mgr.refresh_video(bvid))
+
+
 # ============================================================
 #  系统状态 API (v2.0 新增)
 # ============================================================
@@ -2076,6 +2179,87 @@ def api_crawler_log(spider_name: str):
     if log_info["total_lines"] == 0 and not os.path.exists(CRAWLER_LOG_PATH):
         return jsonify({"success": False, "message": "暂无日志（爬虫未启动或日志文件不存在）"}), 404
     return jsonify({"success": True, "data": log_info})
+
+
+@app.route("/api/crawler/stream/<spider_name>")
+def api_crawler_stream(spider_name: str):
+    """SSE 实时流式推送爬虫日志。
+
+    连接到该端点后，先发送最近 100 行历史日志（让用户看到上下文），
+    然后每秒从共享日志文件尾部读取新行，通过 SSE 推送到前端。
+    支持 EventSource 自动重连。
+    """
+    marker = f"[{spider_name}]"
+    valid_spiders = {"bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku"}
+    if spider_name not in valid_spiders:
+        marker = f"[{spider_name}]"  # 允许任意 spider_name（宽松匹配）
+
+    def generate():
+        # 第一阶段：发送最近 100 行历史日志
+        if os.path.exists(CRAWLER_LOG_PATH):
+            try:
+                with open(CRAWLER_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                    all_lines = f.readlines()
+                matched = [ln.rstrip("\n") for ln in all_lines if marker in ln]
+                history = matched[-100:]
+                for line in history:
+                    yield f"data: {json.dumps({'line': line, 'type': 'history'})}\n\n"
+            except Exception:
+                pass
+
+        # 发送一条连接就绪信号
+        yield f"data: {json.dumps({'line': '', 'type': 'ready', 'message': f'已连接，正在监听 {spider_name} 日志...'})}\n\n"
+
+        # 第二阶段：尾部实时跟踪
+        last_pos = os.path.getsize(CRAWLER_LOG_PATH) if os.path.exists(CRAWLER_LOG_PATH) else 0
+        empty_polls = 0
+        max_empty = 600  # 10 分钟无新日志后断开（前端自动重连）
+
+        while empty_polls < max_empty:
+            if not os.path.exists(CRAWLER_LOG_PATH):
+                time.sleep(1)
+                empty_polls += 1
+                continue
+
+            try:
+                current_size = os.path.getsize(CRAWLER_LOG_PATH)
+                if current_size < last_pos:
+                    # 日志文件被截断/轮转了，重置位置
+                    last_pos = 0
+                    yield f"data: {json.dumps({'line': '', 'type': 'truncated', 'message': '⚠ 日志文件已轮转'})}\n\n"
+
+                if current_size > last_pos:
+                    with open(CRAWLER_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(last_pos)
+                        new_data = f.read(current_size - last_pos)
+                    last_pos = current_size
+
+                    new_lines = new_data.split("\n")
+                    for line in new_lines:
+                        if not line.strip():
+                            continue
+                        if marker in line:
+                            yield f"data: {json.dumps({'line': line.rstrip('\r'), 'type': 'live'})}\n\n"
+                    empty_polls = 0
+                else:
+                    empty_polls += 1
+            except Exception:
+                empty_polls += 1
+
+            time.sleep(1)
+
+        # 超时断开，发送关闭信号（前端 EventSource 会自动重连）
+        yield f"data: {json.dumps({'line': '', 'type': 'timeout', 'message': '长时间无新日志，连接即将重新建立...'})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ============================================================

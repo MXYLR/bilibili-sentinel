@@ -87,19 +87,35 @@
     </div>
 
     <div id="debug-panel" class="position-fixed bg-dark text-light border border-secondary rounded-3 shadow-lg"
-         style="display:none;bottom:86px;right:24px;width:480px;max-height:70vh;z-index:1091;flex-direction:column;overflow:hidden">
+         style="display:none;bottom:86px;right:24px;width:520px;max-height:75vh;z-index:1091;flex-direction:column;overflow:hidden">
         <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom border-secondary bg-black bg-opacity-25">
             <span class="small fw-bold"><i class="bi bi-terminal"></i> 调试控制台</span>
             <div class="d-flex gap-2">
+                <span id="debug-mode-badge" class="badge bg-secondary small">HTTP</span>
                 <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="clearDebugLog()" title="清空">🗑</button>
                 <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="toggleDebugPanel()" title="关闭">✕</button>
             </div>
         </div>
-        <div id="debug-log" class="p-2 overflow-auto flex-grow-1" style="font-family:monospace;font-size:12px;line-height:1.6;max-height:55vh"></div>
-        <div class="px-2 py-1 border-top border-secondary bg-black bg-opacity-10 d-flex gap-2">
-            <button class="btn btn-sm btn-outline-success py-0" onclick="debugFetch('/api/system/health')">Health</button>
-            <button class="btn btn-sm btn-outline-info py-0" onclick="debugFetch('/api/system/status')">Status</button>
-            <button class="btn btn-sm btn-outline-warning py-0" onclick="debugFetch('/api/llm/status')">LLM</button>
+        <div id="debug-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh"></div>
+        <div class="px-2 py-1 border-top border-secondary bg-black bg-opacity-10 d-flex gap-1 flex-wrap align-items-center">
+            <span class="text-muted small me-1">模式:</span>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-http" onclick="switchDebugMode('http')">HTTP</button>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-crawler" onclick="switchDebugMode('crawler')">爬虫日志</button>
+            <span class="text-muted small mx-1">|</span>
+            <span id="crawler-log-controls" style="display:none" class="d-flex align-items-center gap-1">
+                <select id="crawler-log-spider" class="form-select form-select-sm py-0" style="width:auto;font-size:11px" onchange="switchCrawlerLog()">
+                    <option value="bilibili_video">视频爬虫</option>
+                    <option value="bilibili_comment">评论爬虫</option>
+                    <option value="bilibili_user">用户爬虫</option>
+                    <option value="bilibili_danmaku">弹幕爬虫</option>
+                </select>
+                <span id="crawler-stream-status" class="text-muted small">⏸</span>
+            </span>
+            <span class="ms-auto d-flex gap-1">
+                <button class="btn btn-sm btn-outline-success py-0 px-2" onclick="debugFetch('/api/system/health')">Health</button>
+                <button class="btn btn-sm btn-outline-info py-0 px-2" onclick="debugFetch('/api/system/status')">Status</button>
+                <button class="btn btn-sm btn-outline-warning py-0 px-2" onclick="debugFetch('/api/llm/status')">LLM</button>
+            </span>
         </div>
     </div>
 
@@ -107,12 +123,13 @@
     // ---- 全局调试日志 ----
     const _debugLogs = [];
     let _debugPanelOpen = false;
+    let _debugMode = 'http';           // 'http' | 'crawler'
+    let _crawlerEventSource = null;
+    let _crawlerLogLines = [];         // 爬虫日志缓冲区（最多 500 行）
 
     function initDebugFab() {
-        // 只在 localhost / 开发环境显示
         const fab = document.getElementById('debug-fab');
         if (fab) fab.style.display = 'block';
-        // 劫持 fetch 自动记录
         if (!window.__debugFetchPatched) {
             const _origFetch = window.fetch;
             window.fetch = function(...args) {
@@ -128,7 +145,7 @@
                     };
                     _debugLogs.unshift(entry);
                     if (_debugLogs.length > 200) _debugLogs.pop();
-                    renderDebugLog();
+                    if (_debugMode === 'http') renderDebugLog();
                     return resp;
                 }).catch(err => {
                     const entry = {
@@ -137,7 +154,7 @@
                         status: 0, ms: Date.now()-start, ok: false, err: err.message
                     };
                     _debugLogs.unshift(entry);
-                    renderDebugLog();
+                    if (_debugMode === 'http') renderDebugLog();
                     throw err;
                 });
             };
@@ -153,39 +170,136 @@
         if (_debugPanelOpen) renderDebugLog();
     }
 
+    function switchDebugMode(mode) {
+        _debugMode = mode;
+        const badge = document.getElementById('debug-mode-badge');
+        const btnHttp = document.getElementById('btn-mode-http');
+        const btnCrawler = document.getElementById('btn-mode-crawler');
+        const controls = document.getElementById('crawler-log-controls');
+
+        if (mode === 'crawler') {
+            badge.textContent = '爬虫日志'; badge.className = 'badge bg-info small';
+            btnHttp.classList.remove('active'); btnCrawler.classList.add('active');
+            if (controls) controls.style.display = '';
+            // 断开旧连接，建立新 SSE
+            startCrawlerStream();
+        } else {
+            badge.textContent = 'HTTP'; badge.className = 'badge bg-secondary small';
+            btnHttp.classList.add('active'); btnCrawler.classList.remove('active');
+            if (controls) controls.style.display = 'none';
+            stopCrawlerStream();
+        }
+        renderDebugLog();
+    }
+
+    function switchCrawlerLog() {
+        if (_debugMode === 'crawler') startCrawlerStream();
+    }
+
+    function startCrawlerStream() {
+        stopCrawlerStream();
+        _crawlerLogLines = [];
+
+        const spider = document.getElementById('crawler-log-spider')?.value || 'bilibili_video';
+        const statusEl = document.getElementById('crawler-stream-status');
+        if (statusEl) statusEl.textContent = '⏳';
+
+        _crawlerEventSource = new EventSource('/api/crawler/stream/' + spider);
+
+        _crawlerEventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'ready' || data.type === 'timeout') {
+                    if (statusEl && data.type === 'ready') statusEl.textContent = '🟢';
+                    return;
+                }
+                if (data.type === 'truncated') {
+                    _crawlerLogLines.push({ text: data.message, cls: 'text-warning' });
+                } else if (data.line) {
+                    const line = data.line;
+                    let cls = '';
+                    if (line.includes('[ERROR]') || line.includes('ERROR:')) cls = 'text-danger';
+                    else if (line.includes('[WARNING]') || line.includes('WARNING:')) cls = 'text-warning';
+                    else if (line.includes('DEBUG:')) cls = 'text-muted';
+                    else if (line.includes('scrapy.core.engine')) cls = 'text-info';
+                    _crawlerLogLines.push({ text: line, cls: cls });
+                }
+                // 限制 500 行
+                if (_crawlerLogLines.length > 500) _crawlerLogLines = _crawlerLogLines.slice(-500);
+                if (_debugPanelOpen && _debugMode === 'crawler') renderDebugLog();
+            } catch(e) {}
+        };
+
+        _crawlerEventSource.onerror = function() {
+            if (statusEl) statusEl.textContent = '🔴';
+        };
+
+        _crawlerEventSource.onopen = function() {
+            if (statusEl) statusEl.textContent = '🟢';
+        };
+    }
+
+    function stopCrawlerStream() {
+        if (_crawlerEventSource) {
+            _crawlerEventSource.close();
+            _crawlerEventSource = null;
+        }
+        const statusEl = document.getElementById('crawler-stream-status');
+        if (statusEl) statusEl.textContent = '⏸';
+    }
+
     function renderDebugLog() {
         const el = document.getElementById('debug-log');
         if (!el || !_debugPanelOpen) return;
-        el.innerHTML = _debugLogs.slice(0, 80).map(e => {
-            const color = e.ok ? '#4ade80' : '#f87171';
-            const errTag = e.err ? ` <span style="color:#fbbf24">${e.err}</span>` : '';
-            return `<div style="border-bottom:1px solid #1e293b;padding:2px 0">
-                <span class="text-muted">${e.t}</span>
-                <span style="color:#38bdf8">${e.method}</span>
-                <span style="color:${color}">${e.status}</span>
-                <span class="text-muted">${e.ms}ms</span>
-                <span style="word-break:break-all">${e.url.split('?')[0]}</span>
-                ${errTag}
-            </div>`;
-        }).join('') || '<div class="text-muted small p-2">暂无请求日志</div>';
+
+        if (_debugMode === 'crawler') {
+            el.innerHTML = _crawlerLogLines.length === 0
+                ? '<div class="text-muted small p-2">正在连接爬虫日志流...</div>'
+                : _crawlerLogLines.map(l =>
+                    `<div class="${l.cls || ''}" style="border-bottom:1px solid #1e293b;padding:1px 0;white-space:pre-wrap;word-break:break-all">${l.text}</div>`
+                  ).join('');
+        } else {
+            el.innerHTML = _debugLogs.slice(0, 80).map(e => {
+                const color = e.ok ? '#4ade80' : '#f87171';
+                const errTag = e.err ? ` <span style="color:#fbbf24">${e.err}</span>` : '';
+                return `<div style="border-bottom:1px solid #1e293b;padding:2px 0">
+                    <span class="text-muted">${e.t}</span>
+                    <span style="color:#38bdf8">${e.method}</span>
+                    <span style="color:${color}">${e.status}</span>
+                    <span class="text-muted">${e.ms}ms</span>
+                    <span style="word-break:break-all">${e.url.split('?')[0]}</span>
+                    ${errTag}
+                </div>`;
+            }).join('') || '<div class="text-muted small p-2">暂无请求日志</div>';
+        }
+
+        // 自动滚动到底部
+        el.scrollTop = el.scrollHeight;
     }
 
     function clearDebugLog() {
-        _debugLogs.length = 0;
+        if (_debugMode === 'crawler') {
+            _crawlerLogLines = [];
+        } else {
+            _debugLogs.length = 0;
+        }
         renderDebugLog();
     }
 
     async function debugFetch(url) {
         const el = document.getElementById('debug-log');
-        if (el) el.innerHTML += `<div class="text-info small">➤ GET ${url}</div>`;
+        if (el && _debugMode === 'http') el.innerHTML += `<div class="text-info small">➤ GET ${url}</div>`;
         try {
             const r = await fetch(url);
             const d = await r.json();
-            if (el) el.innerHTML += `<div class="text-success small">✓ ${JSON.stringify(d).substring(0,300)}</div>`;
+            if (el && _debugMode === 'http') el.innerHTML += `<div class="text-success small">✓ ${JSON.stringify(d).substring(0,300)}</div>`;
         } catch(e) {
-            if (el) el.innerHTML += `<div class="text-danger small">✗ ${e.message}</div>`;
+            if (el && _debugMode === 'http') el.innerHTML += `<div class="text-danger small">✗ ${e.message}</div>`;
         }
     }
+
+    // 页面卸载时关闭 SSE 连接
+    window.addEventListener('beforeunload', () => stopCrawlerStream());
     </script>
 
     <script>

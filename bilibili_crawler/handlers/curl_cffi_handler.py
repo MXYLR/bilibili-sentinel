@@ -198,14 +198,21 @@ class BilibiliCurlCffiMiddleware:
             headers[key] = str(val)
         return headers
 
-    def _make_request(self, url: str, headers: dict, timeout: int = 30):
-        """用 curl_cffi Session 发送 GET 请求"""
+    def _make_request(self, url: str, headers: dict, cookies: dict | None = None,
+                       timeout: int = 30):
+        """用 curl_cffi Session 发送 GET 请求。
+
+        v2.12: 新增 cookies 参数，以 session.get(cookies={...}) 方式传递，
+        而非嵌入 headers["Cookie"]。这样更接近真实浏览器行为，
+        且 B站 对 headers 中的 Cookie 字符串格式存在校验差异。
+        """
         session = self._get_session()
         if session is None:
             raise RuntimeError("curl_cffi session not available")
         resp = session.get(
             url,
             headers=headers,
+            cookies=cookies,
             timeout=timeout,
             allow_redirects=False,
         )
@@ -244,6 +251,11 @@ class BilibiliCurlCffiMiddleware:
 
         只处理 api.bilibili.com 的请求；
         其他请求（如静态资源）交给 Scrapy 默认下载器。
+
+        v2.12: Cookie 从 request.cookies 提取，以 cookies={...} 参数
+        传递给 session.get()，而非嵌入 headers["Cookie"]。
+        主评论 API 不带 Cookie（由 BilibiliCookieMiddleware 控制），
+        子评论 API 带 Cookie（获取 IP 属地信息）。
         """
         if "api.bilibili.com" not in request.url:
             return None  # 交给默认下载器
@@ -251,13 +263,28 @@ class BilibiliCurlCffiMiddleware:
         import asyncio
 
         headers = self._scrapy_headers_to_dict(request)
+
+        # v2.12: 从 headers 中移除 Cookie（已通过 request.cookies 单独传递）
+        # 兼容旧代码可能仍通过 headers["Cookie"] 注入的场景
+        headers.pop("Cookie", None)
+        headers.pop("cookie", None)
+
+        # v2.12: 提取 request.cookies 作为独立 cookies dict 传递
+        # BilibiliCookieMiddleware 已按 URL 路径判断是否注入 Cookie:
+        #   - /x/v2/reply/main → 不注入（request.cookies 为空）
+        #   - /x/v2/reply/reply → 注入（获取 IP 属地）
+        req_cookies = {}
+        if request.cookies:
+            req_cookies = dict(request.cookies)
+
         spider.logger.debug(
-            f"[CurlCffi] Fetching: {request.url[:100]}"
+            f"[CurlCffi] Fetching: {request.url[:100]} "
+            f"(cookies={'yes' if req_cookies else 'no'})"
         )
 
         try:
             resp = await asyncio.to_thread(
-                self._make_request, request.url, headers,
+                self._make_request, request.url, headers, req_cookies,
             )
             scrapy_resp = self._build_scrapy_response(resp, request)
 

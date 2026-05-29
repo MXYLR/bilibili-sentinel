@@ -138,7 +138,7 @@ class BilibiliVideoSpider(RedisSpider):
                     yield scrapy.Request(
                         api_url,
                         callback=self.parse_popular_list,
-                        meta={"page": pn},
+                        meta={"page": pn, "source": "hot"},
                         dont_filter=True,
                     )
 
@@ -150,7 +150,7 @@ class BilibiliVideoSpider(RedisSpider):
             yield scrapy.Request(
                 api_url,
                 callback=self.parse_video_api,
-                meta={"bvid": bvid},
+                meta={"bvid": bvid, "source": "bvid"},
             )
 
         # ---- 搜索关键词 ----
@@ -165,7 +165,7 @@ class BilibiliVideoSpider(RedisSpider):
             yield scrapy.Request(
                 api_url,
                 callback=self.parse_search_results,
-                meta={"keyword": keyword, "page": page_num},
+                meta={"keyword": keyword, "page": page_num, "source": f"search:{keyword}"},
             )
 
         # ---- Fallback: direct URL request ----
@@ -173,6 +173,7 @@ class BilibiliVideoSpider(RedisSpider):
             yield scrapy.Request(
                 url,
                 callback=self.parse_video_api,
+                meta={"source": "unknown"},
                 dont_filter=True,
             )
 
@@ -202,7 +203,7 @@ class BilibiliVideoSpider(RedisSpider):
             yield scrapy.Request(
                 api_url,
                 callback=self.parse_video_api,
-                meta={"bvid": bvid},
+                meta={"bvid": bvid, "source": response.meta.get("source", "hot")},
             )
 
     def parse_search_results(self, response):
@@ -225,7 +226,7 @@ class BilibiliVideoSpider(RedisSpider):
             yield scrapy.Request(
                 api_url,
                 callback=self.parse_video_api,
-                meta={"bvid": bvid},
+                meta={"bvid": bvid, "source": response.meta.get("source", f"search:{response.meta.get('keyword','?')}")},
             )
 
     def parse_video_api(self, response):
@@ -311,6 +312,7 @@ class BilibiliVideoSpider(RedisSpider):
         item["pic"] = _pic.replace("http://", "https://", 1) if _pic.startswith("http://") else _pic
         item["tags"] = [t.get("tag_name", "") for t in resp_data.get("tags", [])]
         item["crawl_time"] = datetime.now().isoformat()
+        item["source"] = response.meta.get("source", "unknown")
         yield item
 
         # ---- 富信息日志: 视频产出 ----

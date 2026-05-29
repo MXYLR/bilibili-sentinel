@@ -181,7 +181,7 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-trophy"></i> 嫌疑账号排行榜 (全部)</span>
+                <span><i class="bi bi-trophy"></i> 账号评分排行榜 <small class="text-muted">(按可疑度降序)</small></span>
                 <div>
                     {% set deep_count = report.top_suspects | selectattr('deep_analyzed', 'equalto', true) | list | length if report and report.top_suspects else 0 %}
                     {% if deep_count > 0 %}
@@ -1075,7 +1075,7 @@ function showUserDetail(index) {
             .filter(([k]) => FEATURE_NAMES_ALL[k])
             .sort((a, b) => b[1] - a[1]);
         featuresHtml = sorted.map(([key, val]) => {
-            const pct = Math.round(val * 100);
+            const pct = Math.round(val);
             const barColor = pct >= 70 ? 'bg-danger' : (pct >= 40 ? 'bg-warning' : 'bg-secondary');
             const fname = FEATURE_NAMES_ALL[key] || key;
             const fdesc = FEATURE_DESCRIPTIONS[fname] || '';
@@ -1264,6 +1264,15 @@ function showUserDetail(index) {
             <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">Lv${user.level} · ${user.comment_count}条评论</div><h5 class="mb-0 text-muted">${reportTime}</h5></div></div>
         </div>
 
+        <div class="mb-3">
+            <button class="btn btn-sm btn-outline-danger" onclick="collectWaterArmy(${user.mid}, '${(user.uname||'').replace(/'/g,"\\'")}', ${user.score}, '${riskLabel}', '{{ bvid }}')" id="wa-collect-btn-${user.mid}">
+                <i class="bi bi-shield-exclamation"></i> 收录为水军账号
+            </button>
+            <a href="https://space.bilibili.com/${user.mid}" target="_blank" class="btn btn-sm btn-outline-secondary ms-1">
+                <i class="bi bi-box-arrow-up-right"></i> B站主页
+            </a>
+        </div>
+
         <h6><i class="bi bi-bar-chart-steps"></i> 17维特征评分 <small class="text-muted">(鼠标悬停 <i class="bi bi-info-circle"></i> 查看含义)</small></h6>
         <div class="mb-3">${featuresHtml}</div>
 
@@ -1386,5 +1395,52 @@ document.getElementById('userDetailModal').addEventListener('hidden.bs.modal', (
     document.body.style.removeProperty('overflow');
     document.body.style.removeProperty('padding-right');
 });
+
+// ---- 收录水军账号 ----
+function collectWaterArmy(mid, uname, score, riskLevel, bvid) {
+    const features = {};
+    // 从当前 Modal 的特征进度条中提取
+    document.querySelectorAll('#userDetailBody .progress-bar').forEach(bar => {
+        const row = bar.closest('.d-flex');
+        if (!row) return;
+        const label = row.querySelector('.text-nowrap')?.textContent?.trim();
+        const pct = parseFloat(row.querySelector('.text-muted.small')?.textContent || '0');
+        if (label && label.startsWith('F')) {
+            features[label] = pct / 100;  // 百分比还原为 0-1
+        }
+    });
+
+    const reason = {
+        type: "manual_mark",
+        bvid: bvid,
+        score: score,
+        summary: `手动标记: 综合评分 ${score.toFixed(0)}, 风险等级 ${riskLevel}`,
+        feature_scores: features,
+    };
+
+    const btn = document.getElementById('wa-collect-btn-' + mid);
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> 收录中...'; }
+
+    fetch('/api/water-army/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            mid: mid, uname: uname, score: score,
+            risk_level: riskLevel === '高风险' ? 'high' : (riskLevel === '中风险' ? 'medium' : 'low'),
+            bvid: bvid, reason: reason,
+        })
+    }).then(r => r.json()).then(d => {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-shield-exclamation"></i> 收录为水军账号'; }
+        showToast(d.message, d.success ? 'success' : 'error');
+        if (d.success && btn) {
+            btn.className = 'btn btn-sm btn-success';
+            btn.innerHTML = '<i class="bi bi-check-circle"></i> 已收录';
+            btn.disabled = true;
+        }
+    }).catch(() => {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-shield-exclamation"></i> 收录为水军账号'; }
+        showToast('网络错误', 'error');
+    });
+}
 </script>
 {% endblock %}

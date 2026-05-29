@@ -43,6 +43,7 @@ class VideoItem(scrapy.Item):
     pic = scrapy.Field()               # 封面图 URL
     tags = scrapy.Field()              # 标签列表 (list of dicts with tag_name)
     crawl_time = scrapy.Field()        # 采集时间 (ISO 8601)
+    source = scrapy.Field()            # 来源: "hot"=热门, "bvid"=指定BV, "search:{kw}"=搜索, 留空=unknown
 
 
 class CommentItem(scrapy.Item):
@@ -133,3 +134,45 @@ class DanmakuItem(scrapy.Item):
     mid_hash = scrapy.Field()          # 发送者 UID 哈希 (CRC32, 字符串)
     pool = scrapy.Field()              # 弹幕池 (0=普通, 1=字幕, 2=特殊)
     crawl_time = scrapy.Field()        # 采集时间 (ISO 8601)
+
+
+class UpVideoItem(scrapy.Item):
+    """B站 UP主投稿视频 — 来自 /x/space/wbi/arc/search API
+
+    用于爬取指定 UP主 (mid) 的所有投稿视频列表。
+    相比 VideoItem (单视频详情 API)，此 Item 的字段来自空间列表 API，
+    缺少 cid、coin_count、like_count 等聚合统计字段。
+    """
+
+    # ---- 所属UP主 ----
+    up_mid = scrapy.Field()            # UP主 UID (种子MID)
+    up_name = scrapy.Field()           # UP主昵称 (从首个视频提取)
+
+    # ---- 核心标识 ----
+    bvid = scrapy.Field()              # BV号
+    aid = scrapy.Field()               # AV号
+
+    # ---- 视频信息 ----
+    title = scrapy.Field()             # 标题
+    description = scrapy.Field()       # 简介
+    length = scrapy.Field()            # 时长 (mm:ss 格式字符串)
+    created = scrapy.Field()           # 发布时间戳 (Unix timestamp)
+    pic = scrapy.Field()               # 封面图 URL
+    is_union_video = scrapy.Field()    # 是否联合投稿
+    is_steins_gate = scrapy.Field()    # 是否互动视频
+    is_pay = scrapy.Field()            # 是否付费视频
+
+    # ---- 统计 ----
+    play = scrapy.Field()              # 播放量
+    video_review = scrapy.Field()      # 弹幕数
+    comment = scrapy.Field()           # 评论数
+
+    # ---- 分区 ----
+    typeid = scrapy.Field()            # 一级分区 ID
+    tname = scrapy.Field()             # 分区名称
+    subtitle = scrapy.Field()          # 副标题/推荐语
+
+    # ---- 元数据 ----
+    crawl_time = scrapy.Field()        # 采集时间 (ISO 8601)
+    page = scrapy.Field()              # 来源页码 (调试用)
+    source = scrapy.Field()            # "up:{mid}" — UP主空间爬取

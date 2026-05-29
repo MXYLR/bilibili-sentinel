@@ -115,6 +115,56 @@
                     </div>
                 </div>
             </div>
+
+            <!-- UP主视频爬虫 (v2.14) -->
+            <div class="col-md-3 mb-3">
+                <div class="card spider-card" id="spider-up-videos">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6><i class="bi bi-collection-play"></i> UP主视频爬虫</h6>
+                            <span class="spider-status badge bg-secondary" id="uvs-status">--</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            <div>PID: <span id="uvs-pid">--</span></div>
+                            <div>启动: <span id="uvs-started">--</span></div>
+                        </div>
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_up_videos')" id="uvs-start">
+                                <i class="bi bi-play-fill"></i> 启动
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_up_videos')" id="uvs-stop">
+                                <i class="bi bi-stop-fill"></i> 停止
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_up_videos')">
+                                <i class="bi bi-file-text"></i> 日志
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- UP主视频爬取种子注入 -->
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-person-video"></i> UP主视频爬取</div>
+            <div class="card-body">
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-4">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">UID</span>
+                            <input type="text" class="form-control" id="up-mid-input" placeholder="UP主UID (如 123456)">
+                            <button class="btn btn-outline-info" onclick="injectUpVideoSeed()">
+                                <i class="bi bi-plus-circle"></i> 注入种子
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-8">
+                        <small class="text-muted">
+                            <i class="bi bi-info-circle"></i> 爬取该UP主的所有投稿视频列表，数据保存至 <code>data/up_videos/{UID}_videos.json</code>
+                        </small>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- 一键操作 -->
@@ -302,6 +352,7 @@
                     {name:'bilibili_comment', prefix:'cs', card:'spider-comment'},
                     {name:'bilibili_user', prefix:'us', card:'spider-user'},
                     {name:'bilibili_danmaku', prefix:'ds', card:'spider-danmaku'},
+                    {name:'bilibili_up_videos', prefix:'uvs', card:'spider-up-videos'},
                 ];
                 spiderMap.forEach(({name, prefix, card}) => {
                     const sp = s.spiders[name] || {};
@@ -429,6 +480,21 @@ function injectUserSeeds() {
     }).then(r=>r.json()).then(d=>{
         showToast(d.message, d.success?'success':'error');
         if (d.success) { refresh(); document.getElementById('uid-input').value = ''; }
+    });
+}
+// ===== 注入 UP主视频种子 =====
+function injectUpVideoSeed() {
+    const raw = document.getElementById('up-mid-input').value.trim();
+    if (!raw) { showToast('请输入 UP主 UID', 'warning'); return; }
+    const mid = parseInt(raw);
+    if (!mid || mid <= 0) { showToast('无效的 UID', 'warning'); return; }
+    fetch('/api/crawler/inject', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ type: 'up_videos', mid: mid })
+    }).then(r=>r.json()).then(d=>{
+        showToast(d.message, d.success?'success':'error');
+        if (d.success) { refresh(); document.getElementById('up-mid-input').value = ''; }
     });
 }
 

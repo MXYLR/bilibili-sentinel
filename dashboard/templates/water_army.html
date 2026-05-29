@@ -1,0 +1,373 @@
+{% extends "base.html" %}
+{% block title %}水军账号管理 — bilibili-sentinel{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+    <!-- 统计卡片 -->
+    <div class="row g-3 mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-primary border-2">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="text-muted small">总收录</span>
+                        <i class="bi bi-shield-exclamation text-primary fs-4"></i>
+                    </div>
+                    <h2 class="mb-0 mt-1" id="wa-total">{{ stats.total }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-danger border-2">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="text-muted small">高风险 (≥70)</span>
+                        <i class="bi bi-exclamation-triangle text-danger fs-4"></i>
+                    </div>
+                    <h2 class="mb-0 mt-1" id="wa-high">{{ stats.high }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-warning border-2">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="text-muted small">自动收录</span>
+                        <i class="bi bi-robot text-warning fs-4"></i>
+                    </div>
+                    <h2 class="mb-0 mt-1" id="wa-auto">{{ stats.auto }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="card border-success border-2">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="text-muted small">平均可疑度</span>
+                        <i class="bi bi-graph-up text-success fs-4"></i>
+                    </div>
+                    <h2 class="mb-0 mt-1" id="wa-avg">{{ stats.avg_score }}</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-center">
+                <div class="col-md-3">
+                    <input type="text" class="form-control form-control-sm" id="wa-search"
+                           placeholder="搜索 MID / 昵称" onkeyup="debounceSearch()">
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select form-select-sm" id="wa-risk" onchange="loadList()">
+                        <option value="">全部风险等级</option>
+                        <option value="high">高风险 (≥70)</option>
+                        <option value="medium">中风险 (40-69)</option>
+                        <option value="low">低风险 (&lt;40)</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select form-select-sm" id="wa-added-by" onchange="loadList()">
+                        <option value="">全部来源</option>
+                        <option value="auto">自动检测</option>
+                        <option value="manual">手动标记</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select form-select-sm" id="wa-sort" onchange="loadList()">
+                        <option value="score">按可疑度</option>
+                        <option value="time">按收录时间</option>
+                        <option value="reasons">按收录次数</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <div class="btn-group btn-group-sm w-100">
+                        <button class="btn btn-outline-primary" onclick="batchRemove()" id="wa-batch-btn" disabled>
+                            <i class="bi bi-trash"></i> 批量移除
+                        </button>
+                        <button class="btn btn-outline-success" onclick="exportCSV()">
+                            <i class="bi bi-download"></i> 导出CSV
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="exportJSON()">
+                            <i class="bi bi-filetype-json"></i> JSON
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 表格 -->
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:40px">
+                            <input type="checkbox" class="form-check-input" id="wa-select-all" onchange="toggleSelectAll()">
+                        </th>
+                        <th style="width:60px">头像</th>
+                        <th>昵称 / MID</th>
+                        <th style="width:100px">可疑度</th>
+                        <th style="width:80px">等级</th>
+                        <th style="width:80px">来源</th>
+                        <th style="width:90px">收录次数</th>
+                        <th style="width:140px">收录时间</th>
+                        <th style="width:110px">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="wa-tbody">
+                    <tr><td colspan="9" class="text-center text-muted py-4">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="d-flex justify-content-between align-items-center mt-3" id="wa-pagination">
+        <small class="text-muted" id="wa-page-info">--</small>
+        <div class="btn-group btn-group-sm" id="wa-page-btns"></div>
+    </div>
+</div>
+
+<!-- 详情 Modal -->
+<div class="modal fade" id="wa-detail-modal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-file-earmark-text"></i> 水军账号详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="wa-detail-body"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentPage = 1;
+let selected = new Set();
+
+function loadList() {
+    const params = new URLSearchParams({
+        sort_by: document.getElementById('wa-sort').value,
+        risk: document.getElementById('wa-risk').value,
+        search: document.getElementById('wa-search').value,
+        added_by: document.getElementById('wa-added-by').value,
+        page: currentPage,
+        per_page: 20,
+    });
+
+    fetch('/api/water-army/list?' + params)
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) return;
+            renderTable(d.data);
+            renderPagination(d.total, d.page, d.total_pages);
+            loadStats();
+        });
+}
+
+function renderTable(accounts) {
+    const tbody = document.getElementById('wa-tbody');
+    if (!accounts.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">暂无收录的水军账号</td></tr>';
+        return;
+    }
+    tbody.innerHTML = accounts.map((a,i) => {
+        const riskBadge = a.risk_level === 'high' ? 'danger' : a.risk_level === 'medium' ? 'warning' : 'secondary';
+        const riskLabel = a.risk_level === 'high' ? '高' : a.risk_level === 'medium' ? '中' : '低';
+        const addedIcon = a.added_by === 'auto' ? '<i class="bi bi-robot text-info" title="自动检测"></i>' : '<i class="bi bi-hand-index text-success" title="手动标记"></i>';
+        const avatarHtml = a.avatar ? `<img src="${a.avatar}" width="36" height="36" class="rounded-circle" onerror="this.style.display='none'">` : '<span class="text-muted">--</span>';
+        const reasonsCount = a.reasons ? a.reasons.length : 0;
+        return `<tr>
+            <td><input type="checkbox" class="form-check-input wa-cb" value="${a.mid}" onchange="updateBatchBtn()"></td>
+            <td>${avatarHtml}</td>
+            <td>
+                <strong>${esc(a.uname)}</strong>
+                <small class="text-muted d-block">MID: ${a.mid}</small>
+            </td>
+            <td><span class="fw-bold text-${riskBadge}">${a.suspicion_score.toFixed(1)}</span></td>
+            <td><span class="badge bg-${riskBadge}">${riskLabel}</span></td>
+            <td class="text-center">${addedIcon}</td>
+            <td>${reasonsCount}</td>
+            <td><small>${(a.added_at||'').slice(0,16)}</small></td>
+            <td>
+                <button class="btn btn-sm btn-outline-info" onclick="showDetail(${a.mid})" title="查看详情">
+                    <i class="bi bi-eye"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="removeOne(${a.mid})" title="移出">
+                    <i class="bi bi-x-circle"></i>
+                </button>
+            </td>
+        </tr>`;
+    }).join('');
+    selected.clear();
+    updateBatchBtn();
+}
+
+function renderPagination(total, page, pages) {
+    document.getElementById('wa-page-info').textContent = `共 ${total} 个账号，第 ${page}/${pages} 页`;
+    const btns = document.getElementById('wa-page-btns');
+    let html = `<button class="btn btn-sm btn-outline-secondary" onclick="goPage(${page-1})" ${page<=1?'disabled':''}>&laquo;</button>`;
+    for (let p=1; p<=pages; p++) {
+        html += `<button class="btn btn-sm ${p===page?'btn-primary':'btn-outline-secondary'}" onclick="goPage(${p})">${p}</button>`;
+    }
+    html += `<button class="btn btn-sm btn-outline-secondary" onclick="goPage(${page+1})" ${page>=pages?'disabled':''}>&raquo;</button>`;
+    btns.innerHTML = html;
+}
+
+function goPage(p) {
+    if (p < 1) return;
+    currentPage = p;
+    loadList();
+}
+
+function loadStats() {
+    fetch('/api/water-army/stats')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) return;
+            const s = d.data;
+            document.getElementById('wa-total').textContent = s.total;
+            document.getElementById('wa-high').textContent = s.high;
+            document.getElementById('wa-auto').textContent = s.auto;
+            document.getElementById('wa-avg').textContent = s.avg_score;
+        });
+}
+
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ---- 详情 Modal ----
+function showDetail(mid) {
+    fetch('/api/water-army/' + mid)
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { showToast(d.message, 'error'); return; }
+            const a = d.data;
+            const riskBadge = a.risk_level==='high'?'danger':a.risk_level==='medium'?'warning':'secondary';
+            const riskLabel = a.risk_level==='high'?'高风险':a.risk_level==='medium'?'中风险':'低风险';
+            const reasons = a.reasons || [];
+            let reasonsHtml = reasons.map((r,i) => {
+                const typeLabel = r.type==='auto_detect' ? '<span class="badge bg-info">自动检测</span>'
+                                : r.type==='manual_mark' ? '<span class="badge bg-success">手动标记</span>'
+                                : '<span class="badge bg-secondary">报告导入</span>';
+                const featHtml = r.feature_scores ? Object.entries(r.feature_scores).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k,v]) =>
+                    `<span class="badge bg-light text-dark me-1">${k}=${(v*100).toFixed(0)}%</span>`
+                ).join('') : '';
+                return `<div class="card mb-2">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex justify-content-between">
+                            <span>${typeLabel} <small class="text-muted">${(r.recorded_at||'').slice(0,16)}</small></span>
+                            ${r.bvid ? `<a href="/video/${r.bvid}" class="small">${r.bvid}</a>` : ''}
+                        </div>
+                        <div class="mt-1">${r.summary||''}</div>
+                        ${a.llm_type_name ? `<div class="mt-1 small">LLM判定: <strong>${esc(a.llm_type_name)}</strong></div>` : ''}
+                        ${featHtml ? `<div class="mt-1 small">${featHtml}</div>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+
+            document.getElementById('wa-detail-body').innerHTML = `
+                <div class="row">
+                    <div class="col-md-4 text-center">
+                        ${a.avatar ? `<img src="${a.avatar}" width="80" height="80" class="rounded-circle mb-2">` : ''}
+                        <h5>${esc(a.uname)}</h5>
+                        <p class="text-muted small">MID: ${a.mid}</p>
+                        <div class="progress mb-2" style="height:20px">
+                            <div class="progress-bar bg-${riskBadge}" style="width:${Math.min(a.suspicion_score,100)}%">
+                                ${a.suspicion_score.toFixed(1)}
+                            </div>
+                        </div>
+                        <span class="badge bg-${riskBadge} fs-6">${riskLabel}</span>
+                        <span class="badge bg-secondary">${a.added_by==='auto'?'自动':'手动'}收录</span>
+                    </div>
+                    <div class="col-md-8">
+                        <h6>收录原因 (共 ${reasons.length} 条)</h6>
+                        <div style="max-height:400px;overflow-y:auto">${reasonsHtml||'<p class="text-muted">无详细原因记录</p>'}</div>
+                    </div>
+                </div>
+                <hr>
+                <div class="row">
+                    <div class="col-12">
+                        <label class="form-label fw-bold">备注</label>
+                        <textarea class="form-control form-control-sm" id="wa-notes-input" rows="3">${esc(a.notes||'')}</textarea>
+                        <button class="btn btn-sm btn-primary mt-2" onclick="saveNotes(${a.mid})">保存备注</button>
+                    </div>
+                </div>
+            `;
+            // 复用单例避免 backdrop 泄漏 — dispose 旧实例再创建
+            const modalEl = document.getElementById('wa-detail-modal');
+            const existing = bootstrap.Modal.getInstance(modalEl);
+            if (existing) existing.dispose();
+            new bootstrap.Modal(modalEl).show();
+        });
+}
+
+function saveNotes(mid) {
+    const notes = document.getElementById('wa-notes-input').value;
+    fetch('/api/water-army/' + mid + '/notes', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({notes})
+    }).then(r=>r.json()).then(d => {
+        showToast(d.message, d.success?'success':'error');
+    });
+}
+
+// ---- 删除 ----
+function removeOne(mid) {
+    if (!confirm(`确定将 MID=${mid} 移出水军账号库吗？`)) return;
+    fetch('/api/water-army/' + mid, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => {
+            showToast(d.message, d.success?'success':'error');
+            if (d.success) loadList();
+        });
+}
+
+function batchRemove() {
+    const mids = Array.from(selected);
+    if (!mids.length) return;
+    if (!confirm(`确定移除 ${mids.length} 个水军账号吗？`)) return;
+    fetch('/api/water-army/batch-remove', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mids})
+    }).then(r=>r.json()).then(d => {
+        showToast(d.message, d.success?'success':'error');
+        if (d.success) loadList();
+    });
+}
+
+function toggleSelectAll() {
+    const all = document.getElementById('wa-select-all').checked;
+    document.querySelectorAll('.wa-cb').forEach(cb => {
+        cb.checked = all;
+        if (all) selected.add(parseInt(cb.value));
+        else selected.delete(parseInt(cb.value));
+    });
+    updateBatchBtn();
+}
+
+function updateBatchBtn() {
+    selected.clear();
+    document.querySelectorAll('.wa-cb:checked').forEach(cb => selected.add(parseInt(cb.value)));
+    document.getElementById('wa-batch-btn').disabled = selected.size === 0;
+    document.getElementById('wa-batch-btn').textContent = selected.size ? `批量移除 (${selected.size})` : '批量移除';
+}
+
+function debounceSearch() {
+    clearTimeout(window._waSearchTimer);
+    window._waSearchTimer = setTimeout(() => { currentPage = 1; loadList(); }, 400);
+}
+
+function exportCSV() { window.open('/api/water-army/export?format=csv', '_blank'); }
+function exportJSON() { window.open('/api/water-army/export?format=json', '_blank'); }
+
+// 初始化
+loadList();
+</script>
+{% endblock %}

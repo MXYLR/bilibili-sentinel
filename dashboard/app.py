@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from flask import Flask, render_template, jsonify, request, Response, stream_with_context
+from flask import Flask, render_template, jsonify, request, Response, stream_with_context, make_response
 
 from config import DATA_DIR, VIDEO_DIR, COMMENT_DIR, REPORT_DIR
 
@@ -497,6 +497,7 @@ class SpiderManager:
         spider_to_spider = {
             "bilibili_video": "bilibili_video",
             "bilibili_comment": "bilibili_comment",
+            "bilibili_up_videos": "bilibili_up_videos",
         }
         target = spider_to_spider.get(spider_name)
         if not target:
@@ -548,6 +549,9 @@ class SpiderManager:
             elif spider_name == "bilibili_comment":
                 if not keep_seeds:
                     r.delete("bilibili_crawler:comment_seeds")
+            elif spider_name == "bilibili_up_videos":
+                if not keep_seeds:
+                    r.delete("bilibili_crawler:up_video_seeds")
         except Exception:
             pass  # Redis 不可用就跳过，不影响进程杀灭
 
@@ -571,7 +575,7 @@ class SpiderManager:
             state = self._read_state()
             state_changed = False
             spiders = {}
-            for name in ["bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku"]:
+            for name in ["bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku", "bilibili_up_videos"]:
                 entry = state.get(name, {})
                 pid = entry.get("pid")
                 alive = self._is_process_alive(pid) if pid else False
@@ -612,6 +616,7 @@ class SpiderManager:
                 "video_seeds": "bilibili_crawler:start_urls",
                 "comment_seeds": "bilibili_crawler:comment_seeds",
                 "user_seeds": "bilibili_crawler:user_seeds",
+                "up_video_seeds": "bilibili_crawler:up_video_seeds",
                 "pending_requests": "bilibili_crawler:requests",
                 "dupefilter": "bilibili_crawler:dupefilter",
             }
@@ -735,6 +740,17 @@ class SpiderManager:
                 "success": True,
                 "message": f"已注入 {len(valid_mids)} 个用户种子 (UID: {valid_mids[:5]}{'...' if len(valid_mids) > 5 else ''})",
             }
+        elif seed_type == "up_videos":
+            # UP主视频爬虫种子: 注入 MID 到 up_video_seeds 队列
+            mid = kwargs.get("mid", 0)
+            try:
+                mid = int(mid)
+            except (ValueError, TypeError):
+                return {"success": False, "message": f"无效的 UID: {mid}"}
+            if mid <= 0:
+                return {"success": False, "message": "请输入有效的 UP主 UID"}
+            r.lpush("bilibili_crawler:up_video_seeds", json.dumps({"mid": mid}))
+            return {"success": True, "message": f"已注入 UP主种子: UID={mid} (爬取其所有投稿视频)"}
         else:
             return {"success": False, "message": f"未知种子类型: {seed_type}"}
 
@@ -744,7 +760,7 @@ class SpiderManager:
             r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
             keys = [
                 "bilibili_crawler:start_urls", "bilibili_crawler:comment_seeds",
-                "bilibili_crawler:user_seeds",
+                "bilibili_crawler:user_seeds", "bilibili_crawler:up_video_seeds",
                 "bilibili_crawler:requests", "bilibili_crawler:dupefilter",
             ]
             deleted = sum(1 for key in keys if r.exists(key) and not r.delete(key))
@@ -976,6 +992,7 @@ def _list_video_dirs() -> list:
                 has_report = report_path.exists()
                 comment_path = Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"
                 comment_count = _load_comment_count(comment_path, bvid)
+                source_raw = info.get("source", "")
                 videos.append({
                     "bvid": bvid,
                     "title": info.get("title", "N/A"),
@@ -987,6 +1004,7 @@ def _list_video_dirs() -> list:
                     "pic": info.get("pic", ""),
                     "has_report": has_report,
                     "comment_count": comment_count,
+                    "source": source_raw,
                 })
             except Exception as e:
                 print(f"Error parsing {json_file}: {e}")
@@ -1014,6 +1032,7 @@ def _list_video_dirs() -> list:
                 "pic": "",
                 "has_report": report_path.exists(),
                 "comment_count": comment_count,
+                "source": "",
             })
 
     return videos
@@ -1424,25 +1443,17 @@ def api_user_llm_analyze(bvid: str, mid: int):
             else:
                 return jsonify({"success": False, "error": "深度分析结果中未找到该用户"}), 500
 
-        # 写回报告 — 注意：单用户路径直接走 deep_analyze，llm_* 字段需从 deep_* 同步
-        deep_conf = enhanced.get("deep_confidence", 0)
-        deep_type_id = enhanced.get("deep_type_id", 0)
-        deep_type_name = enhanced.get("deep_type_name", "") or ("正常用户" if deep_type_id == 0 else "")
+        # 写回报告 — LLM 初筛只写 llm_* 字段，不污染 deep_* / aicu_* 字段
+        llm_conf = enhanced.get("llm_confidence", enhanced.get("deep_confidence", 0))
+        llm_type_id = enhanced.get("llm_type_id", enhanced.get("deep_type_id", 0))
+        llm_type_name = enhanced.get("llm_type_name", "") or enhanced.get("deep_type_name", "") or ("正常用户" if llm_type_id == 0 else "")
 
-        user["llm_analyzed"] = True  # 显式标记分析已完成
-        user["llm_confidence"] = deep_conf
-        user["llm_type_id"] = deep_type_id
-        user["llm_type_name"] = deep_type_name
+        user["llm_analyzed"] = True
+        user["llm_confidence"] = llm_conf
+        user["llm_type_id"] = llm_type_id
+        user["llm_type_name"] = llm_type_name
         user["score"] = enhanced.get("suspicious_score", user.get("score", 0))
-        # 同时写 deep_* 字段
-        user["deep_analyzed"] = enhanced.get("deep_analyzed", True)
-        user["deep_type_id"] = deep_type_id
-        user["deep_type_name"] = deep_type_name
-        user["deep_confidence"] = deep_conf
-        user["deep_reasoning"] = enhanced.get("deep_reasoning", "")
-        user["aicu_device"] = enhanced.get("aicu_device", "")
-        user["aicu_names"] = enhanced.get("aicu_names", [])
-        user["aicu_comment_count"] = enhanced.get("aicu_comment_count", 0)
+        # 注意：不写 deep_* / aicu_* 字段，避免 LLM 初筛误触发 AICU 深度分析展示
 
         # 保存报告
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
@@ -1453,13 +1464,9 @@ def api_user_llm_analyze(bvid: str, mid: int):
             "success": True,
             "mid": mid,
             "llm_analyzed": True,
-            "llm_type_name": deep_type_name,
-            "llm_confidence": deep_conf,
-            "deep_type_name": deep_type_name,
-            "deep_confidence": deep_conf,
+            "llm_type_name": llm_type_name,
+            "llm_confidence": llm_conf,
             "score": enhanced.get("suspicious_score", 0),
-            "aicu_device": enhanced.get("aicu_device", ""),
-            "aicu_comment_count": enhanced.get("aicu_comment_count", 0),
         })
     except Exception as e:
         logger.error(f"单用户 LLM 分析失败 (mid={mid}): {e}", exc_info=True)
@@ -1724,12 +1731,235 @@ def api_delete_all_data():
 
 @app.route("/api/video/<bvid>/refresh", methods=["POST"])
 def api_video_refresh(bvid: str):
-    """刷新单个视频数据：清除去重 + 注入种子 + 启动爬虫。
+    """刷新单个视频数据：清除去重 + 注入种子 + 启动爬虫 + 重新生成报告。
 
     用于视频详情页的「刷新数据」按钮。
     重新抓取当前视频的最新信息和评论。
     """
-    return jsonify(spider_mgr.refresh_video(bvid))
+    result = spider_mgr.refresh_video(bvid)
+    # 后台线程重新生成报告（基于当前磁盘上的评论数据）
+    threading.Thread(target=_regenerate_report, args=(bvid,), daemon=True).start()
+    return jsonify(result)
+
+
+def _regenerate_report(bvid: str):
+    """基于当前评论数据重新生成水军分析报告（后台线程）。"""
+    try:
+        from analyzer.feature_extractor import FeatureExtractor
+        from analyzer.scorer import WaterArmyScorer
+        from analyzer.report_generator import ReportGenerator
+        from analyzer.similarity_detector import SimilarityDetector
+        from analyzer.time_analyzer import TimeAnalyzer
+
+        # 1. 加载评论
+        comment_file = Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"
+        if not comment_file.exists():
+            logger.warning(f"[report] No comment file for {bvid}, skip regenerate")
+            return
+        with open(comment_file, "r", encoding="utf-8") as f:
+            comments = json.load(f)
+        if not comments:
+            return
+
+        # 2. 加载视频信息
+        video_info = _load_video_info(bvid) or {}
+        if not video_info:
+            video_info = {"bvid": bvid, "title": f"[{bvid}]"}
+
+        # 3. 加载用户数据 (F12-F14 需要)
+        users = {}
+        user_posts = {}
+        users_dir = Path(DATA_DIR) / "users"
+        if users_dir.exists():
+            for fname in os.listdir(str(users_dir)):
+                fpath = users_dir / fname
+                if fname.endswith(".json") and fname != "unique_mids.json" and not fname.endswith("_posts.json"):
+                    with open(fpath, "r", encoding="utf-8") as uf:
+                        user_data = json.load(uf)
+                        users[user_data.get("mid")] = user_data
+                elif fname.endswith("_posts.json"):
+                    try:
+                        mid = int(fname.replace("_posts.json", ""))
+                    except ValueError:
+                        continue
+                    with open(fpath, "r", encoding="utf-8") as uf:
+                        posts_data = json.load(uf)
+                        user_posts[mid] = posts_data if isinstance(posts_data, list) else []
+
+        # 4. 相似度检测
+        sim_detector = SimilarityDetector(comments, threshold=0.75)
+        sim_detector.build_matrix()
+        clusters = sim_detector.find_clusters()
+
+        # 5. 时间分析
+        time_analyzer = TimeAnalyzer(comments, users)
+        burst_scores = time_analyzer.detect_time_burst()
+        batch_scores = time_analyzer.detect_registration_batch()
+        timeline = time_analyzer.get_comment_timeline()
+
+        # 6. 特征提取
+        extractor = FeatureExtractor(
+            comments, users,
+            sim_detector.get_user_similarity_score,
+            burst_scores,
+            batch_scores,
+            user_posts=user_posts,
+        )
+        features_list = extractor.extract_all()
+
+        # 7. 评分
+        scorer = WaterArmyScorer()
+        scored_users = scorer.score_users(features_list)
+        stats = scorer.get_statistics(scored_users)
+
+        # 8. 生成并保存报告
+        generator = ReportGenerator(
+            video_bvid=bvid,
+            video_info=video_info,
+            scored_users=scored_users,
+            stats=stats,
+            similarity_clusters=clusters,
+            timeline=timeline,
+            llm_summary=None,
+            llm_stats=None,
+            deep_summary=None,
+            deep_stats=None,
+            comments=comments,
+        )
+        report = generator.generate()
+        generator.save_report()
+        logger.info(f"[report] Regenerated report for {bvid}: {stats['total_users']} users")
+
+        # 9. 自动收录高风险水军账号 (v2.15)
+        try:
+            from dashboard.water_army_store import WaterArmyStore
+            n = WaterArmyStore.batch_add_from_report(scored_users, bvid=bvid)
+            if n > 0:
+                logger.info(f"[water_army] Auto-collected {n} high-risk accounts from {bvid}")
+        except Exception as we:
+            logger.warning(f"[water_army] Auto-collect failed for {bvid}: {we}")
+
+    except Exception as e:
+        logger.error(f"[report] Failed to regenerate report for {bvid}: {e}")
+
+
+# ============================================================
+#  水军账号管理 API + 页面 (v2.15)
+# ============================================================
+
+@app.route("/water-army")
+def water_army_page():
+    """水军账号管理页面"""
+    from dashboard.water_army_store import WaterArmyStore
+    stats = WaterArmyStore.stats()
+    return render_template("water_army.html", stats=stats)
+
+
+@app.route("/api/water-army/stats")
+def api_water_army_stats():
+    from dashboard.water_army_store import WaterArmyStore
+    return jsonify({"success": True, "data": WaterArmyStore.stats()})
+
+
+@app.route("/api/water-army/list")
+def api_water_army_list():
+    sort_by = request.args.get("sort_by", "score")
+    order = request.args.get("order", "desc")
+    risk_filter = request.args.get("risk", "")
+    search = request.args.get("search", "")
+    added_by = request.args.get("added_by", "")
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 20))
+
+    from dashboard.water_army_store import WaterArmyStore
+    result = WaterArmyStore.list_all(
+        sort_by=sort_by, order=order, risk_filter=risk_filter,
+        search=search, added_by=added_by, page=page, per_page=per_page,
+    )
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/water-army/<int:mid>")
+def api_water_army_detail(mid: int):
+    from dashboard.water_army_store import WaterArmyStore
+    account = WaterArmyStore.get(mid)
+    if not account:
+        return jsonify({"success": False, "message": f"账号 MID={mid} 未收录"}), 404
+    return jsonify({"success": True, "data": account})
+
+
+@app.route("/api/water-army/add", methods=["POST"])
+def api_water_army_add():
+    data = request.get_json(silent=True) or {}
+    mid = data.get("mid", 0)
+    if not mid:
+        return jsonify({"success": False, "message": "缺少 MID 参数"}), 400
+
+    from dashboard.water_army_store import WaterArmyStore
+    reason = data.get("reason")
+    account = WaterArmyStore.add(
+        mid=mid,
+        uname=data.get("uname", ""),
+        avatar=data.get("avatar", ""),
+        suspicion_score=data.get("score", 0),
+        risk_level=data.get("risk_level", "low"),
+        added_by="manual",
+        reason=reason,
+        bvid=data.get("bvid", ""),
+        notes=data.get("notes", ""),
+    )
+    return jsonify({"success": True, "data": account, "message": "已收录水军账号"})
+
+
+@app.route("/api/water-army/<int:mid>", methods=["DELETE"])
+def api_water_army_remove(mid: int):
+    from dashboard.water_army_store import WaterArmyStore
+    ok = WaterArmyStore.remove(mid)
+    return jsonify({"success": ok, "message": "已移除" if ok else "未找到该账号"})
+
+
+@app.route("/api/water-army/batch-remove", methods=["POST"])
+def api_water_army_batch_remove():
+    data = request.get_json(silent=True) or {}
+    mids = data.get("mids", [])
+    if not mids:
+        return jsonify({"success": False, "message": "缺少 mids 参数"}), 400
+    from dashboard.water_army_store import WaterArmyStore
+    n = WaterArmyStore.batch_remove(mids)
+    return jsonify({"success": True, "removed": n, "message": f"已移除 {n} 个账号"})
+
+
+@app.route("/api/water-army/<int:mid>/notes", methods=["PUT"])
+def api_water_army_update_notes(mid: int):
+    data = request.get_json(silent=True) or {}
+    notes = data.get("notes", "")
+    from dashboard.water_army_store import WaterArmyStore
+    WaterArmyStore.update_notes(mid, notes)
+    return jsonify({"success": True, "message": "备注已更新"})
+
+
+@app.route("/api/water-army/export")
+def api_water_army_export():
+    from dashboard.water_army_store import WaterArmyStore
+    accounts = WaterArmyStore.export_json()
+    fmt = request.args.get("format", "json")
+    if fmt == "csv":
+        import csv, io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["mid", "uname", "suspicion_score", "risk_level", "added_by", "added_at", "reasons_count", "sources_count"])
+        for a in accounts:
+            writer.writerow([
+                a.get("mid"), a.get("uname"), a.get("suspicion_score"),
+                a.get("risk_level"), a.get("added_by"), a.get("added_at"),
+                len(a.get("reasons", [])), len(a.get("sources", [])),
+            ])
+        csv_str = output.getvalue()
+        resp = make_response(csv_str)
+        resp.headers["Content-Type"] = "text/csv; charset=utf-8-sig"
+        resp.headers["Content-Disposition"] = "attachment; filename=water_army_accounts.csv"
+        return resp
+    return jsonify({"success": True, "data": accounts, "total": len(accounts)})
 
 
 # ============================================================
@@ -2118,7 +2348,7 @@ def api_crawler_status():
     return jsonify({"success": True, "data": spider_mgr.get_status()})
 
 
-VALID_SPIDERS = ("bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku")
+VALID_SPIDERS = ("bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku", "bilibili_up_videos")
 
 
 @app.route("/api/crawler/start/<spider_name>", methods=["POST"])

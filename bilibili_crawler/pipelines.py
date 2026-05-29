@@ -443,6 +443,86 @@ class DanmakuPipeline:
         )
 
 
+class UpVideosPipeline:
+    """UP主投稿视频存储 Pipeline (v2.14)。
+
+    将 UpVideoItem 按 UP主 MID 聚合存储到 data/up_videos/{mid}_videos.json。
+    支持追加写入 + aid 去重 + 原子替换。
+    """
+
+    def __init__(self):
+        self._buf: dict[int, list[dict]] = {}    # mid → videos list
+        self._seen: set[int] = set()             # (mid, aid) 去重
+        self._up_names: dict[int, str] = {}      # mid → up_name
+        self._count = 0
+
+    def open_spider(self, spider):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._output_dir = os.path.join(root, "data", "up_videos")
+        os.makedirs(self._output_dir, exist_ok=True)
+
+    def process_item(self, item, spider):
+        if not isinstance(item, UpVideoItem):
+            return item
+
+        mid = item.get("up_mid", 0)
+        aid = item.get("aid", 0)
+        if not mid or not aid:
+            return item
+
+        # 去重 (per mid)
+        dedup_key = mid * 10_000_000_000 + aid
+        if dedup_key in self._seen:
+            return item
+        self._seen.add(dedup_key)
+
+        # 记录 UP主昵称
+        up_name = item.get("up_name", "") or f"UID{mid}"
+        self._up_names[mid] = up_name
+
+        video = dict(item)
+        self._buf.setdefault(mid, []).append(video)
+        self._count += 1
+
+        # 每收集 200 条 flush 一次
+        if len(self._buf.get(mid, [])) >= 200:
+            self._flush_mid(mid)
+
+        return item
+
+    def close_spider(self, spider):
+        for mid in list(self._buf.keys()):
+            self._flush_mid(mid)
+        spider.logger.info(
+            f"UpVideosPipeline complete — {self._count} videos across {len(self._up_names)} UPs"
+        )
+
+    def _flush_mid(self, mid: int):
+        """原子写入单个 UP主 的视频列表。"""
+        videos = self._buf.pop(mid, [])
+        if not videos:
+            return
+
+        # 按发布时间倒序排列
+        videos.sort(key=lambda v: v.get("created", 0), reverse=True)
+
+        file_path = os.path.join(self._output_dir, f"{mid}_videos.json")
+
+        # 原子写入
+        tmp_path = file_path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(videos, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, file_path)
+
+            up_name = self._up_names.get(mid, f"UID{mid}")
+            spider_log = logging.getLogger(f"{__name__}.flush")
+            spider_log.debug(f"Saved {len(videos)} videos for {up_name} ({mid})")
+        except Exception as e:
+            spider_log = logging.getLogger(f"{__name__}.flush")
+            spider_log.error(f"Flush failed for mid={mid}: {e}")
+
+
 class UserCachePipeline:
     """
     用户ID收集 Pipeline。

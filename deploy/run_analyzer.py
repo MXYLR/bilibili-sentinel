@@ -182,6 +182,16 @@ def analyze_video(bvid: str, verbose: bool = True):
     report = generator.generate()
     generator.save_report()
 
+    # ---- 自动收录水军账号 (v2.15) ----
+    try:
+        from dashboard.water_army_store import WaterArmyStore
+        n = WaterArmyStore.batch_add_from_report(scored_users, bvid=bvid)
+        if verbose and n > 0:
+            print(f"  [WaterArmy] Auto-collected {n} high-risk accounts")
+    except Exception as e:
+        if verbose:
+            print(f"  [WaterArmy] Auto-collect skipped: {e}")
+
     # ---- 打印摘要 ----
     if verbose:
         top = scorer.get_top_suspects(scored_users, top_n=5)

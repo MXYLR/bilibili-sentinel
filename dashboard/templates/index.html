@@ -246,6 +246,7 @@ function loadVideos() {
                             <p class="card-text small text-muted mb-2">
                                 <i class="bi bi-person"></i> ${v.owner_name}
                             </p>
+                            <div class="mb-2">${sourceBadge(v.source)}</div>
                             <div class="d-flex justify-content-between small text-muted">
                                 <span><i class="bi bi-play-fill"></i> ${formatNum(v.view_count)}</span>
                                 <span title="B站评论总数（含未抓取）"><i class="bi bi-chat-dots"></i> ${formatNum(v.reply_count)}</span>
@@ -296,6 +297,21 @@ function formatNum(n) {
     if (!n) return '0';
     if (n >= 10000) return (n / 10000).toFixed(1) + '万';
     return n.toLocaleString();
+}
+
+function sourceBadge(source) {
+    if (!source) return '<span class="badge bg-light text-dark">未知来源</span>';
+    if (source === 'hot') return '<span class="badge bg-danger"><i class="bi bi-fire"></i> 热门爬取</span>';
+    if (source === 'bvid') return '<span class="badge bg-primary"><i class="bi bi-link-45deg"></i> 指定BV</span>';
+    if (source.startsWith('search:')) {
+        const kw = source.replace('search:', '');
+        return `<span class="badge bg-info"><i class="bi bi-search"></i> 搜索: ${kw}</span>`;
+    }
+    if (source.startsWith('up:')) {
+        const uid = source.replace('up:', '');
+        return `<span class="badge bg-success"><i class="bi bi-person-video"></i> UP主: ${uid}</span>`;
+    }
+    return `<span class="badge bg-light text-dark">${source}</span>`;
 }
 
 // 折叠面板箭头旋转

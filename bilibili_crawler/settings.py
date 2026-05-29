@@ -157,6 +157,9 @@ ITEM_PIPELINES["bilibili_crawler.pipelines.UserPostsPipeline"] = 350
 # DanmakuPipeline (v2.2): 弹幕存储
 ITEM_PIPELINES["bilibili_crawler.pipelines.DanmakuPipeline"] = 360
 
+# UpVideosPipeline (v2.14): UP主投稿视频存储
+ITEM_PIPELINES["bilibili_crawler.pipelines.UpVideosPipeline"] = 370
+
 ITEM_PIPELINES["bilibili_crawler.pipelines.UserCachePipeline"] = 400
 
 # ---- Scrapy-Redis (distributed mode) ----

@@ -21,16 +21,22 @@
                             <div>启动: <span id="vs-started">--</span></div>
                         </div>
                         <div class="mt-2">
-                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_video')" id="vs-start">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_video')" id="vs-start"
+                                    title="启动视频爬虫 — 从Redis队列消费种子，爬取B站视频元信息（热门/搜索/BV/UP主）">
                                 <i class="bi bi-play-fill"></i> 启动
                             </button>
-                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_video')" id="vs-stop">
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_video')" id="vs-stop"
+                                    title="停止视频爬虫 — 发送SIGTERM信号优雅关闭">
                                 <i class="bi bi-stop-fill"></i> 停止
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_video')">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_video')"
+                                    title="查看视频爬虫实时日志">
                                 <i class="bi bi-file-text"></i> 日志
                             </button>
                         </div>
+                        <small class="text-muted d-block mt-1 border-top pt-1" style="font-size:0.7em">
+                            <i class="bi bi-info-circle"></i> 消费热门/BV/搜索/UP主种子 → 爬取视频元信息
+                        </small>
                     </div>
                 </div>
             </div>
@@ -48,16 +54,22 @@
                             <div>启动: <span id="cs-started">--</span></div>
                         </div>
                         <div class="mt-2">
-                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_comment')" id="cs-start">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_comment')" id="cs-start"
+                                    title="启动评论爬虫 — 从Redis队列消费评论种子，分页爬取视频评论（含楼中楼）">
                                 <i class="bi bi-play-fill"></i> 启动
                             </button>
-                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_comment')" id="cs-stop">
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_comment')" id="cs-stop"
+                                    title="停止评论爬虫 — 发送SIGTERM信号优雅关闭">
                                 <i class="bi bi-stop-fill"></i> 停止
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_comment')">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_comment')"
+                                    title="查看评论爬虫实时日志">
                                 <i class="bi bi-file-text"></i> 日志
                             </button>
                         </div>
+                        <small class="text-muted d-block mt-1 border-top pt-1" style="font-size:0.7em">
+                            <i class="bi bi-info-circle"></i> 消费评论种子 → 分页爬取评论+楼中楼 → 保存到 data/comments/
+                        </small>
                     </div>
                 </div>
             </div>
@@ -75,143 +87,88 @@
                             <div>启动: <span id="us-started">--</span></div>
                         </div>
                         <div class="mt-2">
-                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_user')" id="us-start">
+                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_user')" id="us-start"
+                                    title="启动用户爬虫 — 从Redis队列消费MID种子，三阶段爬取（画像→投稿→动态）">
                                 <i class="bi bi-play-fill"></i> 启动
                             </button>
-                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_user')" id="us-stop">
+                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_user')" id="us-stop"
+                                    title="停止用户爬虫 — 发送SIGTERM信号优雅关闭">
                                 <i class="bi bi-stop-fill"></i> 停止
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_user')">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_user')"
+                                    title="查看用户爬虫实时日志">
                                 <i class="bi bi-file-text"></i> 日志
                             </button>
                         </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 弹幕爬虫 (v2.2) -->
-            <div class="col-md-3 mb-3">
-                <div class="card spider-card" id="spider-danmaku">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h6><i class="bi bi-chat-square-text"></i> 弹幕爬虫</h6>
-                            <span class="spider-status badge bg-secondary" id="ds-status">--</span>
-                        </div>
-                        <div class="small text-muted mt-1">
-                            <div>PID: <span id="ds-pid">--</span></div>
-                            <div>启动: <span id="ds-started">--</span></div>
-                        </div>
-                        <div class="mt-2">
-                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_danmaku')" id="ds-start">
-                                <i class="bi bi-play-fill"></i> 启动
-                            </button>
-                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_danmaku')" id="ds-stop">
-                                <i class="bi bi-stop-fill"></i> 停止
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_danmaku')">
-                                <i class="bi bi-file-text"></i> 日志
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- UP主视频爬虫 (v2.14) -->
-            <div class="col-md-3 mb-3">
-                <div class="card spider-card" id="spider-up-videos">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h6><i class="bi bi-collection-play"></i> UP主视频爬虫</h6>
-                            <span class="spider-status badge bg-secondary" id="uvs-status">--</span>
-                        </div>
-                        <div class="small text-muted mt-1">
-                            <div>PID: <span id="uvs-pid">--</span></div>
-                            <div>启动: <span id="uvs-started">--</span></div>
-                        </div>
-                        <div class="mt-2">
-                            <button class="btn btn-sm btn-success" onclick="startSpider('bilibili_up_videos')" id="uvs-start">
-                                <i class="bi bi-play-fill"></i> 启动
-                            </button>
-                            <button class="btn btn-sm btn-danger" onclick="stopSpider('bilibili_up_videos')" id="uvs-stop">
-                                <i class="bi bi-stop-fill"></i> 停止
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showLog('bilibili_up_videos')">
-                                <i class="bi bi-file-text"></i> 日志
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- UP主视频爬取种子注入 -->
-        <div class="card mb-3">
-            <div class="card-header"><i class="bi bi-person-video"></i> UP主视频爬取</div>
-            <div class="card-body">
-                <div class="row g-2 align-items-center">
-                    <div class="col-md-4">
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text">UID</span>
-                            <input type="text" class="form-control" id="up-mid-input" placeholder="UP主UID (如 123456)">
-                            <button class="btn btn-outline-info" onclick="injectUpVideoSeed()">
-                                <i class="bi bi-plus-circle"></i> 注入种子
-                            </button>
-                        </div>
-                    </div>
-                    <div class="col-md-8">
-                        <small class="text-muted">
-                            <i class="bi bi-info-circle"></i> 爬取该UP主的所有投稿视频列表，数据保存至 <code>data/up_videos/{UID}_videos.json</code>
+                        <small class="text-muted d-block mt-1 border-top pt-1" style="font-size:0.7em">
+                            <i class="bi bi-info-circle"></i> 消费用户UID种子 → 画像+投稿+动态 → 保存到 data/users/
                         </small>
                     </div>
                 </div>
             </div>
+
         </div>
 
         <!-- 一键操作 -->
         <div class="d-flex flex-wrap gap-2 mb-3">
-            <button class="btn btn-success" onclick="fetch('/api/crawler/start-both',{method:'POST'}).then(()=>refresh())">
+            <button class="btn btn-success" onclick="fetch('/api/crawler/start-both',{method:'POST'}).then(()=>refresh())"
+                    title="一键启动视频+评论两个爬虫（最常用）">
                 <i class="bi bi-play-circle"></i> 启动全部
             </button>
-            <button class="btn btn-danger" onclick="fetch('/api/crawler/stop-all',{method:'POST'}).then(()=>refresh())">
+            <button class="btn btn-danger" onclick="fetch('/api/crawler/stop-all',{method:'POST'}).then(()=>refresh())"
+                    title="停止所有运行中的爬虫进程">
                 <i class="bi bi-stop-circle"></i> 停止全部
             </button>
-            <button class="btn btn-outline-warning" onclick="clearQueues()">
+            <button class="btn btn-outline-warning" onclick="clearQueues()"
+                    title="清空Redis中所有爬虫种子和去重记录（谨慎操作）">
                 <i class="bi bi-trash"></i> 清空队列
             </button>
-            <button class="btn btn-outline-info" onclick="refreshAll()">
+            <button class="btn btn-outline-info" onclick="refreshAll()"
+                    title="刷新所有面板状态（爬虫进程+代理+登录+缓存）">
                 <i class="bi bi-arrow-repeat"></i> 刷新全部
             </button>
         </div>
 
         <!-- 种子注入 -->
         <div class="card mb-3">
-            <div class="card-header"><i class="bi bi-plus-circle"></i> 种子注入</div>
+            <div class="card-header"><i class="bi bi-plus-circle"></i> 种子注入 — 为视频爬虫 (bilibili_video) 提供数据源</div>
             <div class="card-body">
-                <div class="row g-2">
+                <div class="row g-3">
                     <div class="col-md-3">
-                        <button class="btn btn-outline-primary w-100" onclick="injectSeed('hot',{pages:3})">
-                            <i class="bi bi-fire"></i> 热门排行 (3页)
+                        <button class="btn btn-outline-primary w-100" onclick="injectSeed('hot',{pages:3})"
+                                title="抓取B站全站热门榜前60个视频（3页×20条），注入到视频爬虫队列">
+                            <i class="bi bi-fire"></i> 热门排行
                         </button>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="input-group">
-                            <input type="text" class="form-control form-control-sm" id="bvid-input" placeholder="BV1xx411c7mD">
-                            <button class="btn btn-outline-primary btn-sm" onclick="injectSeed('bvid',{bvid:document.getElementById('bvid-input').value})">注入</button>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="input-group">
-                            <input type="text" class="form-control form-control-sm" id="kw-input" placeholder="搜索关键词">
-                            <button class="btn btn-outline-primary btn-sm" onclick="injectSeed('keyword',{keyword:document.getElementById('kw-input').value,pages:1})">搜索</button>
-                        </div>
+                        <small class="text-muted d-block mt-1">注入B站热门榜，每页20条</small>
                     </div>
                     <div class="col-md-3">
                         <div class="input-group input-group-sm">
-                            <input type="text" class="form-control" id="uid-input" placeholder="用户UID，逗号分隔">
-                            <button class="btn btn-outline-info" onclick="injectUserSeeds()">
+                            <input type="text" class="form-control" id="bvid-input" placeholder="BV1xx411c7mD"
+                                   title="输入B站视频BV号">
+                            <button class="btn btn-outline-primary" onclick="injectSeed('bvid',{bvid:document.getElementById('bvid-input').value})"
+                                    title="爬取指定BV号的单个视频">注入</button>
+                        </div>
+                        <small class="text-muted d-block mt-1">爬取指定视频 (BV号)</small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group input-group-sm">
+                            <input type="text" class="form-control" id="kw-input" placeholder="搜索关键词"
+                                   title="输入B站搜索关键词">
+                            <button class="btn btn-outline-primary" onclick="injectSeed('keyword',{keyword:document.getElementById('kw-input').value,pages:1})"
+                                    title="按关键词搜索B站视频并爬取">搜索</button>
+                        </div>
+                        <small class="text-muted d-block mt-1">关键词搜索，每页20条</small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group input-group-sm">
+                            <input type="text" class="form-control" id="uid-input" placeholder="用户UID，逗号分隔"
+                                   title="输入B站用户UID，支持逗号/空格/换行分隔多个">
+                            <button class="btn btn-outline-info" onclick="injectUserSeeds()"
+                                    title="注入用户种子→用户爬虫+自动联动视频爬虫(bilibili_mid://)+评论爬虫">
                                 <i class="bi bi-person-plus"></i> 注入用户
                             </button>
                         </div>
+                        <small class="text-muted d-block mt-1">注入后自动联动: 用户爬虫 + 视频爬虫 + 评论爬虫</small>
                     </div>
                 </div>
             </div>
@@ -256,7 +213,8 @@
         <div class="card mb-3">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-person-check me-2"></i>B站登录</span>
-                <button class="btn btn-sm btn-outline-primary" onclick="showLoginModal()" id="btn-login-action">
+                <button class="btn btn-sm btn-outline-primary" onclick="showLoginModal()" id="btn-login-action"
+                        title="通过B站APP扫码登录，获取完整用户数据（VIP状态、等级等）">
                     <i class="bi bi-qr-code"></i> 扫码登录
                 </button>
             </div>
@@ -269,7 +227,8 @@
         <div class="card mb-3">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-lightning me-2"></i>缓存</span>
-                <button class="btn btn-sm btn-outline-danger" onclick="clearCache()">
+                <button class="btn btn-sm btn-outline-danger" onclick="clearCache()"
+                        title="清空爬虫缓存数据（去重记录等）">
                     <i class="bi bi-trash"></i> 清空
                 </button>
             </div>
@@ -296,10 +255,6 @@
                         <small class="text-muted">用户</small>
                     </div>
                     <div class="col">
-                        <div class="fs-4 fw-bold" id="stat-danmaku">--</div>
-                        <small class="text-muted">弹幕</small>
-                    </div>
-                    <div class="col">
                         <div class="fs-4 fw-bold" id="stat-reports">--</div>
                         <small class="text-muted">报告</small>
                     </div>
@@ -309,7 +264,6 @@
                     <div>视频种子: <span class="fw-bold" id="q-seeds">--</span></div>
                     <div>评论种子: <span class="fw-bold" id="q-comment-seeds">--</span></div>
                     <div>用户种子: <span class="fw-bold" id="q-user-seeds">--</span></div>
-                    <div>UP主种子: <span class="fw-bold" id="q-up-video-seeds">--</span></div>
                     <div>待爬: <span class="fw-bold" id="q-pending">--</span></div>
                     <div>去重: <span class="fw-bold" id="q-dupe">--</span></div>
                     <div class="mt-1"><span class="badge bg-success" id="redis-ok">Redis: 检测中</span></div>
@@ -352,8 +306,6 @@ function refresh() {
                     {name:'bilibili_video', prefix:'vs', card:'spider-video'},
                     {name:'bilibili_comment', prefix:'cs', card:'spider-comment'},
                     {name:'bilibili_user', prefix:'us', card:'spider-user'},
-                    {name:'bilibili_danmaku', prefix:'ds', card:'spider-danmaku'},
-                    {name:'bilibili_up_videos', prefix:'uvs', card:'spider-up-videos'},
                 ];
                 spiderMap.forEach(({name, prefix, card}) => {
                     const sp = s.spiders[name] || {};
@@ -381,14 +333,12 @@ function refresh() {
         document.getElementById('stat-videos').textContent = st.videos_collected || 0;
         document.getElementById('stat-comments').textContent = st.comments_collected || 0;
         document.getElementById('stat-users').textContent = st.users_collected || 0;
-        document.getElementById('stat-danmaku').textContent = st.danmaku_collected || 0;
         document.getElementById('stat-reports').textContent = st.reports_generated || 0;
         // 队列
         const q = s.queues || {};
         document.getElementById('q-seeds').textContent = q.video_seeds || 0;
         document.getElementById('q-comment-seeds').textContent = q.comment_seeds || 0;
         document.getElementById('q-user-seeds').textContent = q.user_seeds || 0;
-        document.getElementById('q-up-video-seeds').textContent = q.up_video_seeds || 0;
         document.getElementById('q-pending').textContent = q.pending_requests || 0;
         document.getElementById('q-dupe').textContent = q.dupefilter || 0;
         const rOk = document.getElementById('redis-ok');
@@ -482,21 +432,6 @@ function injectUserSeeds() {
     }).then(r=>r.json()).then(d=>{
         showToast(d.message, d.success?'success':'error');
         if (d.success) { refresh(); document.getElementById('uid-input').value = ''; }
-    });
-}
-// ===== 注入 UP主视频种子 =====
-function injectUpVideoSeed() {
-    const raw = document.getElementById('up-mid-input').value.trim();
-    if (!raw) { showToast('请输入 UP主 UID', 'warning'); return; }
-    const mid = parseInt(raw);
-    if (!mid || mid <= 0) { showToast('无效的 UID', 'warning'); return; }
-    fetch('/api/crawler/inject', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ type: 'up_videos', mid: mid })
-    }).then(r=>r.json()).then(d=>{
-        showToast(d.message, d.success?'success':'error');
-        if (d.success) { refresh(); document.getElementById('up-mid-input').value = ''; }
     });
 }
 

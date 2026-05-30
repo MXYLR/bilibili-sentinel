@@ -550,7 +550,6 @@ class SpiderManager:
         spider_to_spider = {
             "bilibili_video": "bilibili_video",
             "bilibili_comment": "bilibili_comment",
-            "bilibili_up_videos": "bilibili_up_videos",
         }
         target = spider_to_spider.get(spider_name)
         if not target:
@@ -602,9 +601,6 @@ class SpiderManager:
             elif spider_name == "bilibili_comment":
                 if not keep_seeds:
                     r.delete("bilibili_crawler:comment_seeds")
-            elif spider_name == "bilibili_up_videos":
-                if not keep_seeds:
-                    r.delete("bilibili_crawler:up_video_seeds")
         except Exception:
             pass  # Redis 不可用就跳过，不影响进程杀灭
 
@@ -628,7 +624,7 @@ class SpiderManager:
             state = self._read_state()
             state_changed = False
             spiders = {}
-            for name in ["bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku", "bilibili_up_videos"]:
+            for name in ["bilibili_video", "bilibili_comment", "bilibili_user"]:
                 entry = state.get(name, {})
                 pid = entry.get("pid")
                 alive = self._is_process_alive(pid) if pid else False
@@ -789,9 +785,11 @@ class SpiderManager:
                 return {"success": False, "message": "未识别到有效 UID"}
             for mid in valid_mids:
                 r.lpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))
+                # v2.17: 联动 — 同时将 MID 注入视频爬虫，使其爬取该 UP主全部投稿
+                r.lpush("bilibili_crawler:start_urls", f"bilibili_mid://{mid}")
             return {
                 "success": True,
-                "message": f"已注入 {len(valid_mids)} 个用户种子 (UID: {valid_mids[:5]}{'...' if len(valid_mids) > 5 else ''})",
+                "message": f"已注入 {len(valid_mids)} 个用户种子 (UID: {valid_mids[:5]}{'...' if len(valid_mids) > 5 else ''})，已联动视频爬虫",
             }
         elif seed_type == "up_videos":
             # UP主视频爬虫种子: 注入 MID 到 up_video_seeds 队列
@@ -1050,6 +1048,7 @@ def _list_video_dirs() -> list:
                     "bvid": bvid,
                     "title": info.get("title", "N/A"),
                     "owner_name": info.get("owner_name", info.get("owner", {}).get("name", "N/A")),
+                    "owner_mid": info.get("owner_mid", info.get("owner", {}).get("mid", 0)),
                     "view_count": info.get("view_count", info.get("stat", {}).get("view", 0)),
                     "reply_count": info.get("reply_count", info.get("stat", {}).get("reply", 0)),
                     "danmaku_count": info.get("danmaku_count", info.get("stat", {}).get("danmaku", 0)),
@@ -1078,6 +1077,7 @@ def _list_video_dirs() -> list:
                 "bvid": bvid,
                 "title": f"[仅有评论数据] {bvid}",
                 "owner_name": "N/A",
+                "owner_mid": 0,
                 "view_count": 0,
                 "reply_count": 0,
                 "danmaku_count": 0,
@@ -1245,8 +1245,34 @@ def settings_page():
 
 @app.route("/api/videos")
 def api_videos():
-    videos = _list_video_dirs()
-    return jsonify({"success": True, "data": videos, "total": len(videos)})
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 50, type=int)
+    all_videos = _list_video_dirs()
+    total = len(all_videos)
+
+    # 分页
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_videos = all_videos[start:end]
+
+    # UP主分组统计
+    up_groups = {}
+    for v in all_videos:
+        mid = v.get("owner_mid", 0) or 0
+        if mid:
+            up_groups.setdefault(mid, {"mid": mid, "name": v.get("owner_name", ""), "count": 0, "total_views": 0})
+            up_groups[mid]["count"] += 1
+            up_groups[mid]["total_views"] += v.get("view_count", 0) or 0
+
+    return jsonify({
+        "success": True,
+        "data": page_videos,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, (total + per_page - 1) // per_page),
+        "up_groups": sorted(up_groups.values(), key=lambda x: x["count"], reverse=True),
+    })
 
 
 @app.route("/api/report/<bvid>")
@@ -2545,7 +2571,7 @@ def api_crawler_status():
     return jsonify({"success": True, "data": spider_mgr.get_status()})
 
 
-VALID_SPIDERS = ("bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku", "bilibili_up_videos")
+VALID_SPIDERS = ("bilibili_video", "bilibili_comment", "bilibili_user")
 
 
 @app.route("/api/crawler/start/<spider_name>", methods=["POST"])
@@ -2576,7 +2602,7 @@ def api_crawler_force_stop(spider_name: str):
 @app.route("/api/crawler/start-both", methods=["POST"])
 def api_crawler_start_both():
     results = {}
-    for name in ("bilibili_video", "bilibili_comment", "bilibili_up_videos"):
+    for name in ("bilibili_video", "bilibili_comment"):
         results[name] = spider_mgr.start_spider(name)
         time.sleep(0.3)
     return jsonify({"success": True, "results": results})
@@ -2618,7 +2644,7 @@ def api_crawler_stream(spider_name: str):
     支持 EventSource 自动重连。
     """
     marker = f"[{spider_name}]"
-    valid_spiders = {"bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku"}
+    valid_spiders = {"bilibili_video", "bilibili_comment", "bilibili_user"}
     if spider_name not in valid_spiders:
         marker = f"[{spider_name}]"  # 允许任意 spider_name（宽松匹配）
 

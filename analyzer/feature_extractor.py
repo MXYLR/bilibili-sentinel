@@ -493,7 +493,7 @@ class FeatureExtractor:
     #  Helper: Garbled Name Detection
     # ================================================================
 
-    # 乱码ID匹配模式
+    # 乱码用户名匹配模式
     _GARBLED_NAME_RE = re.compile(
         r'(?:^bili_[\w]{5,}$)'          # bili_xxxxxxxx 默认名
         r'|(?:^用户\d{5,}$)'              # 用户+数字
@@ -504,13 +504,15 @@ class FeatureExtractor:
 
     def _is_garbled_name(self, uname: str) -> bool:
         """
-        检测 ID 是否为乱码/机器生成。
+        检测用户名是否为乱码/机器生成（不是检测 MID/ID）。
 
         判定规则:
           1. "bili_" 开头 + 随机字符 → B站默认未改名
           2. "用户" + 长数字 → B站默认未改名
-          3. 纯字母数字组合且数字占比 > 35% → 疑似机器生成
-          4. 字母 + 4位以上数字 → 批量注册模式
+          3. 纯数字 (6位以上) → 批量注册模式
+          4. 纯字母数字组合且数字占比 > 35% → 疑似机器生成
+          5. 键盘顺序字母 (如 asdfgh, qwerty) → 随意输入
+          6. 字母 + 4位以上数字 → 批量注册模式
         """
         if not uname:
             return True
@@ -521,7 +523,11 @@ class FeatureExtractor:
         if re.match(r'^用户\d{5,}$', uname):
             return True
 
-        # 2. 高熵字符串检测
+        # 2. 纯数字 (6位以上 → 批量注册号)
+        if re.match(r'^\d{6,}$', uname):
+            return True
+
+        # 3. 高熵字符串检测
         if len(uname) >= 6 and re.match(r'^[a-zA-Z0-9_]+$', uname):
             digit_ratio = sum(c.isdigit() for c in uname) / len(uname)
             # 数字占比超过 35% 且无明显英文单词 → 乱码
@@ -530,9 +536,23 @@ class FeatureExtractor:
                 if len(words) == 0:
                     return True
 
-        # 3. 字母 + 4位以上数字 (如 abc12345, test2024)
-        if re.match(r'^[a-zA-Z]+\d{4,}$', uname):
+        # 4. 键盘顺序字母 (随意输入)
+        if re.match(r'^(asdfgh|qwerty|zxcvbn|qazwsx)[a-z]*$', uname, re.IGNORECASE):
             return True
+
+        # 5. 字母 + 4位以上数字 (机器注册号: 短字母+长数字)
+        #    排除正常取名如 MiXeD2024 (字母占比高且形成单词)
+        m = re.match(r'^([a-zA-Z]+)(\d{4,})$', uname)
+        if m:
+            letters_part = m.group(1)
+            digits_part = m.group(2)
+            digit_pct = len(digits_part) / len(uname)
+            # 数字 >= 60% 且字母 <= 3 → 几乎必是机器号
+            if digit_pct >= 0.60 and len(letters_part) <= 3:
+                return True
+            # 数字 >= 50% 且字母部分无明显单词 → 机器号
+            if digit_pct >= 0.50 and len(letters_part) <= 4:
+                return True
 
         return False
 
@@ -544,11 +564,11 @@ class FeatureExtractor:
         """
         特征12: 账号骨架检测。
 
-        规则: 无头像 + ID乱码 + 无动态 + 无投稿 → 百分百水军
+        规则: 无头像 + 用户名乱码 + 无动态 + 无投稿 → 百分百水军
 
         四要素每项 0.25 分:
           1. 无头像 (复用 F4 逻辑)
-          2. ID 乱码 (机器生成/默认名)
+          2. 用户名乱码 (机器生成/默认名/纯数字/键盘乱按)
           3. 无动态 (帖子数=0)
           4. 无投稿 (视频数=0)
 
@@ -566,7 +586,7 @@ class FeatureExtractor:
         if not face or "noface" in face:
             score += 0.25
 
-        # 2. ID 乱码
+        # 2. 用户名乱码（不是 MID ID）
         uname = user_comms[0].get("uname", "") if user_comms else ""
         if self._is_garbled_name(uname):
             score += 0.25

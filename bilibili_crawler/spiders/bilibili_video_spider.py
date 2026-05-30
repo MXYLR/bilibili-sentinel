@@ -113,6 +113,7 @@ class BilibiliVideoSpider(RedisSpider):
           bilibili_hot://page/1-5         → 热门榜1-5页
           bilibili_bvid://BV1xx411c7mD    → 指定视频
           bilibili_search://华为/page/1    → 搜索"华为"第1页
+          bilibili_mid://123456             → UP主全部投稿视频
 
         如果种子是普通 URL, 也兼容直接请求。
         """
@@ -166,6 +167,20 @@ class BilibiliVideoSpider(RedisSpider):
                 api_url,
                 callback=self.parse_search_results,
                 meta={"keyword": keyword, "page": page_num, "source": f"search:{keyword}"},
+            )
+
+        # ---- UP主 MID -> 爬取该UP主全部投稿视频 ----
+        elif "bilibili_mid://" in url:
+            mid_str = url.split("://")[1].strip("/")
+            mid = int(mid_str)
+            self.logger.info(f"[SEED] UP主视频列表: mid={mid}")
+            from bilibili_crawler.utils.bilibili_api import get_user_videos_url
+            api_url = get_user_videos_url(mid, page=1)
+            yield scrapy.Request(
+                api_url,
+                callback=self.parse_up_video_list,
+                meta={"mid": mid, "page": 1, "source": f"up:{mid}"},
+                dont_filter=True,
             )
 
         # ---- Fallback: direct URL request ----
@@ -228,6 +243,59 @@ class BilibiliVideoSpider(RedisSpider):
                 callback=self.parse_video_api,
                 meta={"bvid": bvid, "source": response.meta.get("source", f"search:{response.meta.get('keyword','?')}")},
             )
+
+    def parse_up_video_list(self, response):
+        """解析 UP主视频列表 (/x/space/wbi/arc/search) → 逐个爬取视频详情。"""
+        mid = response.meta.get("mid", 0)
+        page = response.meta.get("page", 1)
+        data = parse_bilibili_response(response.json())
+        if data is None:
+            logger.warning(f"[mid={mid}] UP视频列表 API 失败 (page {page})")
+            return
+
+        vlist = data.get("list", {}).get("vlist", [])
+        page_info = data.get("page", {})
+        total_count = page_info.get("count", 0)
+        page_size = page_info.get("ps", 30)
+        logger.info(f"[mid={mid}] Page {page}: {len(vlist)} videos (total {total_count})")
+
+        for v in vlist:
+            bvid = v.get("bvid", "")
+            if not bvid:
+                continue
+            api_url = get_video_info(bvid=bvid)
+            yield scrapy.Request(
+                api_url,
+                callback=self.parse_video_api,
+                meta={"bvid": bvid, "source": f"up:{mid}"},
+            )
+            # 联动: 有评论的视频注入评论爬虫
+            if v.get("comment", 0) > 0:
+                self._push_comment_seed(bvid, v.get("aid", 0), v.get("comment", 0))
+
+        # 翻页
+        page_size = page_info.get("ps", 30)
+        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
+        next_page = page + 1
+        if next_page <= total_pages:
+            from bilibili_crawler.utils.bilibili_api import get_user_videos_url
+            next_url = get_user_videos_url(mid, page=next_page)
+            yield scrapy.Request(
+                next_url,
+                callback=self.parse_up_video_list,
+                meta={"mid": mid, "page": next_page, "source": f"up:{mid}"},
+                dont_filter=True,
+            )
+
+    def _push_comment_seed(self, bvid: str, aid: int, reply_count: int):
+        """将视频注入评论爬虫 Redis 队列。"""
+        if not bvid or reply_count <= 0:
+            return
+        try:
+            task = json.dumps({"bvid": bvid, "aid": aid, "reply_count": reply_count})
+            self._redis.lpush("bilibili_crawler:comment_seeds", task)
+        except Exception:
+            pass
 
     def parse_video_api(self, response):
         """

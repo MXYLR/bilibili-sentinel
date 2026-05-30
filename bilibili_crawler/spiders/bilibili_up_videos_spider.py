@@ -196,6 +196,10 @@ class BilibiliUpVideosSpider(scrapy.Spider):
             if bvid and aid and v.get("comment", 0) > 0:
                 self._push_comment_seed(bvid, aid, v.get("comment", 0))
 
+            # v2.17: 联动 — 将 BV 号注入视频爬虫队列, 获取完整详情并出现在 Dashboard
+            if bvid:
+                self._push_video_seed(bvid)
+
         logger.debug(
             f"[mid={mid}] Page {page}: {len(vlist)} videos "
             f"(total collected: {self._videos_collected}/{total_count})"
@@ -247,6 +251,18 @@ class BilibiliUpVideosSpider(scrapy.Spider):
         self._redis.lpush("bilibili_crawler:comment_seeds", task)
         logger.info(f"[mid] Seeded comment task: {bvid} (aid={aid}, replies={reply_count})")
 
+    def _push_video_seed(self, bvid: str):
+        """将视频 BV 号注入视频爬虫的 Redis 队列 (bilibili_bvid:// 种子)。
+        视频爬虫会拉取完整视频详情并存入 data/videos/{bvid}.json，
+        从而出现在 Dashboard 视频列表中。
+        """
+        if not self._redis or not bvid:
+            return
+
+        seed_url = f"bilibili_bvid://{bvid}"
+        self._redis.lpush("bilibili_crawler:start_urls", seed_url)
+        logger.debug(f"Seeded video task: bilibili_bvid://{bvid}")
+
     # ================================================================
     #  错误处理
     # ================================================================
@@ -284,7 +300,9 @@ class BilibiliUpVideosSpider(scrapy.Spider):
             self._idle_start = None
             logger.info(f"Spider idle, but {remaining} seeds remain in queue. Continuing...")
             from twisted.internet import reactor
-            reactor.callLater(1, self.crawler.engine.crawl, self.start_requests(), self)
+            for req in self.start_requests():
+                if req:
+                    reactor.callLater(0.5, self.crawler.engine.crawl, req, self)
             raise scrapy.exceptions.DontCloseSpider("waiting for seeds")
 
         # 无种子: 首次空闲时记录时间, 后续空闲时检查是否超时

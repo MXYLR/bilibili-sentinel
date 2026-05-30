@@ -108,12 +108,27 @@
 <!-- 视频列表 -->
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h5 class="mb-0"><i class="bi bi-camera-video me-2"></i>视频监控列表</h5>
-    <button class="btn btn-sm btn-outline-danger" id="btn-clear-all" onclick="clearAllData()" title="清空所有爬取数据">
-        <i class="bi bi-archive-fill"></i> 清空数据
-    </button>
+    <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-danger" id="btn-clear-all" onclick="clearAllData()" title="清空所有爬取数据">
+            <i class="bi bi-archive-fill"></i>
+        </button>
+    </div>
 </div>
+
+<!-- UP主分组统计 -->
+<div class="row mb-3" id="up-stats-row">
+    <small class="text-muted">加载UP主统计...</small>
+</div>
+
+<!-- 视频网格 -->
 <div class="row" id="video-grid">
     <div class="col-12 text-center py-4 text-muted">加载中...</div>
+</div>
+
+<!-- 翻页 -->
+<div class="d-flex justify-content-between align-items-center mt-3" id="pagination-row" style="display:none">
+    <small class="text-muted" id="page-info"></small>
+    <div class="btn-group btn-group-sm" id="page-btns"></div>
 </div>
 
 {% endblock %}
@@ -213,60 +228,298 @@ function updateHealthCards() {
         .catch(e => console.error('Health check failed:', e));
 }
 
-// ---- 视频列表 ----
+// ---- 视频列表 (UP主分组 + 桶内分页) ----
+const BUCKET_PAGE_SIZE = 12;
+const bucketPageStates = {};
+const upGroupSortMode = {};  // {collId: 'views'|'comments'}
+const RANGES = {
+    views: [
+        { key: 'v-high', label: '高播放 ≥1万',    min: 10000, max: Infinity },
+        { key: 'v-mid',  label: '中播放 1000~1万', min: 1000,  max: 9999 },
+        { key: 'v-low',  label: '低播放 100~999',  min: 100,   max: 999 },
+        { key: 'v-tiny', label: '极低 <100',       min: 0,     max: 99 },
+    ],
+    comments: [
+        { key: 'c-high', label: '高评论 ≥100',     min: 100,   max: Infinity },
+        { key: 'c-mid',  label: '中评论 20~99',    min: 20,    max: 99 },
+        { key: 'c-low',  label: '低评论 5~19',     min: 5,     max: 19 },
+        { key: 'c-tiny', label: '极少 <5',          min: 0,     max: 4 },
+    ],
+};
+
 function loadVideos() {
-    fetch('/api/videos')
+    fetch('/api/videos?page=1&per_page=9999')
         .then(r => r.json())
         .then(d => {
             if (!d.success) return;
             const grid = document.getElementById('video-grid');
-            if (d.data.length === 0) {
+            if (!d.data || d.data.length === 0) {
                 grid.innerHTML = '<div class="col-12 text-center py-5 text-muted"><i class="bi bi-inbox display-4 d-block mb-2"></i>暂无监控视频<br><small>请前往爬虫控制台采集数据</small></div>';
+                document.getElementById('pagination-row').style.display = 'none';
+                document.getElementById('up-stats-row').innerHTML = '';
                 return;
             }
-            grid.innerHTML = d.data.map(v => `
-                <div class="col-xl-3 col-lg-4 col-md-6 mb-3">
-                    <div class="card video-card h-100" onclick="location.href='/video/${v.bvid}'" style="cursor:pointer">
-                        <button class="video-card-delete" onclick="event.stopPropagation(); deleteVideo('${v.bvid}', '${(v.title || '').replace(/'/g, "\\'")}')" title="删除此视频数据">
-                            <i class="bi bi-x-lg"></i>
-                        </button>
-                        <div class="video-card-img">
-                            ${v.pic ? `<img src="${v.pic}" alt="${v.title}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="video-card-placeholder" style="display:none"><i class="bi bi-play-btn"></i></div>` : `<div class="video-card-placeholder"><i class="bi bi-play-btn"></i></div>`}
-                            ${v.has_report ? '<span class="badge bg-success video-card-badge">已分析</span>' : '<span class="badge bg-secondary video-card-badge">待分析</span>'}
-                        </div>
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <h6 class="card-title text-truncate flex-grow-1 me-1" title="${v.title}">${v.title}</h6>
-                                <a href="https://www.bilibili.com/video/${v.bvid}" target="_blank"
-                                   class="text-decoration-none text-muted flex-shrink-0" title="在B站打开"
-                                   onclick="event.stopPropagation()" style="font-size:1.1em;">
-                                    <i class="bi bi-box-arrow-up-right"></i>
-                                </a>
-                            </div>
-                            <p class="card-text small text-muted mb-2">
-                                <i class="bi bi-person"></i> ${v.owner_name}
-                            </p>
-                            <div class="mb-2">${sourceBadge(v.source)}</div>
-                            <div class="d-flex justify-content-between small text-muted">
-                                <span><i class="bi bi-play-fill"></i> ${formatNum(v.view_count)}</span>
-                                <span title="B站评论总数（含未抓取）"><i class="bi bi-chat-dots"></i> ${formatNum(v.reply_count)}</span>
-                                <span title="已抓取评论数"><i class="bi bi-download"></i> ${v.comment_count}</span>
-                            </div>
-                        </div>
+
+            // 按UP主分组
+            const groups = {};
+            d.data.forEach(v => {
+                const mid = v.owner_mid || 0;
+                const on = v.owner_name || '未知UP主';
+                const key = mid || 'unknown_' + on;
+                if (!groups[key]) groups[key] = { mid, ownerName: on, videos: [] };
+                groups[key].videos.push(v);
+            });
+
+            let html = '';
+            Object.values(groups).forEach((group, gi) => {
+                const totalVideos = group.videos.length;
+                const totalViews = group.videos.reduce((s, v) => s + (v.view_count || 0), 0);
+                const totalComments = group.videos.reduce((s, v) => s + (v.comment_count || 0), 0);
+                const collId = `up-group-${gi}`;
+                if (!(collId in upGroupSortMode)) upGroupSortMode[collId] = 'views';
+
+                // 构建两个排序下的分桶
+                const buildBuckets = (mode) => {
+                    const rs = RANGES[mode];
+                    return rs.map(r => {
+                        const valFn = mode === 'views' ? (v => v.view_count || 0) : (v => v.comment_count || 0);
+                        const vids = group.videos.filter(v => {
+                            const val = valFn(v);
+                            return val >= r.min && val <= r.max;
+                        });
+                        if (mode === 'views') {
+                            vids.sort((a, b) => (b.view_count || 0) - (a.view_count || 0));
+                        } else {
+                            vids.sort((a, b) => (b.comment_count || 0) - (a.comment_count || 0));
+                        }
+                        const bucketKey = `${collId}-${r.key}`;
+                        const totalPages = Math.max(1, Math.ceil(vids.length / BUCKET_PAGE_SIZE));
+                        bucketPageStates[bucketKey] = { page: 1, totalPages, videos: vids, label: r.label };
+                        return { ...r, bucketKey, count: vids.length, totalPages };
+                    }).filter(b => b.count > 0);
+                };
+
+                const buckets = buildBuckets('views');
+
+                html += `<div class="col-12 mb-3">
+    <div class="card" id="${collId}-card">
+        <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#${collId}">
+            <div>
+                <strong><i class="bi bi-person-video me-1"></i>${group.ownerName}</strong>
+                <span class="text-muted ms-2">MID: ${group.mid || '--'}</span>
+                <span class="badge bg-secondary ms-2">${totalVideos} 个视频</span>
+                <span class="badge bg-info ms-1">${formatNum(totalViews)} 总播放</span>
+                <span class="badge bg-success ms-1">${formatNum(totalComments)} 总评论</span>
+            </div>
+            <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation()">
+                <span class="small text-muted">排序:</span>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-info btn-sm active" id="${collId}-sort-views" onclick="switchSortMode('${collId}','views')">播放量</button>
+                    <button class="btn btn-outline-info btn-sm" id="${collId}-sort-comments" onclick="switchSortMode('${collId}','comments')">评论数</button>
+                </div>
+                <i class="bi bi-chevron-down small" id="${collId}-icon"></i>
+            </div>
+        </div>
+        <div class="collapse${gi===0?' show':''}" id="${collId}">
+            <div class="card-body pt-2" id="${collId}-body">${buckets.map(b => `
+                <div class="mb-3">
+                    <small class="fw-bold text-muted"><i class="bi bi-bar-chart"></i> ${b.label} (${b.count}个)</small>
+                    <div class="row" id="${b.bucketKey}-body"></div>
+                    <div class="d-flex justify-content-between align-items-center mt-1" id="${b.bucketKey}-pager" style="display:none">
+                        <small class="text-muted" id="${b.bucketKey}-page-info"></small>
+                        <div class="btn-group btn-group-sm" id="${b.bucketKey}-page-btns"></div>
                     </div>
-                </div>`).join('');
+                </div>`).join('')}
+            </div>
+        </div>
+    </div>
+</div>`;
+            });
+            grid.innerHTML = html;
 
-            // 更新统计
-            const analyzed = d.data.filter(v => v.has_report).length;
-            let highRisk = 0, monitored = 0;
-            d.data.forEach(v => { monitored += v.comment_count; });
-            document.getElementById('stat-videos').textContent = d.data.length;
+            // 展开时渲染
+            document.querySelectorAll('[id^="up-group-"]').forEach(el => {
+                el.addEventListener('show.bs.collapse', function() {
+                    const cid = this.id;
+                    Object.keys(bucketPageStates).forEach(bk => {
+                        if (bk.startsWith(cid + '-')) renderBucketPage(bk);
+                    });
+                });
+            });
+
+            // 统计行
+            allUpGroups = d.up_groups || [];
+            const stats = document.getElementById('up-stats-row');
+            if (allUpGroups.length > 0) {
+                stats.innerHTML = allUpGroups.slice(0, 6).map(g =>
+                    `<div class="col-lg-2 col-md-4 col-6 mb-2"><div class="border rounded p-1 text-center small"><strong title="${g.name}">${g.name.substring(0,10)}${g.name.length>10?'..':''}</strong><br><span class="text-muted">${g.count}视频 ${formatNum(g.total_views)}播放</span></div></div>`
+                ).join('') + (allUpGroups.length > 6 ? `<div class="col-lg-2 col-md-4 col-6 mb-2 small text-muted align-self-center">...共 ${allUpGroups.length} 个UP主</div>` : '');
+            }
+
+            document.getElementById('pagination-row').style.display = 'none';
+            document.getElementById('stat-videos').textContent = d.total || d.data.length;
+            const analyzed = (d.data || []).filter(v => v.has_report).length;
             document.getElementById('stat-analyzed').textContent = analyzed;
+            let monitored = 0;
+            (d.data || []).forEach(v => { monitored += v.comment_count || 0; });
             document.getElementById('stat-monitored').textContent = formatNum(monitored);
-
-            // 异步加载报告统计
-            loadReportStats(d.data);
         });
+}
+
+function renderBucketPage(bucketKey, page = 1) {
+    const st = bucketPageStates[bucketKey];
+    if (!st) return;
+    st.page = page;
+    const { videos, totalPages } = st;
+    const start = (page - 1) * BUCKET_PAGE_SIZE;
+    const end = Math.min(start + BUCKET_PAGE_SIZE, videos.length);
+    const pageVideos = videos.slice(start, end);
+
+    const body = document.getElementById(bucketKey + '-body');
+    if (body) {
+        body.innerHTML = pageVideos.map(v => renderVideoCard(v)).join('');
+    }
+
+    // 省略号翻页
+    renderPagination(bucketKey, page, totalPages, videos.length);
+}
+
+function switchSortMode(collId, mode) {
+    upGroupSortMode[collId] = mode;
+    // 更新按钮状态
+    document.getElementById(collId + '-sort-views').classList.toggle('active', mode === 'views');
+    document.getElementById(collId + '-sort-comments').classList.toggle('active', mode === 'comments');
+
+    // 重建桶数据
+    const rs = RANGES[mode];
+    const gi = parseInt(collId.split('-')[2]);
+    // 从 DOM 重新获取视频数据（从现有的 bucketPageStates 聚合）
+    const allVids = [];
+    const seen = new Set();
+    Object.keys(bucketPageStates).forEach(bk => {
+        if (bk.startsWith(collId + '-')) {
+            const st = bucketPageStates[bk];
+            st.videos.forEach(v => {
+                if (!seen.has(v.bvid)) { seen.add(v.bvid); allVids.push(v); }
+            });
+        }
+    });
+    if (allVids.length === 0) return;
+
+    // 重建 bucketPageStates
+    const valFn = mode === 'views' ? (v => v.view_count || 0) : (v => v.comment_count || 0);
+    const newBuckets = rs.map(r => {
+        const vids = allVids.filter(v => {
+            const val = valFn(v);
+            return val >= r.min && val <= r.max;
+        });
+        vids.sort((a, b) => valFn(b) - valFn(a));
+        const bucketKey = `${collId}-${r.key}`;
+        const totalPages = Math.max(1, Math.ceil(vids.length / BUCKET_PAGE_SIZE));
+        bucketPageStates[bucketKey] = { page: 1, totalPages, videos: vids, label: r.label };
+        return { bucketKey, count: vids.length, totalPages };
+    }).filter(b => b.count > 0);
+
+    // 重建 DOM
+    const body = document.getElementById(collId + '-body');
+    if (!body) return;
+    body.innerHTML = newBuckets.map(b => `
+        <div class="mb-3">
+            <small class="fw-bold text-muted"><i class="bi bi-bar-chart"></i> ${bucketPageStates[b.bucketKey].label} (${b.count}个)</small>
+            <div class="row" id="${b.bucketKey}-body"></div>
+            <div class="d-flex justify-content-between align-items-center mt-1" id="${b.bucketKey}-pager" style="display:none">
+                <small class="text-muted" id="${b.bucketKey}-page-info"></small>
+                <div class="btn-group btn-group-sm" id="${b.bucketKey}-page-btns"></div>
+            </div>
+        </div>`).join('') || '<div class="text-muted small">无视频</div>';
+
+    // 渲染所有新桶的第一页
+    newBuckets.forEach(b => renderBucketPage(b.bucketKey, 1));
+}
+
+// 省略号翻页: ≤7页全显示, >7页用省略号
+function renderPagination(bucketKey, page, totalPages, totalVideos) {
+    const pager = document.getElementById(bucketKey + '-pager');
+    const info = document.getElementById(bucketKey + '-page-info');
+    const btns = document.getElementById(bucketKey + '-page-btns');
+    if (totalPages <= 1) { pager.style.display = 'none'; return; }
+    pager.style.display = 'flex';
+    info.textContent = `${totalVideos}个 第${page}/${totalPages}页`;
+
+    const pageNums = [];
+    if (totalPages <= 7) {
+        for (let p = 1; p <= totalPages; p++) pageNums.push(p);
+    } else {
+        pageNums.push(1);
+        if (page > 4) pageNums.push('...');
+        const start = Math.max(2, page - 1);
+        const end = Math.min(totalPages - 1, page + 1);
+        for (let p = start; p <= end; p++) pageNums.push(p);
+        if (page < totalPages - 3) pageNums.push('...');
+        pageNums.push(totalPages);
+    }
+
+    let h = `<button class="btn btn-sm btn-outline-secondary" onclick="renderBucketPage('${bucketKey}',${page-1})" ${page<=1?'disabled':''}>&laquo;</button>`;
+    pageNums.forEach(p => {
+        if (p === '...') {
+            h += `<span class="btn btn-sm btn-outline-secondary disabled">...</span>`;
+        } else {
+            h += `<button class="btn btn-sm ${p===page?'btn-primary':'btn-outline-secondary'}" onclick="renderBucketPage('${bucketKey}',${p})">${p}</button>`;
+        }
+    });
+    h += `<button class="btn btn-sm btn-outline-secondary" onclick="renderBucketPage('${bucketKey}',${page+1})" ${page>=totalPages?'disabled':''}>&raquo;</button>`;
+    // 页码跳转输入框
+    h += `<span class="ms-2 d-inline-flex align-items-center gap-1">
+        <input type="number" class="form-control form-control-sm" id="${bucketKey}-jump-input"
+               min="1" max="${totalPages}" value="${page}" style="width:60px"
+               onkeydown="if(event.key==='Enter') jumpToPage('${bucketKey}', this.value, ${totalPages})">
+        <button class="btn btn-sm btn-outline-secondary" onclick="jumpToPage('${bucketKey}',
+               document.getElementById('${bucketKey}-jump-input').value, ${totalPages})">跳转</button>
+    </span>`;
+    btns.innerHTML = h;
+}
+
+function jumpToPage(bucketKey, rawValue, totalPages) {
+    const page = parseInt(rawValue);
+    if (isNaN(page) || page < 1 || page > totalPages) {
+        showToast(`请输入 1~${totalPages} 的页码`, 'warning');
+        return;
+    }
+    renderBucketPage(bucketKey, page);
+}
+
+function renderVideoCard(v) {
+    return `<div class="col-6 col-md-4 col-lg-3 col-xl-2 mb-2">
+        <div class="card video-card h-100" onclick="location.href='/video/${v.bvid}'" style="cursor:pointer">
+            <button class="video-card-delete" onclick="event.stopPropagation(); deleteVideo('${v.bvid}', '${(v.title || '').replace(/'/g, "\\'")}')" title="删除">
+                <i class="bi bi-x-lg"></i>
+            </button>
+            <div class="video-card-img" style="min-height:80px">
+                ${v.pic ? `<img src="${v.pic}" alt="${v.title}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="video-card-placeholder" style="display:none;font-size:1.2em"><i class="bi bi-play-btn"></i></div>` : `<div class="video-card-placeholder" style="font-size:1.2em"><i class="bi bi-play-btn"></i></div>`}
+            </div>
+            <div class="card-body p-2">
+                <div class="d-flex justify-content-between align-items-start">
+                    <small class="text-truncate flex-grow-1 me-1" title="${v.title}" style="line-height:1.3">${v.title}</small>
+                    <a href="https://www.bilibili.com/video/${v.bvid}" target="_blank" class="text-decoration-none text-muted flex-shrink-0" onclick="event.stopPropagation()" style="font-size:0.8em"><i class="bi bi-box-arrow-up-right"></i></a>
+                </div>
+                <div class="d-flex justify-content-between small text-muted mt-1">
+                    <span><i class="bi bi-play-fill"></i> ${formatNum(v.view_count)}</span>
+                    <span><i class="bi bi-chat-dots"></i> ${formatNum(v.reply_count)}</span>
+                    <span><i class="bi bi-download"></i> ${v.comment_count}</span>
+                </div>
+                <div class="mt-1">${sourceBadgeMini(v.source)}</div>
+            </div>
+        </div>
+    </div>`;
+}
+
+function sourceBadgeMini(source) {
+    if (!source) return '';
+    if (source === 'hot') return '<span class="badge bg-danger" style="font-size:0.6em">热门</span>';
+    if (source === 'bvid') return '<span class="badge bg-primary" style="font-size:0.6em">BV</span>';
+    if (source.startsWith('search:')) return '<span class="badge bg-info" style="font-size:0.6em">搜索</span>';
+    if (source.startsWith('up:')) return '<span class="badge bg-success" style="font-size:0.6em">UP主</span>';
+    return '';
 }
 
 function loadReportStats(videos) {

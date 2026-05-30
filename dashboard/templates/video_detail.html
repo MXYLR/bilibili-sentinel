@@ -41,7 +41,15 @@
             <a href="https://www.bilibili.com/video/{{ bvid }}" target="_blank" class="text-decoration-none">
                 <span class="badge bg-info me-2">BV: {{ bvid }} <i class="bi bi-box-arrow-up-right"></i></span>
             </a>
-            <span class="text-muted me-3"><i class="bi bi-person"></i> {{ video.get('owner', {}).get('name', video.get('owner_name', 'N/A')) }}</span>
+            <span class="text-muted me-3">
+                <i class="bi bi-person"></i> {{ video.get('owner', {}).get('name', video.get('owner_name', 'N/A')) }}
+                {% set owner_mid = video.get('owner', {}).get('mid', video.get('owner_mid', 0)) %}
+                {% if owner_mid and owner_mid > 0 %}
+                <button class="btn btn-sm btn-outline-warning ms-2" onclick="addUPToWaterArmy({{ owner_mid }}, '{{ video.get('owner', {}).get('name', video.get('owner_name', '')) | replace("'", "\\'") }}')" title="将该UP主收录至水军账号库">
+                    <i class="bi bi-shield-exclamation"></i> 收录UP主
+                </button>
+                {% endif %}
+            </span>
             <span class="text-muted me-3"><i class="bi bi-play-circle"></i> {{ (video.get('stat', {}).get('view', video.get('view_count', 0)))|int }} 播放</span>
             <span class="text-muted me-3" title="B站统计的评论总数（含楼中楼，可能超过已抓取数量）">
                 <i class="bi bi-chat-dots"></i> {{ (video.get('stat', {}).get('reply', video.get('reply_count', 0)))|int }} 评论
@@ -1782,6 +1790,29 @@ function collectWaterArmy(mid, uname, score, riskLevel, bvid) {
         }
     }).catch(() => {
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-shield-exclamation"></i> 收录为水军账号'; }
+        showToast('网络错误', 'error');
+    });
+}
+
+// ---- 收录UP主至水军账号 (视频详情页) ----
+function addUPToWaterArmy(mid, uname) {
+    if (!mid || mid <= 0) return;
+    if (!confirm(`确定将 UP主「${uname}」(UID: ${mid}) 收录至水军账号库吗？`)) return;
+
+    fetch('/api/water-army/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            mid: mid,
+            uname: uname,
+            score: 50,
+            risk_level: 'medium',
+            bvid: '{{ bvid }}',
+            reason: `视频 {{ bvid }} 的分析中手动标记UP主`,
+        })
+    }).then(r => r.json()).then(d => {
+        showToast(d.message, d.success ? 'success' : 'error');
+    }).catch(() => {
         showToast('网络错误', 'error');
     });
 }

@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.5
+title Bilibili Sentinel v2.7
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -15,12 +15,12 @@ set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.5
+echo   Bilibili Sentinel v2.7
 echo ============================================================
 echo.
 
 :: [0] Check Environment
-echo [0/6] Checking environment...
+echo [0/5] Checking environment...
 echo.
 
 if exist "%VENV_PYTHON%" (
@@ -119,19 +119,16 @@ if exist "%ROOT%\analyzer\llm_analyzer.py" (
 if not exist "%ROOT%\data\logs" mkdir "%ROOT%\data\logs"
 
 echo.
-echo [1/5][2/5] Starting spiders (video + comment)...
-:: Note: comment spider auto-discovers BVs from video spider output
-:: user spider gets MID seeds from comment spider's UserCachePipeline
-:: danmaku spider starts on-demand via Dashboard or seed injection
-:: Launch spiders via start command (visible window minimized, not hidden)
-:: Note: start 本身不转发子进程输出，需用 cmd /c 包裹以确保重定向生效
+echo [1/4] Starting spiders (video + comment)...
+:: Note: comment spider auto-discovers BVs; user spider gets MID seeds from comment spider
+:: User spider + UP主 seed linkage via Dashboard: Crawler 页面
 start "Bilibili Video Spider"   /MIN cmd /c %VENV_SCRAPY% crawl bilibili_video   ^> %ROOT%\data\logs\video.log   2^>^&1
 start "Bilibili Comment Spider" /MIN cmd /c %VENV_SCRAPY% crawl bilibili_comment ^> %ROOT%\data\logs\comment.log 2^>^&1
 echo   [OK] Video + Comment spiders launched
-echo   [TIP] User spider  ^& Danmaku spider via Dashboard: Crawler 页面
+echo   [TIP] User spider via Dashboard: Crawler 页面 ^(注入UID自动联动视频+评论爬虫^)
 
 echo.
-echo [3/5] Starting Dashboard on port 5001...
+echo [2/4] Starting Dashboard on port 5001...
 start "Bilibili Sentinel Dashboard" /MIN cmd /c %VENV_PYTHON% -u dashboard\app.py ^> %ROOT%\data\logs\dashboard.log 2^>^&1
 echo   [OK] Dashboard starting...
 
@@ -139,11 +136,11 @@ echo   [OK] Dashboard starting...
 %SystemRoot%\System32\timeout.exe /t 3 /nobreak >nul
 
 echo.
-echo [4/5] Checking service health...
+echo [3/4] Checking service health...
 powershell -Command "try{$r=Invoke-WebRequest -Uri http://localhost:5001/api/system/health -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop;Write-Host '  [OK] Dashboard healthy'}catch{Write-Host '  [WARN] Dashboard not responding yet'}"
 
 echo.
-echo [5/5] Opening browser...
+echo [4/4] Opening browser...
 start http://localhost:5001
 
 echo.
@@ -153,9 +150,10 @@ echo ============================================================
 echo.
 echo   Dashboard pages:
 echo     Home:     http://localhost:5001\
-echo     Crawler:  http://localhost:5001\crawler   ^(4 spiders: video/comment/user/danmaku^)
+echo     Crawler:  http://localhost:5001\crawler   ^(3 spiders: video/comment/user^)
 echo     Video:    http://localhost:5001\video\[bvid]
 echo     Settings: http://localhost:5001\settings   ^(LLM多Provider + AICU深度分析 + 代理^)
+echo     WaterArmy: http://localhost:5001\water-army  ^(水军账号管理^)
 echo.
 echo   Logs:  %ROOT%\data\logs\
 echo   LLM:   %LLM_CONFIG%
@@ -173,8 +171,8 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.5: LLM多Provider + F1-F14引擎 + AICU深度分析
-echo   Comment spider 自动采集后，Crawler 页面可启动 User spider
+echo   v2.7: LLM初筛Modal化 + UP主种子联动 + AICU弹幕集成
+echo   3爬虫: video/comment/user, 注入UID自动联动视频+评论
 echo   分析流程: Scorer -> LLM初筛 -> AICU深度分析 -> 报告
 echo.
 echo ============================================================
@@ -200,7 +198,6 @@ echo [2/3] Cleaning up remaining processes...
 taskkill /FI "WINDOWTITLE eq Bilibili Video Spider*"    /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Comment Spider*"  /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili User Spider*"     /F >nul 2>&1
-taskkill /FI "WINDOWTITLE eq Bilibili Danmaku Spider*"  /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Sentinel Dashboard*" /F >nul 2>&1
 echo   [OK] Processes cleaned
 

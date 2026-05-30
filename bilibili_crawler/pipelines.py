@@ -10,6 +10,7 @@ Five pipelines:
 """
 
 import json
+import logging
 import os
 import re
 from collections import OrderedDict
@@ -203,9 +204,9 @@ class BilibiliJsonPipeline:
                     data = json.load(f)
                 if isinstance(data, list):
                     return data
-                logger.warning(f"Comment file for {bvid} is not a list, resetting")
+                logging.getLogger(__name__).warning(f"Comment file for {bvid} is not a list, resetting")
             except (json.JSONDecodeError, OSError) as e:
-                logger.warning(
+                logging.getLogger(__name__).warning(
                     f"Comment file for {bvid} is corrupted ({e}), "
                     f"resetting to empty. Backup kept as .corrupted"
                 )
@@ -217,19 +218,46 @@ class BilibiliJsonPipeline:
         return []
 
     def _flush_comments(self, bvid):
-        """Write buffered comments to file (append+dedup by rpid) — atomic write."""
+        """Write buffered comments to file (merge by rpid: new overwrites old) — atomic write.
+
+        v2.16: 从 "rpid去重跳过" 改为 "rpid覆盖"。
+        旧策略在重爬时丢弃了新字段(如pictures)，
+        新策略保留最新抓取的数据。
+        """
         path = os.path.join(self._comment_dir, f"{bvid}_comments.json")
         existing = self._load_existing_comments(bvid)
-        existing_rpids = {c.get("rpid") for c in existing if isinstance(c, dict)}
+
+        # 构建 rpid→index 映射，用于覆盖而非跳过
+        rpid_to_idx = {}
+        for i, c in enumerate(existing):
+            if isinstance(c, dict) and c.get("rpid"):
+                rpid_to_idx[c["rpid"]] = i
 
         new_comments = self._comment_buf.get(bvid, [])
-        new_comments = [c for c in new_comments if c.get("rpid") not in existing_rpids]
+        updated = 0
+        appended = 0
+        for c in new_comments:
+            rpid = c.get("rpid")
+            if not rpid:
+                continue
+            if rpid in rpid_to_idx:
+                # 覆盖: 新数据替换旧条目（保留 pictures 等新字段）
+                existing[rpid_to_idx[rpid]] = c
+                updated += 1
+            else:
+                # 追加: 新评论
+                existing.append(c)
+                appended += 1
 
-        if not new_comments:
+        if not updated and not appended:
             self._comment_buf[bvid] = []
             return
 
-        existing.extend(new_comments)
+        if updated or appended:
+            spider_log = logging.getLogger(__name__)
+            spider_log.debug(
+                f"[flush] {bvid}: +{appended} new, ~{updated} updated"
+            )
 
         # Atomic write: write to temp file first, then rename
         tmp_path = path + ".tmp"

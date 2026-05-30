@@ -59,6 +59,7 @@ class CommentItem(scrapy.Item):
 
     # ---- 评论内容 ----
     content = scrapy.Field()           # 评论文本
+    pictures = scrapy.Field()          # 评论图片列表 [{img_src, img_width, img_height}]
     ctime = scrapy.Field()             # 发布时间戳 (Unix timestamp)
     like_count = scrapy.Field()        # 获赞数
     rcount = scrapy.Field()            # 子评论数

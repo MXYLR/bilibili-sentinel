@@ -177,7 +177,15 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header"><i class="bi bi-robot"></i> AI 分析摘要</div>
-            <div class="card-body"><p class="mb-0 fs-6">{{ report.ai_summary }}</p></div>
+            <div class="card-body" style="max-height:200px;overflow-y:auto">
+                <div class="ai-summary-content markdown-body" id="ai-summary" style="font-size:0.95em;line-height:1.6">
+                    {% if ai_summary_html %}
+                        {{ ai_summary_html | safe }}
+                    {% else %}
+                        <span class="text-muted">暂无 AI 分析摘要</span>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -187,20 +195,38 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-trophy"></i> 账号评分排行榜 <small class="text-muted">(按可疑度降序)</small></span>
-                <div>
-                    {% set deep_count = report.top_suspects | selectattr('deep_analyzed', 'equalto', true) | list | length if report and report.top_suspects else 0 %}
+                <div class="d-flex gap-2 align-items-center">
+                    {# ---- LLM 初筛按钮 ---- #}
+                    {% set llm_count = report.top_suspects | selectattr('llm_type_id', 'defined') | selectattr('llm_type_id', 'gt', 0) | list | length if report and report.top_suspects else 0 %}
+                    {% if llm_count > 0 %}
+                    <span class="badge bg-info"><i class="bi bi-robot"></i> 已初筛 {{ llm_count }} 人</span>
+                    <button class="btn btn-sm btn-outline-primary"
+                            onclick="openLlmScreenModal()"
+                            title="使用 LLM 对所有候选用户进行初筛（覆盖已有结果）">
+                        <i class="bi bi-arrow-repeat"></i> 重新初筛
+                    </button>
+                    {% else %}
+                    <button class="btn btn-sm btn-primary"
+                            onclick="openLlmScreenModal()"
+                            title="使用 LLM 对评分≥阈值的用户进行水军初筛">
+                        <i class="bi bi-cpu"></i> 一键 LLM 初筛
+                    </button>
+                    {% endif %}
+
+                    {# ---- AICU 深度分析按钮 ---- #}
+                    {% set deep_count = report.top_suspects | selectattr('deep_analyzed', 'defined') | selectattr('deep_analyzed', 'equalto', true) | list | length if report and report.top_suspects else 0 %}
                     {% if deep_count > 0 %}
-                    <span class="badge bg-success me-2"><i class="bi bi-check-circle"></i> 已深度分析 {{ deep_count }} 人</span>
+                    <span class="badge bg-success ms-2 me-2"><i class="bi bi-check-circle"></i> 已深度分析 {{ deep_count }} 人</span>
                     <button class="btn btn-sm btn-outline-info deep-analyze-btn"
                             onclick="openDeepAnalyzeModal()"
                             title="使用自定义阈值重新深度分析">
-                        <i class="bi bi-arrow-repeat"></i> 重新分析
+                        <i class="bi bi-arrow-repeat"></i> 重新深度分析
                     </button>
                     {% else %}
-                    <button class="btn btn-sm btn-info deep-analyze-btn"
+                    <button class="btn btn-sm btn-info deep-analyze-btn ms-2"
                             onclick="openDeepAnalyzeModal()"
                             title="手动触发 AICU 历史数据深度分析">
-                        <i class="bi bi-search"></i> 深度分析
+                        <i class="bi bi-search"></i> 一键 AICU 深度分析
                     </button>
                     {% endif %}
                 </div>
@@ -375,6 +401,99 @@
     </div>
 </div>
 
+<!-- ===== LLM 初筛 Modal ===== -->
+<div class="modal fade" id="llmScreenModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-robot"></i> 一键 LLM 初筛</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="llmScreenBody">
+                <!-- 统计区 -->
+                <div class="llm-modal-stats mb-3">
+                    <div class="row g-2">
+                        <div class="col-4">
+                            <div class="card bg-light text-center py-2">
+                                <div class="small text-muted">候选用户</div>
+                                <div class="fs-5 fw-bold" id="llm-candidate-count">--</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card bg-light text-center py-2">
+                                <div class="small text-muted">已初筛</div>
+                                <div class="fs-5 fw-bold" id="llm-done-count">--</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card bg-light text-center py-2">
+                                <div class="small text-muted">最高分</div>
+                                <div class="fs-5 fw-bold" id="llm-max-score">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 阈值选择 -->
+                <div class="mb-3">
+                    <label class="form-label fw-bold">初筛阈值</label>
+                    <div class="d-flex align-items-center gap-3">
+                        <input type="range" class="form-range flex-grow-1"
+                               id="llm-threshold-slider" min="10" max="70" value="30" step="5"
+                               oninput="document.getElementById('llm-threshold-val').textContent = this.value">
+                        <span class="badge bg-primary fs-6" id="llm-threshold-val" style="min-width:40px">30</span>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        仅对评分 <strong class="text-danger">≥ <span id="llm-threshold-display">30</span></strong> 的用户执行 LLM 语义初筛
+                    </div>
+                </div>
+
+                <!-- LLM 初筛说明 -->
+                <div class="alert alert-light border mb-3 p-2 small">
+                    <strong><i class="bi bi-info-circle-fill text-primary"></i> LLM 初筛说明：</strong><br>
+                    调用 LLM（DeepSeek / OpenAI）对候选用户评论进行<b>语义级水军识别</b>：<br>
+                    <span class="text-muted ms-2">
+                        ① 自动分析评论内容的<b>水军特征</b>（模板刷评、情绪引导、AI生成等 8 类）<br>
+                        ② 输出<b>水军类型 + 置信度</b>，与现有 15 维特征评分融合<br>
+                        ③ 结果写回报告并自动刷新页面<br>
+                    </span>
+                    每批 5 人，预计耗时 <b>10-30 秒/批</b>。
+                </div>
+
+                <!-- 结果区 -->
+                <div class="llm-modal-result d-none" id="llm-result-box">
+                    <hr>
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi text-success fs-5" id="llm-result-icon"></i>
+                        <strong id="llm-result-title"></strong>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-4"><small class="text-muted">候选总数:</small><br><strong id="llm-r-total">--</strong></div>
+                        <div class="col-4"><small class="text-muted">LLM分析:</small><br><strong id="llm-r-analyzed">--</strong></div>
+                        <div class="col-4"><small class="text-muted">识别水军:</small><br><strong id="llm-r-identified">--</strong></div>
+                    </div>
+                </div>
+
+                <!-- 错误提示 -->
+                <div class="alert alert-danger d-none mt-3" id="llm-error-box"></div>
+
+                <!-- 加载动画 -->
+                <div class="text-center d-none py-4" id="llm-loading-box">
+                    <div class="spinner-border text-primary mb-2" role="status"></div>
+                    <div class="text-muted">正在调用 LLM 进行水军语义分析...</div>
+                    <div class="small text-muted mt-1">正在处理第 <span id="llm-progress-batch">1</span> 批</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" id="llm-start-btn" onclick="startLlmScreen()">
+                    <i class="bi bi-play-fill"></i> 开始初筛
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% if report.similarity_clusters %}
 <div class="row mb-4">
     <div class="col-12">
@@ -499,17 +618,39 @@
 let currentPage = 1;
 let totalPages = 1;
 let scoredUsers = {{ (report.top_suspects if report and report.top_suspects else []) | tojson | safe }};
+// 全量 user_scores（来自后端，覆盖所有评论用户）
+const USER_SCORES = {{ user_scores | tojson | safe }};
 
-// 构建 mid -> score 查表
+// 构建 mid -> score 查表（全量，不限于 top_suspects）
+// 同时支持数字和字符串 key 查询
 const riskMap = {};
-scoredUsers.forEach(u => { if (u.mid) riskMap[u.mid] = { score: u.score || u.suspicious_score || 0, level: u.risk_level || 'low' }; });
-
+function setRisk(mid, v) {
+    const n = parseInt(mid);
+    riskMap[n] = v;
+    riskMap[String(n)] = v;
+}
+if (USER_SCORES && typeof USER_SCORES === 'object') {
+    Object.entries(USER_SCORES).forEach(([midStr, v]) => {
+        setRisk(midStr, v);
+    });
+}
+// 降级：如果 USER_SCORES 为空，从 top_suspects 构建
+if (Object.keys(riskMap).length === 0 && scoredUsers && scoredUsers.length > 0) {
+    scoredUsers.forEach(u => {
+        if (u.mid) setRisk(u.mid, {
+            score: u.score || u.suspicious_score || 0,
+            level: u.risk_level || 'low',
+            type: u.water_army_type || ''
+        });
+    });
+}
+// getRiskBadge 支持数字和字符串 mid
 function getRiskBadge(mid) {
-    const r = riskMap[mid];
+    const r = riskMap[parseInt(mid)] || riskMap[String(mid)];
     if (!r) return '';
-    if (r.level === 'high') return `<span class="badge bg-danger ms-1" title="水军评分: ${r.score}">高风险 ${r.score}分</span>`;
-    if (r.level === 'medium') return `<span class="badge bg-warning text-dark ms-1" title="水军评分: ${r.score}">中风险 ${r.score}分</span>`;
-    return `<span class="badge bg-success ms-1" title="评分: ${r.score}">低风险</span>`;
+    if (r.level === 'high') return '<span class="badge bg-danger ms-1" title="水军评分: ' + r.score + '">高风险 ' + r.score + '分</span>';
+    if (r.level === 'medium') return '<span class="badge bg-warning text-dark ms-1" title="水军评分: ' + r.score + '">中风险 ' + r.score + '分</span>';
+    return '<span class="badge bg-success ms-1" title="评分: ' + r.score + '">低风险</span>';
 }
 
 function timeAgo(ts) {
@@ -522,6 +663,8 @@ function timeAgo(ts) {
     if (diff < 2592000) return Math.floor(diff / 86400) + '天前';
     return d.toLocaleDateString('zh-CN');
 }
+
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ---- 聚类卡片展开/收起 ----
 function toggleClusterIcon(el, clusterId) {
@@ -571,11 +714,49 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
+// ---- AI 摘要 Markdown 渲染 (v2.17) ----
+document.addEventListener('DOMContentLoaded', function() {
+    const el = document.getElementById('ai-summary');
+    if (!el) return;
+    // 从 JS 变量读取原始 Markdown（避免 textContent 丢失标记）
+    let md = typeof AI_SUMMARY_RAW !== 'undefined' ? AI_SUMMARY_RAW : (el.textContent || '');
+    if (!md) { el.innerHTML = '<span class="text-muted">暂无 AI 分析摘要</span>'; return; }
+    // 完整 Markdown 渲染
+    md = md.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    md = md.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    md = md.replace(/`([^`]+)`/g, '<code>$1</code>');
+    md = md.replace(/^### (.+)$/gm, '<h6>$1</h6>');
+    md = md.replace(/^## (.+)$/gm, '<h5>$1</h5>');
+    md = md.replace(/^# (.+)$/gm, '<h4>$1</h4>');
+    // 无序列表
+    md = md.replace(/^- (.+)$/gm, '<li>$1</li>');
+    md = md.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // 有序列表
+    md = md.replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>');
+    // 段落换行（两个及以上连续换行）
+    md = md.replace(/\n{2,}/g, '<br><br>');
+    // 单个换行
+    md = md.replace(/\n/g, '<br>');
+    el.innerHTML = md;
+});
+
 function renderComment(c, isSub = false) {
     const avatar = c.avatar || 'https://static.hdslb.com/images/member/noface.gif';
     const level = c.level || 0;
     const riskBadge = getRiskBadge(c.mid);
     const content = (c.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // v2.16: 评论图片渲染
+    const pictures = c.pictures || [];
+    const picsHtml = pictures.length ? `
+        <div class="d-flex flex-wrap gap-1 mt-2 mb-2">
+            ${pictures.map(p => {
+                const src = (p.img_src || '').replace('http://', 'https://');
+                return `<a href="${src}" target="_blank" class="comment-pic-link">
+                    <img src="${src}@160w_100h" class="rounded border" style="max-width:120px;max-height:80px;object-fit:cover"
+                         loading="lazy" onerror="this.style.display='none'" alt="评论图片">
+                </a>`;
+            }).join('')}
+        </div>` : '';
     const indentClass = isSub ? 'sub-comment' : '';
     const indentStyle = isSub ? 'margin-left: 22px; border-left: 2px solid #e9ecef; padding-left: 14px;' : '';
 
@@ -592,6 +773,7 @@ function renderComment(c, isSub = false) {
             ${isSub ? '<small class="text-muted ms-1">回复 @' + esc(c.parent_uname || '原评论') + '</small>' : ''}
         </div>
         <div class="comment-content mb-2${isSub?' small':''}">${content}</div>
+        ${picsHtml}
         <div class="d-flex align-items-center text-muted small">
             <span class="me-3"><i class="bi bi-hand-thumbs-up"></i> ${c.like_count || 0}</span>
             <span><i class="bi bi-clock"></i> ${timeAgo(c.ctime)}</span>
@@ -930,6 +1112,103 @@ const FEATURE_DESCRIPTIONS = {
     '自评相似度':  '自己多条评论内容高度相似→模板复制粘贴。平均相似度>0.8=1.0分',
     '签名引战':   '个性签名含挑衅/嘲讽/引战话术→"精神胜利法"引战号。多关键词命中累加'
 };
+
+// ---- LLM 初筛手动触发 ----
+const LLM_SCREEN_URL = '/api/video/{{ bvid }}/llm-screen';
+let llmScreenModal = null;
+
+function openLlmScreenModal() {
+    if (!llmScreenModal) {
+        llmScreenModal = new bootstrap.Modal(document.getElementById('llmScreenModal'));
+    }
+
+    // 计算统计
+    const total = scoredUsers.length;
+    const done = scoredUsers.filter(u => u.llm_type_id && u.llm_type_id > 0).length;
+    const maxScore = scoredUsers.length > 0
+        ? Math.max(...scoredUsers.map(u => u.score || 0)).toFixed(1)
+        : '--';
+    const threshold = parseInt(document.getElementById('llm-threshold-slider').value);
+
+    document.getElementById('llm-candidate-count').textContent = total;
+    document.getElementById('llm-done-count').textContent = done;
+    document.getElementById('llm-max-score').textContent = maxScore;
+
+    // 更新阈值显示
+    document.getElementById('llm-threshold-val').textContent = threshold;
+    document.getElementById('llm-threshold-display').textContent = threshold;
+
+    // 重置状态
+    document.getElementById('llm-result-box').classList.add('d-none');
+    document.getElementById('llm-error-box').classList.add('d-none');
+    document.getElementById('llm-loading-box').classList.add('d-none');
+    document.getElementById('llm-start-btn').disabled = false;
+
+    llmScreenModal.show();
+}
+
+// 滑块更新阈值显示
+document.getElementById('llm-threshold-slider').addEventListener('input', function() {
+    const v = this.value;
+    document.getElementById('llm-threshold-val').textContent = v;
+    document.getElementById('llm-threshold-display').textContent = v;
+});
+
+async function startLlmScreen() {
+    const threshold = parseInt(document.getElementById('llm-threshold-slider').value);
+
+    // 显示加载
+    document.getElementById('llm-start-btn').disabled = true;
+    document.getElementById('llm-loading-box').classList.remove('d-none');
+    document.getElementById('llm-result-box').classList.add('d-none');
+    document.getElementById('llm-error-box').classList.add('d-none');
+
+    try {
+        const resp = await fetch(LLM_SCREEN_URL, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({threshold: threshold}),
+        });
+        const data = await resp.json();
+
+        document.getElementById('llm-loading-box').classList.add('d-none');
+
+        if (data.success) {
+            // 显示结果
+            document.getElementById('llm-result-box').classList.remove('d-none');
+            document.getElementById('llm-result-icon').className = 'bi bi-check-circle-fill text-success fs-5';
+            if (data.total > 0) {
+                document.getElementById('llm-result-title').textContent =
+                    'LLM 初筛完成！成功 ' + data.success_count + '/' + data.total + ' 个用户';
+            } else {
+                document.getElementById('llm-result-title').textContent = '没有符合条件的用户（评分均 < ' + threshold + '）';
+            }
+            document.getElementById('llm-r-total').textContent = data.total || '--';
+            document.getElementById('llm-r-analyzed').textContent = data.success_count || '--';
+
+            // 统计识别的水军类型
+            let identified = 0;
+            if (data.identified_types) {
+                identified = Object.values(data.identified_types).reduce((a, b) => a + b, 0);
+            }
+            document.getElementById('llm-r-identified').textContent = identified || '--';
+
+            // 自动刷新页面
+            setTimeout(() => location.reload(), 2500);
+        } else {
+            // 显示错误
+            document.getElementById('llm-error-box').classList.remove('d-none');
+            document.getElementById('llm-error-box').textContent =
+                '初筛失败: ' + (data.error || '未知错误');
+            document.getElementById('llm-start-btn').disabled = false;
+        }
+    } catch (err) {
+        document.getElementById('llm-loading-box').classList.add('d-none');
+        document.getElementById('llm-error-box').classList.remove('d-none');
+        document.getElementById('llm-error-box').textContent = '网络错误: ' + err.message;
+        document.getElementById('llm-start-btn').disabled = false;
+    }
+}
 
 // ---- 深度分析手动触发 ----
 const DEEP_ANALYZE_URL = '/api/video/{{ bvid }}/deep-analyze';

@@ -138,6 +138,6 @@ DEFAULT_WEIGHTS = {
     "f18_signature_troll":    0.05,  # 签名引战度: 个性签名含挑衅/嘲讽/引战话术
 }
 
-# 风险等级阈值 (v2.8: MEDIUM 40→30, 让 borderline 账号不再被标为 low)
-RISK_HIGH = 70
+# 风险等级阈值 (v2.16: HIGH 70→60, 更积极捕获水军)
+RISK_HIGH = 60
 RISK_MEDIUM = 30

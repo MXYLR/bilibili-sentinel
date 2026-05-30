@@ -18,6 +18,63 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# ---- 简易 Markdown → HTML（不依赖第三方包）---
+
+
+def _md_to_html(text: str) -> str:
+    """极简 Markdown 渲染：加粗/斜体/代码/标题/列表/换行。"""
+    if not text:
+        return ""
+    import re as _re
+    lines = text.split("\n")
+    out = []
+    in_ul = False
+
+    def _inline(s: str) -> str:
+        s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        s = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+        s = _re.sub(r"\*(.+?)\*", r"<em>\1</em>", s)
+        s = _re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        return s
+
+    for line in lines:
+        # 标题
+        m = _re.match(r"^(#{1,6})\s+(.*)", line)
+        if m:
+            n = len(m.group(1))
+            out.append(f"<h{n}>{_inline(m.group(2))}</h{n}>")
+            continue
+        # 无序列表
+        m = _re.match(r"^- (.+)", line)
+        if m:
+            if not in_ul:
+                out.append("<ul>")
+                in_ul = True
+            out.append(f"<li>{_inline(m.group(1))}</li>")
+            continue
+        # 有序列表
+        m = _re.match(r"^\d+\.\s+(.+)", line)
+        if m:
+            if not in_ul:
+                out.append("<ol>")
+                in_ul = True
+            out.append(f"<li>{_inline(m.group(1))}</li>")
+            continue
+        # 列表结束
+        if in_ul:
+            out.append("</ul>" if "</ol>" not in out[-1] else "</ol>")
+            in_ul = False
+        # 空行 → 段落分隔
+        if not line.strip():
+            out.append("<br><br>")
+            continue
+        # 普通段落
+        out.append(f"<p>{_inline(line)}</p>")
+
+    if in_ul:
+        out.append("</ul>" if "<ul>" in "".join(out[-5:]) else "</ol>")
+    return "\n".join(out)
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -37,7 +94,7 @@ def _read_spider_log(spider_name: str, tail_lines: int = 50) -> dict:
     """从共享的 Scrapy LOG_FILE 中按爬虫名过滤日志行。
 
     Scrapy LOG_FORMAT: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
-    爬虫的 logger name 即爬虫名，所以过滤 [bilibili_video] / [bilibili_comment]
+    爬虫的 logger name 即爬虫名,所以过滤 [bilibili_video] / [bilibili_comment]
     """
     if not os.path.exists(CRAWLER_LOG_PATH):
         return {"total_lines": 0, "recent": "", "log_file": CRAWLER_LOG_PATH}
@@ -308,10 +365,6 @@ class SpiderManager:
             if not os.path.exists(SCRAPY_EXE):
                 return {"success": False, "message": f"Scrapy 可执行文件未找到: {SCRAPY_EXE}"}
             try:
-                # 截断共享日志文件，避免旧运行的 [spider_idle] 污染 is_idle_stuck 检测
-                shared_log = os.path.join(DATA_DIR, "logs", "bilibili_crawler.log")
-                if os.path.exists(shared_log):
-                    os.remove(shared_log)
                 log_file = os.path.join(
                     DATA_DIR, "logs", f"{spider_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
                 )
@@ -1067,6 +1120,13 @@ def _load_report(bvid: str) -> dict:
         return json.load(f)
 
 
+def _save_report(bvid: str, report: dict) -> None:
+    report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+
 def _load_video_info(bvid: str) -> dict:
     video_path = Path(DATA_DIR) / "videos" / f"{bvid}.json"
     if not video_path.exists():
@@ -1132,16 +1192,30 @@ def video_detail(bvid: str):
 
     comment_count = len(comments)
 
-    # 构建 mid → risk_level 快速查找表
-    risk_map = {}
-    if report and "top_suspects" in report:
-        for u in report["top_suspects"]:
-            mid = u.get("mid", 0)
-            if mid:
-                risk_map[mid] = {
-                    "score": u.get("score", 0),
-                    "level": u.get("risk_level", "low"),
-                }
+    # ---- 后端预渲染 AI 摘要 Markdown → HTML ----
+    ai_summary_html = ""
+    if report and report.get("ai_summary"):
+        try:
+            ai_summary_html = _md_to_html(report["ai_summary"])
+        except Exception:
+            ai_summary_html = report["ai_summary"].replace("\n", "<br>")
+
+    # ---- 构建全量 user_scores（供前端 riskMap 使用）----
+    user_scores = {}
+    # 优先读全量导出字段（report_generator.py 写入）
+    _src = (report.get("scored_users_export") or report.get("scored_users") or []) if report else []
+    if not _src:
+        # 降级：从 top_suspects 构建
+        _src = (report.get("top_suspects") or []) if report else []
+    for u in _src:
+        mid = u.get("mid", 0)
+        if mid:
+            user_scores[mid] = {
+                "score": u.get("suspicious_score", u.get("score", 0)),
+                "level": u.get("risk_level", u.get("level", "low")),
+                "type": u.get("water_army_type", u.get("llm_type_name", "")),
+                "llm_type_id": u.get("llm_type_id", 0),
+            }
 
     return render_template(
         "video_detail.html",
@@ -1150,7 +1224,8 @@ def video_detail(bvid: str):
         report=report,
         comments=comments,
         comment_count=comment_count,
-        risk_map=risk_map,
+        ai_summary_html=ai_summary_html,
+        user_scores=user_scores,
     )
 
 
@@ -1470,6 +1545,121 @@ def api_user_llm_analyze(bvid: str, mid: int):
         })
     except Exception as e:
         logger.error(f"单用户 LLM 分析失败 (mid={mid}): {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+@app.route("/api/video/<bvid>/llm-screen", methods=["POST"])
+def api_video_llm_screen(bvid: str):
+    """批量 LLM 初筛：对评分 >= threshold 的用户执行 LLM 语义分析，结果写回报告。"""
+    data = request.get_json(silent=True) or {}
+    threshold = max(0, int(data.get("threshold", 30)))
+    try:
+        report = _load_report(bvid)
+        if not report:
+            return jsonify({"success": False, "error": "报告不存在"}), 404
+
+        # 收集所有需要初筛的用户（score >= threshold）
+        candidates = []
+        _src = (report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or [])
+        for u in _src:
+            score = u.get("suspicious_score", u.get("score", 0))
+            if score < threshold:
+                continue
+            candidates.append({
+                "mid": u.get("mid"),
+                "uname": u.get("uname", ""),
+                "suspicious_score": score,
+                "comments": u.get("comments", []),
+                "features": u.get("features", {}),
+                "sign": u.get("sign", ""),
+            })
+
+        if not candidates:
+            return jsonify({"success": True, "total": 0, "success_count": 0, "message": "没有需要初筛的用户"})
+
+        # 调用 LLM 分析器（批量）
+        from analyzer.llm_analyzer import create_llm_analyzer
+        analyzer = create_llm_analyzer()
+        if not analyzer or not analyzer.is_available:
+            return jsonify({"success": False, "error": "LLM 分析未启用，请检查配置"}), 400
+
+        # 分批处理（每批 5 人）
+        batch_size = 5
+        enhanced_by_mid = {}
+        import math
+        total_batches = math.ceil(len(candidates) / batch_size)
+        # 加载评论数据（analyze 需要全部评论作为上下文）
+        comments_data = _load_comments(bvid)
+        for i in range(0, len(candidates), batch_size):
+            batch = candidates[i:i+batch_size]
+            try:
+                result = analyzer.analyze(batch, comments_data)
+                for u in result.get("enhanced_users", []):
+                    enhanced_by_mid[u["mid"]] = u
+            except Exception as e:
+                logger.warning(f"LLM 初筛批次 {i//batch_size+1} 失败: {e}")
+
+        # 写回报告（更新数据源 + 同步 top_suspects）
+        updated = 0
+        _writeback_src = report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or []
+        for user in _writeback_src:
+            mid = user.get("mid")
+            if mid in enhanced_by_mid:
+                enh = enhanced_by_mid[mid]
+                user["llm_type_id"] = enh.get("llm_type_id", 0)
+                user["llm_type_name"] = enh.get("llm_type_name", "")
+                user["llm_confidence"] = enh.get("llm_confidence", 0)
+                user["llm_reasoning"] = enh.get("llm_reasoning", "")
+                user["llm_key_evidence"] = enh.get("llm_key_evidence", [])
+                user["llm_analyzed"] = True
+                updated += 1
+
+        # 同步到 top_suspects（如果数据源不同）
+        if _writeback_src is not report.get("top_suspects"):
+            for user in report.get("top_suspects", []):
+                mid = user.get("mid")
+                if mid in enhanced_by_mid:
+                    enh = enhanced_by_mid[mid]
+                    user["llm_type_id"] = enh.get("llm_type_id", 0)
+                    user["llm_type_name"] = enh.get("llm_type_name", "")
+                    user["llm_confidence"] = enh.get("llm_confidence", 0)
+                    user["llm_reasoning"] = enh.get("llm_reasoning", "")
+                    user["llm_key_evidence"] = enh.get("llm_key_evidence", [])
+                    user["llm_analyzed"] = True
+
+        # 重新计算 AI 摘要
+        try:
+            from analyzer.report_generator import ReportGenerator
+            gen = ReportGenerator.__new__(ReportGenerator)
+            gen.report = report
+            gen.llm_stats = report.get("llm_stats", {})
+            ai_parts = ["## LLM 初筛结果"]
+            ai_parts[0] += "\n"
+            for u in report.get("top_suspects", [])[:10]:
+                if u.get("llm_type_id", 0) > 0:
+                    ai_parts.append(f"**{u.get('uname', '')}**（{u.get('llm_type_name', '')}，置信度 {u.get('llm_confidence', 0):.0%}）")
+            report["ai_summary"] = "\n".join(ai_parts) if len(ai_parts) > 1 else report.get("ai_summary", "")
+        except Exception:
+            pass
+
+        # 统计识别的各类型水军数量
+        type_counts = {}
+        for user in _writeback_src:
+            tid = user.get("llm_type_id", 0)
+            if tid > 0:
+                tname = user.get("llm_type_name", "未知")
+                type_counts[tname] = type_counts.get(tname, 0) + 1
+
+        _save_report(bvid, report)
+        return jsonify({
+            "success": True,
+            "total": len(candidates),
+            "success_count": updated,
+            "identified_types": type_counts,
+        })
+    except Exception as e:
+        logger.error(f"批量 LLM 初筛失败 (bvid={bvid}): {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2385,10 +2575,11 @@ def api_crawler_force_stop(spider_name: str):
 
 @app.route("/api/crawler/start-both", methods=["POST"])
 def api_crawler_start_both():
-    r1 = spider_mgr.start_spider("bilibili_video")
-    time.sleep(0.5)
-    r2 = spider_mgr.start_spider("bilibili_comment")
-    return jsonify({"success": r1["success"] or r2["success"], "video": r1, "comment": r2})
+    results = {}
+    for name in ("bilibili_video", "bilibili_comment", "bilibili_up_videos"):
+        results[name] = spider_mgr.start_spider(name)
+        time.sleep(0.3)
+    return jsonify({"success": True, "results": results})
 
 
 @app.route("/api/crawler/stop-all", methods=["POST"])

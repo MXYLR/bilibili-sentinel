@@ -304,9 +304,9 @@ class WaterArmyStore:
 
     @staticmethod
     def _calc_risk(score: float) -> str:
-        if score >= 70:
+        if score >= 60:
             return "high"
-        elif score >= 40:
+        elif score >= 30:
             return "medium"
         return "low"
 

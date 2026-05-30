@@ -145,7 +145,7 @@
 </div>
 {% endblock %}
 
-{% block extra_js %}
+{% block extra_scripts %}
 <script>
 let currentPage = 1;
 let selected = new Set();
@@ -186,7 +186,9 @@ function renderTable(accounts) {
             <td><input type="checkbox" class="form-check-input wa-cb" value="${a.mid}" onchange="updateBatchBtn()"></td>
             <td>${avatarHtml}</td>
             <td>
-                <strong>${esc(a.uname)}</strong>
+                <a href="https://space.bilibili.com/${a.mid}" target="_blank" class="fw-bold text-decoration-none" title="在B站打开用户主页">
+                    ${esc(a.uname)} <i class="bi bi-box-arrow-up-right small text-muted"></i>
+                </a>
                 <small class="text-muted d-block">MID: ${a.mid}</small>
             </td>
             <td><span class="fw-bold text-${riskBadge}">${a.suspicion_score.toFixed(1)}</span></td>
@@ -274,7 +276,7 @@ function showDetail(mid) {
                 <div class="row">
                     <div class="col-md-4 text-center">
                         ${a.avatar ? `<img src="${a.avatar}" width="80" height="80" class="rounded-circle mb-2">` : ''}
-                        <h5>${esc(a.uname)}</h5>
+                        <h5><a href="https://space.bilibili.com/${a.mid}" target="_blank" class="text-decoration-none">${esc(a.uname)} <i class="bi bi-box-arrow-up-right small text-muted"></i></a></h5>
                         <p class="text-muted small">MID: ${a.mid}</p>
                         <div class="progress mb-2" style="height:20px">
                             <div class="progress-bar bg-${riskBadge}" style="width:${Math.min(a.suspicion_score,100)}%">

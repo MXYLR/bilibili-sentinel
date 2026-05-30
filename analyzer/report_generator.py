@@ -156,6 +156,20 @@ class ReportGenerator:
             "ai_summary": "".join(ai_summary_parts),
             "llm_stats": self.llm_stats,
             "deep_stats": self.deep_stats,
+            # 全量评分用户（供前端 riskMap 使用，仅含必要字段）
+            "scored_users_export": [
+                {
+                    "mid": u.get("mid"),
+                    "suspicious_score": u.get("suspicious_score", 0),
+                    "risk_level": u.get("risk_level", "low"),
+                    "water_army_type": u.get("water_army_type", ""),
+                    "llm_type_id": u.get("llm_type_id", 0),
+                    "llm_confidence": u.get("llm_confidence", 0),
+                    "deep_analyzed": u.get("deep_analyzed", False),
+                }
+                for u in self.scored_users
+                if u.get("mid")
+            ],
         }
 
         return report

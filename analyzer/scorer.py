@@ -52,7 +52,7 @@ class WaterArmyScorer:
             decisive_bonus = 0.0
             decisive_tags = []
 
-            # F12 账号骨架: 按命中数比例加成 (v2.9 升级: 分段精确)
+            # F12 账号骨架: 按命中数比例加成 (v2.16 强化: 0.50→0.20起跳)
             f12_val = features.get("f12_account_skeleton", 0)
             if f12_val >= 0.50:
                 if f12_val >= 1.0:
@@ -60,9 +60,15 @@ class WaterArmyScorer:
                 elif f12_val >= 0.75:
                     f12_bonus = 0.25 + (f12_val - 0.75) * 0.40  # 3/4→4/4 区间
                 else:
-                    f12_bonus = 0.12 + (f12_val - 0.50) * 0.52  # 2/4→3/4 区间
+                    f12_bonus = 0.25 + (f12_val - 0.50) * 0.20  # 2/4 起跳 0.25
                 decisive_bonus += f12_bonus
                 decisive_tags.append(f"账号骨架({int(f12_val * 4)}/4)")
+
+            # v2.16: 骨架+F4 组合信号 — 即使无用户数据也强力佐证
+            f4_val = features.get("f4_avatar_verify", 0)
+            if f12_val >= 0.50 and f4_val >= 0.25:
+                decisive_bonus += 0.15
+                decisive_tags.append("骨架+头像异常")
 
             # F14 敏感内容命中 → 强力佐证 (女拳/以乌/造谣)
             if features.get("f14_sensitive_content", 0) >= 1.0:

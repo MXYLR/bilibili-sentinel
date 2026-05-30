@@ -1,12 +1,14 @@
 """
-B站 UP主投稿视频爬虫 (v2.14)
+B站 UP主投稿视频爬虫 (v2.14 → v2.16)
 
 从指定 UP主 MID 的 Redis 种子出发，调用 /x/space/wbi/arc/search API
-分页爬取该 UP主的所有投稿视频列表。
+分页爬取该 UP主的所有投稿视频列表，并联动注入评论种子。
 
 数据流:
   Redis: bilibili_crawler:up_video_seeds → Spider → UpVideoItem → UpVideosPipeline
-  输出: data/up_videos/{mid}_videos.json
+                                                 ↓
+                                 comment_seeds → bilibili_comment spider
+  输出: data/up_videos/{mid}_videos.json + data/comments/{bvid}_comments.json
 
 种子格式 (Redis 队列):
   JSON: {"mid": 123456}
@@ -16,6 +18,7 @@ B站 UP主投稿视频爬虫 (v2.14)
   - WBI 签名 (复用 bilibili_api.build_api_url)
   - Cookie 注入 (可获取更完整的作者信息)
   - 412 风控自适应退避
+  - v2.16: 视频产出后自动注入评论种子 → bilibili_comment 爬虫
 """
 
 import json
@@ -48,7 +51,7 @@ class BilibiliUpVideosSpider(scrapy.Spider):
     custom_settings = {
         "CONCURRENT_REQUESTS_PER_DOMAIN": 2,
         "DOWNLOAD_DELAY": 0.5,
-        "SCHEDULER_IDLE_BEFORE_CLOSE": 30,
+        "SCHEDULER_IDLE_BEFORE_CLOSE": 0,  # 由 spider_idle 自主管理生命周期
     }
 
     def __init__(self, *args, **kwargs):
@@ -69,6 +72,8 @@ class BilibiliUpVideosSpider(scrapy.Spider):
         self._pages_fetched = 0
         self._total_videos = 0
         self._start_time = time.time()
+        self._idle_start = None  # v2.16: 追踪空闲开始时间
+        self.max_idle_time = 120  # 最多等待 120s 新种子
 
         # WBI 预热 (可选, 如果本地缓存已过期则刷新)
         try:
@@ -187,6 +192,10 @@ class BilibiliUpVideosSpider(scrapy.Spider):
             )
             self._videos_collected += 1
 
+            # v2.16: 联动 — 将视频注入评论爬虫队列
+            if bvid and aid and v.get("comment", 0) > 0:
+                self._push_comment_seed(bvid, aid, v.get("comment", 0))
+
         logger.debug(
             f"[mid={mid}] Page {page}: {len(vlist)} videos "
             f"(total collected: {self._videos_collected}/{total_count})"
@@ -221,6 +230,24 @@ class BilibiliUpVideosSpider(scrapy.Spider):
             )
 
     # ================================================================
+    #  评论联动 (v2.16)
+    # ================================================================
+
+    def _push_comment_seed(self, bvid: str, aid: int, reply_count: int):
+        """将视频 bvid 注入评论爬虫的 Redis 队列。"""
+        if not self._redis or reply_count <= 0:
+            return
+
+        task = json.dumps({
+            "bvid": bvid,
+            "aid": aid,
+            "reply_count": reply_count,
+        })
+
+        self._redis.lpush("bilibili_crawler:comment_seeds", task)
+        logger.info(f"[mid] Seeded comment task: {bvid} (aid={aid}, replies={reply_count})")
+
+    # ================================================================
     #  错误处理
     # ================================================================
 
@@ -243,18 +270,35 @@ class BilibiliUpVideosSpider(scrapy.Spider):
         return spider
 
     def spider_idle(self):
-        """空闲时再次检查 Redis 是否有新种子。"""
-        if self._redis:
-            try:
-                remaining = self._redis.llen(UP_VIDEO_SEEDS_KEY)
-                if remaining > 0:
-                    logger.info(f"Spider idle, but {remaining} seeds remain in queue. Continuing...")
-                    # 延迟 1 秒后重新触发 start_requests
-                    from twisted.internet import reactor
-                    reactor.callLater(1, self.crawler.engine.crawl, self.start_requests(), self)
-                    raise scrapy.exceptions.DontCloseSpider("waiting for seeds")
-            except Exception:
-                pass
+        """空闲时检查 Redis 是否有新种子。若无种子则在 max_idle_time 内持续等待。"""
+        if not self._redis:
+            return
+
+        try:
+            remaining = self._redis.llen(UP_VIDEO_SEEDS_KEY)
+        except Exception:
+            return
+
+        if remaining > 0:
+            # 有种子: 重置空闲计时, 立即消费
+            self._idle_start = None
+            logger.info(f"Spider idle, but {remaining} seeds remain in queue. Continuing...")
+            from twisted.internet import reactor
+            reactor.callLater(1, self.crawler.engine.crawl, self.start_requests(), self)
+            raise scrapy.exceptions.DontCloseSpider("waiting for seeds")
+
+        # 无种子: 首次空闲时记录时间, 后续空闲时检查是否超时
+        if self._idle_start is None:
+            self._idle_start = time.time()
+            logger.info(f"No seeds in queue. Will wait up to {self.max_idle_time}s for new seeds...")
+            raise scrapy.exceptions.DontCloseSpider("waiting for seeds (initial)")
+        else:
+            waited = time.time() - self._idle_start
+            if waited < self.max_idle_time:
+                logger.info(f"No seeds yet ({waited:.0f}s / {self.max_idle_time}s). Waiting...")
+                raise scrapy.exceptions.DontCloseSpider("waiting for seeds")
+            else:
+                logger.info(f"No seeds after {waited:.0f}s — closing spider.")
 
     def spider_closed(self, spider, reason):
         elapsed = time.time() - self._start_time

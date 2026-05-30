@@ -132,12 +132,20 @@ def build_user_prompt(users_data: list) -> str:
         features = user.get("features", {})
         comments = user.get("comments", [])
 
-        # 只取前 10 条评论用于分析
-        comment_texts = [
-            (c if isinstance(c, str) else c.get("content", c.get("message", str(c))))
-            for c in comments[:10]
-        ]
-        comments_str = "\n    ".join(f"[{j+1}] {t[:200]}" for j, t in enumerate(comment_texts))
+        # 只取前 10 条评论用于分析，过滤图片URL，防止 LLM API 报 image_url 错误
+        _SKIP_PREFIXES = ("http://", "https://", "//", "data:")
+        comment_texts = []
+        for c in comments[:10]:
+            if isinstance(c, str):
+                t = c
+            else:
+                t = c.get("content", c.get("message", str(c)))
+            # 如果整条评论是一个 URL（图片），跳过
+            t_stripped = (t or "").strip()
+            if t_stripped and any(t_stripped.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+            comment_texts.append(t[:200])
+        comments_str = "\n    ".join(f"[{j+1}] {t}" for j, t in enumerate(comment_texts))
 
         # v2.16: 个性签名加入分析
         sign = user.get("sign", "")

@@ -309,6 +309,7 @@
                     <div>视频种子: <span class="fw-bold" id="q-seeds">--</span></div>
                     <div>评论种子: <span class="fw-bold" id="q-comment-seeds">--</span></div>
                     <div>用户种子: <span class="fw-bold" id="q-user-seeds">--</span></div>
+                    <div>UP主种子: <span class="fw-bold" id="q-up-video-seeds">--</span></div>
                     <div>待爬: <span class="fw-bold" id="q-pending">--</span></div>
                     <div>去重: <span class="fw-bold" id="q-dupe">--</span></div>
                     <div class="mt-1"><span class="badge bg-success" id="redis-ok">Redis: 检测中</span></div>
@@ -342,12 +343,12 @@
 {% block extra_scripts %}
 <script>
 // ===== 数据刷新 =====
-        function refresh() {
-            fetch('/api/crawler/status').then(r=>r.json()).then(d=>{
-                if (!d.success) return;
-                const s = d.data;
-                // 爬虫状态
-                const spiderMap = [
+function refresh() {
+    fetch('/api/crawler/status').then(r=>r.json()).then(d=>{
+        if (!d.success) return;
+        const s = d.data;
+        // 爬虫状态
+        const spiderMap = [
                     {name:'bilibili_video', prefix:'vs', card:'spider-video'},
                     {name:'bilibili_comment', prefix:'cs', card:'spider-comment'},
                     {name:'bilibili_user', prefix:'us', card:'spider-user'},
@@ -387,6 +388,7 @@
         document.getElementById('q-seeds').textContent = q.video_seeds || 0;
         document.getElementById('q-comment-seeds').textContent = q.comment_seeds || 0;
         document.getElementById('q-user-seeds').textContent = q.user_seeds || 0;
+        document.getElementById('q-up-video-seeds').textContent = q.up_video_seeds || 0;
         document.getElementById('q-pending').textContent = q.pending_requests || 0;
         document.getElementById('q-dupe').textContent = q.dupefilter || 0;
         const rOk = document.getElementById('redis-ok');
@@ -560,7 +562,10 @@ function clearCache() {
 
 // ===== 登录弹窗 =====
 function showLoginModal() {
-    const modal = new bootstrap.Modal(document.getElementById('loginModal'));
+    const modalEl = document.getElementById('loginModal');
+    const existing = bootstrap.Modal.getInstance(modalEl);
+    if (existing) existing.dispose();
+    const modal = new bootstrap.Modal(modalEl);
     modal.show();
 
     const container = document.getElementById('qrcode-container');

@@ -23,7 +23,6 @@ import random
 import redis
 import scrapy
 from scrapy import signals
-from scrapy.exceptions import DontCloseSpider
 
 from bilibili_crawler.items import CommentItem
 from bilibili_crawler.utils.bilibili_api import (
@@ -94,6 +93,7 @@ class BilibiliCommentSpider(scrapy.Spider):
         self._page_chunk_counter = {}   # bvid -> 当前块内页计数
         self._chunk_size = {}         # bvid -> 当前块大小（随机 8-15）
         self._chunk_paused = {}       # bvid -> 是否正在块间暂停中
+        self._seed_timer = None       # v2.16: 定时轮询 Redis 种子的 timer handle
 
         logger.info("[__init__] 初始化评论爬虫...")
 
@@ -287,7 +287,9 @@ class BilibiliCommentSpider(scrapy.Spider):
             item["bvid"] = bvid
             item["root"] = reply.get("root", 0)
             item["parent"] = reply.get("parent", 0)
-            item["content"] = reply.get("content", {}).get("message", "")
+            _content = reply.get("content", {})
+            item["content"] = _content.get("message", "")
+            item["pictures"] = _content.get("pictures", [])  # v2.16: 评论图片
             item["ctime"] = reply.get("ctime", 0)
             item["like_count"] = reply.get("like", 0)
             item["rcount"] = reply.get("rcount", 0)  # sub-reply count
@@ -465,7 +467,9 @@ class BilibiliCommentSpider(scrapy.Spider):
             item["bvid"] = bvid
             item["root"] = reply.get("root", root_rpid)
             item["parent"] = reply.get("parent", reply.get("root", 0))
-            item["content"] = reply.get("content", {}).get("message", "")
+            _content = reply.get("content", {})
+            item["content"] = _content.get("message", "")
+            item["pictures"] = _content.get("pictures", [])  # v2.16
             item["ctime"] = reply.get("ctime", 0)
             item["like_count"] = reply.get("like", 0)
             item["rcount"] = reply.get("rcount", 0)
@@ -561,23 +565,24 @@ class BilibiliCommentSpider(scrapy.Spider):
         return spider
 
     def spider_idle(self, spider):
-        """
-        空闲时动态检查 Redis 评论种子队列。
+        self._check_and_consume_seeds()
 
-        两层保护:
-        1. 如果有新种子 → 立即处理 (raise DontCloseSpider)
-        2. 如果无新种子但 idle 未超时 → 继续等待 (raise DontCloseSpider)
-           (给视频爬虫留时间注入种子)
-        3. 空闲超时后 → 允许关闭
-        """
-        import time
+    def _check_and_consume_seeds(self):
+        """轮询 Redis 消费新种子。找到→重置空闲, 无→5s后重试, 超时→关闭。(v2.16)"""
+        from twisted.internet import reactor
+        import redis as _rds
+
+        if self._seed_timer and self._seed_timer.active():
+            self._seed_timer.cancel()
+        self._seed_timer = None
 
         try:
-            r = redis.Redis(host=_REDIS_HOST, port=_REDIS_PORT, db=_REDIS_DB,
-                            decode_responses=True)
+            r = _rds.Redis(host=_REDIS_HOST, port=_REDIS_PORT, db=_REDIS_DB,
+                           decode_responses=True)
             r.ping()
         except Exception:
-            logger.warning("[spider_idle] Redis 不可用，允许关闭")
+            logger.warning("[_check_seeds] Redis 不可用, 5s 后重试")
+            self._seed_timer = reactor.callLater(5, self._check_and_consume_seeds)
             return
 
         new_count = 0
@@ -589,94 +594,41 @@ class BilibiliCommentSpider(scrapy.Spider):
             try:
                 task = json.loads(raw)
             except Exception:
-                logger.warning(f"[spider_idle] 跳过无效种子: {raw[:80]}")
+                logger.warning(f"[_check_seeds] 无效种子: {raw[:80]}")
                 continue
-
             bvid = task.get("bvid", "")
             aid = task.get("aid", 0)
-            reply_count = task.get("reply_count", 0)
-            max_pages = task.get("max_pages", MAX_COMMENT_PAGES)
-            sort = task.get("sort", 0)
-
-            if not bvid:
+            if not bvid or not aid:
                 continue
-
-            # 如果只有 bvid 没有 aid，通过 API 查询
-            if bvid and not aid:
-                try:
-                    import requests
-                    video_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                      "Chrome/120.0.0.0 Safari/537.36",
-                        "Referer": "https://www.bilibili.com/",
-                    }
-                    resp = requests.get(video_url, headers=headers, timeout=10)
-                    video_data = resp.json().get("data", {})
-                    aid = video_data.get("aid", 0)
-                    reply_count = reply_count or video_data.get("stat", {}).get("reply", 0)
-                except Exception as e:
-                    logger.error(f"[spider_idle] BVID→AID 失败: {bvid}: {e}")
-                    continue
-
-            if not aid:
-                continue
-
-            # 跳过已处理过的 bvid
             if bvid in self._video_counters and self._video_counters[bvid] > 0:
-                logger.info(f"[spider_idle] 跳过已处理的 {bvid}")
                 continue
-
             self._video_counters[bvid] = 0
-            self._max_pages[bvid] = max_pages
-
-            url = get_comments_url(aid, page=1, sort=sort)
+            self._max_pages[bvid] = task.get("max_pages", MAX_COMMENT_PAGES)
             req = scrapy.Request(
-                url=url,
+                url=get_comments_url(aid, page=1, sort=task.get("sort", 0)),
                 callback=self.parse_comments_page,
                 meta={"bvid": bvid, "aid": aid, "page": 1,
-                      "reply_count": reply_count, "max_pages": max_pages,
-                      "sort": sort},
+                      "reply_count": task.get("reply_count", 0),
+                      "max_pages": task.get("max_pages", MAX_COMMENT_PAGES),
+                      "sort": task.get("sort", 0)},
                 dont_filter=True,
             )
-            self._prepared_requests.append(req)
-            try:
-                self.crawler.engine.crawl(req)
-            except Exception as _crawl_err:
-                logger.error(
-                    f"[spider_idle] crawl() 失败: {bvid}: {_crawl_err}"
-                )
-                continue
-            logger.info(
-                f"[spider_idle] 动态添加种子: {bvid} aid={aid} "
-                f"comments≈{reply_count} max_pages={max_pages}"
-            )
+            self.crawler.engine.crawl(req)
+            logger.info(f"[_check_seeds] +{bvid} aid={aid}")
 
         if new_count > 0:
-            self._idle_start_time = None  # 重置空闲计时器
-            logger.info(
-                f"[spider_idle] 检测到 {new_count} 个新种子，阻止关闭"
-            )
-            raise DontCloseSpider(f"发现 {new_count} 个新评论种子，继续运行")
+            self._idle_start_time = None
+            return
 
-        # ---- 无新种子：检查空闲超时 ----
         now = time.time()
         if self._idle_start_time is None:
             self._idle_start_time = now
-
         elapsed = now - self._idle_start_time
         if elapsed < self.max_idle_time:
-            logger.info(
-                f"[spider_idle] 暂无新种子，继续等待 "
-                f"(空闲 {elapsed:.0f}s / 上限 {self.max_idle_time}s)"
-            )
-            raise DontCloseSpider("等待视频爬虫注入评论种子...")
+            logger.info(f"[_check_seeds] 无种子 ({elapsed:.0f}s/{self.max_idle_time}s), 5s 后重试")
+            self._seed_timer = reactor.callLater(5, self._check_and_consume_seeds)
         else:
-            logger.info(
-                f"[spider_idle] 空闲超时 ({elapsed:.0f}s >= {self.max_idle_time}s)，"
-                f"允许正常关闭"
-            )
+            logger.info(f"[_check_seeds] 空闲超时 ({elapsed:.0f}s), 允许关闭")
 
     def spider_closed(self, spider, reason):
         """爬虫关闭时输出汇总统计"""

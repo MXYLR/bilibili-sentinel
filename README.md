@@ -1,30 +1,30 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.8。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.17。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
 ## 系统架构
 
 ```
-                          run_all.bat (一键启动)
+                          run_all.bat (一键启动 3 爬虫)
                                 |
-           ┌────────────────────┼────────────────────┐
-           v                    v                    v
-    Video Spider         Comment Spider        Flask Dashboard
-    (Scrapy-Redis)       (Scrapy-Redis)       (Port 5001, 48 routes)
-           |                    |                    |
-           `-----------+--------'                    |
-                       v                             v
-                    Redis                      analyzer/ engine
-                (调度/去重/种子)           (F1-F15 特征 + LLM 语义)
-                       |                             |
-                       v                             v
-                 store/ (JSON)              AICU (用户历史回溯
-                                                    含弹幕/评论/标记)
-                                                     |
-                                                     v
-                                              LLM API (DeepSeek)
+     ┌────────────────────┬─────┴────────┬────────────────────┐
+     v                    v              v                    v
+Video Spider       Comment Spider   User Spider        Flask Dashboard
+(Scrapy-Redis)     (Scrapy-Redis)   (Scrapy-Redis)    (Port 5001, 58 routes)
+     |                    |              |                    |
+     `---------+----------+------+-------`                    |
+               v                 v                            v
+            Redis          fetch_user_posts.py         analyzer/ engine
+        (调度/去重/种子)    (独立curl_cffi采集)      (F1-F18 特征 + LLM 语义)
+               |                 |                            |
+               v                 v                            v
+         store/ (JSON)   data/users/*_posts.json    AICU (用户历史回溯
+                                                        含弹幕/评论/标记)
+                                                             |
+                                                             v
+                                                      LLM API (DeepSeek)
 ```
 
 **核心流程**: Dashboard 是用户交互中心 → 爬虫在后台采集数据到 JSON 文件 → 分析引擎按需执行水军检测 → 结果回传 Dashboard 可视化展示。
@@ -37,14 +37,15 @@ B站水军评论智能检测与可视化分析系统 v2.8。基于 Scrapy-Redis 
 - **视频搜索**: 关键词搜索 + 热门排行 + UP主全部投稿（`bilibili_mid://` 种子），采集视频元信息
 - **评论采集**: 双排序模式（时间排序耗尽自动切换热度），支持楼中楼主评论，单视频上限 10,000 条
 - **用户空间**: 三阶段采集（用户画像 → 投稿列表 → 动态列表），注入 UID 后自动联动视频+评论爬虫
-- **弹幕数据**: 集成在 AICU 深度分析中，通过 AICU API 自动获取用户历史弹幕（非独立爬虫）
+- **用户动态**: `tools/fetch_user_posts.py` 独立脚本，用 curl_cffi 绕过 412 批量采集用户动态，存为 `data/users/{mid}_posts.json`，供 F13/F14 特征使用
+- **弹幕数据**: 集成在 AICU 深度分析中，通过 AICU API 自动获取用户历史弹幕（已移除独立弹幕爬虫）
 - **种子联动**: 注入用户 UID → 自动推入视频爬虫队列 → 视频爬虫拉取 UP主全部投稿 → 有评论的视频自动推入评论队列
 
 ### 水军检测
 - **18 维特征评分引擎 (F1-F18)**: 覆盖账号身份、行为模式、内容质量、空间画像四大维度
-- **LLM 语义分析**: 多 Provider 支持（DeepSeek V4 / OpenAI GPT-4o / 自定义端点），批量评估评论语义，支持 Modal 弹窗阈值调节
+- **LLM 语义分析**: 多 Provider 支持（DeepSeek V4 / OpenAI GPT-4o / 自定义端点），异步后台执行 + 前端轮询进度，支持 Modal 阈值调节
 - **AICU 深度分析**: 对高风险用户回溯历史评论/弹幕/动态，三次融合评分（引擎 50% + LLM 25% + 深度 25%），同样支持 Modal 阈值调节
-- **8 种水军类型识别**: 模板刷评 / 情绪引导 / AI 生成 / 引流广告 / 批量操控 / 养号 / 引战 / 敏感内容
+- **8 种水军类型识别**: 模板刷评 / 情绪引导 / AI 生成 / 引流广告 / 批量操控 / 黑产养号 / 对立引战 / 敏感内容
 - **可视化报告**: 雷达图 + 评分分布 + 时间线 + 用户详情弹窗（含特征进度条与 LLM 证据）
 
 ### 反检测体系 (412 对抗)
@@ -61,7 +62,7 @@ B站水军评论智能检测与可视化分析系统 v2.8。基于 Scrapy-Redis 
 ### Dashboard 控制台
 - **系统总览** `/`: 健康卡片 + 统计数据 + UP主分组折叠面板 + 播放量/评论数分桶 + 桶内独立翻页 + 页码跳转
 - **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM/AICU Modal 弹窗分析 + 特征触发图表 + 用户详情弹窗 + UP主收录按钮
-- **爬虫控制** `/crawler`: 3 爬虫管理 (视频/评论/用户) + 种子注入 + 代理池状态 + 登录面板 + 种子联动说明
+- **爬虫控制** `/crawler`: 3 爬虫管理 (视频/评论/用户) + 种子注入 + 代理池状态 + 登录面板 + 按钮功能注释
 - **水军账号管理** `/water-army`: 收录水军库管理 + 搜索/筛选/排序 + 备注编辑 + CSV/JSON 导出 + 用户主页直达链接
 - **系统设置** `/settings`: 功能开关 + LLM 多 Provider 配置 + AICU 深度分析 + 代理参数
 
@@ -152,7 +153,7 @@ scrapy crawl bilibili_comment
 | F1 账号年龄 | 0.07 | 注册 < 30 天 + 评论多 → 新号水军 |
 | F2 粉丝/关注比 | 0.04 | 粉丝 < 50 + 关注 > 500 → 刷粉号模式 |
 | F3 用户等级 | 0.09 | Lv0-2 + 高频评论 → 典型水军行为 |
-| F4 头像/认证 | 0.06 | 无头像/无认证/无签名 → 三无账号，每缺一项 +0.34 |
+| F4 头像/认证 | 0.05 | 无头像 + 无认证 → 两无账号，每缺一项 +0.50（签名检测已独立为 F18） |
 | F5 内容相似度 | 0.09 | 评论内容与其他用户高度雷同 → 模板化刷评 |
 | F6 时间爆发 | 0.08 | 短时间窗口密集评论 → 定时控评（Z-score 检测） |
 | F7 情感极端 | 0.04 | 100% 正面或 100% 负面 → 立场预设的机械行为 |
@@ -160,8 +161,8 @@ scrapy crawl bilibili_comment
 | F9 批量注册 | 0.04 | 注册日期高度集中在某几天 → 批量注册账号池 |
 | F10 互动小圈子 | 0.04 | 反复 @ 相同账号互相评论 → 小团体刷量 |
 | F11 VIP 异常 | 0.04 | 低等级 + 购买大会员 → 伪装水军（月费比年费更可疑） |
-| F12 账号骨架 | 0.10 | 无头像 + 用户名乱码 + 无动态 + 无投稿 → 四要素全中 = 100% |
-| F13 转发抽奖 | 0.07 | 无投稿 + 动态全是转发抽奖 → 抽奖专用僵尸号 |
+| F12 账号骨架 | 0.10 | 无头像 + 用户名乱码 + 无动态 + 无投稿 + 默认签名 → 五要素全中 = 100%（空壳号） |
+| F13 转发模式 | 0.07 | 动态中以转发为主：抽奖 > 投票 > 纯转发，三级信号递增（v2.17 扩展） |
 | F14 敏感内容 | 0.10 | 历史动态含女拳/政治/造谣抹黑 → 高级水军 |
 | F15 商业引流 | 0.10 | 评论含赌博/色情/加微信/刷单等硬广告 → 广告水军 |
 | F16 时间规律性 | 0.04 | 评论时间间隔高度规律 → "上班式"机器人发帖 |
@@ -170,7 +171,7 @@ scrapy crawl bilibili_comment
 
 **风险等级**: HIGH >= 70 | MEDIUM >= 30 | LOW < 30
 
-**硬加成**: F12 账号骨架全中 +0.20 / F14 敏感内容命中 +0.20 / F15 赌博色情 +0.20
+**硬加成**: F12 账号骨架 2/5 +0.20 → 3/5 +0.25 → 4/5 +0.30 → 5/5 +0.35 | F14 敏感内容命中 +0.20 | F15 商业引流 +0.20 | F18 签名引战 >=0.50 +0.15 | 骨架+头像组合 +0.15
 
 ---
 
@@ -179,7 +180,7 @@ scrapy crawl bilibili_comment
 ```
 bilibili-sentinel/
 ├── analyzer/                  # 水军分析引擎
-│   ├── feature_extractor.py   #   F1-F15 特征提取
+│   ├── feature_extractor.py   #   F1-F18 特征提取
 │   ├── scorer.py              #   加权评分器
 │   ├── llm_analyzer.py        #   LLM 语义分析核心
 │   ├── llm_prompts.py         #   LLM Prompt 构造
@@ -254,9 +255,11 @@ bilibili-sentinel/
 | | `GET /settings` | 系统设置 |
 | 数据 | `GET /api/videos` | 已采集视频列表 |
 | | `GET /api/comments/<bvid>` | 评论分页 (含楼中楼) |
+| | `GET /api/score-distribution/<bvid>` | 水军评分分布 (5 桶直方图) |
 | | `GET /api/danmaku/<bvid>` | 弹幕分页 |
 | | `GET /api/report/<bvid>` | 水军分析报告 |
 | 分析 | `POST /api/run-analysis/<bvid>` | 执行全量分析 |
+| | `GET /api/analysis-status/<bvid>` | 分析进度轮询 |
 | | `POST /api/video/<bvid>/llm-screen` | 批量 LLM 初筛（支持阈值参数） |
 | | `POST /api/video/<bvid>/user/<mid>/llm-analyze` | 单用户 LLM 分析 |
 | | `POST /api/video/<bvid>/user/<mid>/deep-analyze` | 单用户 AICU 深度分析 |

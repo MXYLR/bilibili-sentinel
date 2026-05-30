@@ -42,10 +42,11 @@
                 <span class="badge bg-info me-2">BV: {{ bvid }} <i class="bi bi-box-arrow-up-right"></i></span>
             </a>
             <span class="text-muted me-3">
-                <i class="bi bi-person"></i> {{ video.get('owner', {}).get('name', video.get('owner_name', 'N/A')) }}
-                {% set owner_mid = video.get('owner', {}).get('mid', video.get('owner_mid', 0)) %}
+                <i class="bi bi-person"></i> {{ video.get('owner', {}).get('name') or video.get('owner_name', 'N/A') }}
+                {% set owner_mid = video.get('owner', {}).get('mid') or video.get('owner_mid', 0) %}
+                {% set owner_name = video.get('owner', {}).get('name') or video.get('owner_name', '') %}
                 {% if owner_mid and owner_mid > 0 %}
-                <button class="btn btn-sm btn-outline-warning ms-2" onclick="addUPToWaterArmy({{ owner_mid }}, '{{ video.get('owner', {}).get('name', video.get('owner_name', '')) | replace("'", "\\'") }}')" title="将该UP主收录至水军账号库">
+                <button class="btn btn-sm btn-outline-warning ms-2" onclick="addUPToWaterArmy({{ owner_mid }}, '{{ owner_name | replace("'", "\\'") }}')" title="将该UP主收录至水军账号库">
                     <i class="bi bi-shield-exclamation"></i> 收录UP主
                 </button>
                 {% endif %}
@@ -488,8 +489,8 @@
                 <!-- 加载动画 -->
                 <div class="text-center d-none py-4" id="llm-loading-box">
                     <div class="spinner-border text-primary mb-2" role="status"></div>
-                    <div class="text-muted">正在调用 LLM 进行水军语义分析...</div>
-                    <div class="small text-muted mt-1">正在处理第 <span id="llm-progress-batch">1</span> 批</div>
+                    <div class="text-muted" id="llm-progress-text">正在调用 LLM 进行水军语义分析...</div>
+                    <div class="small text-muted mt-1">进度: <span id="llm-progress-batch">0/0</span> 批</div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -939,7 +940,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const topSuspects = {{ report.top_suspects | tojson | safe }};
         const featureCounts = {};
-        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','批量注册','互动小圈子','VIP异常','账号骨架','转发抽奖','敏感内容','商业引流','时间规律性','自评相似度'].forEach(n => featureCounts[n] = 0);
+        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','批量注册','互动小圈子','VIP异常','账号骨架','转发模式','敏感内容','商业引流','时间规律性','自评相似度'].forEach(n => featureCounts[n] = 0);
         topSuspects.forEach(user => {
             user.top_features.forEach(f => {
                 if (featureCounts[f.name] !== undefined) featureCounts[f.name]++;
@@ -1096,7 +1097,7 @@ const FEATURE_NAMES_ALL = {
     'f4_avatar_verify':'头像/认证','f5_content_similarity':'内容相似度','f6_time_burst':'时间爆发',
     'f7_sentiment_extreme':'情感极端','f8_like_ratio':'赞评比异常','f9_registration_batch':'批量注册',
     'f10_interaction_ring':'互动小圈子','f11_vip_anomaly':'VIP异常','f12_account_skeleton':'账号骨架',
-    'f13_lottery_repost':'转发抽奖','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流',
+    'f13_lottery_repost':'转发模式','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流',
     'f16_time_regularity':'时间规律性','f17_self_similarity':'自评相似度','f18_signature_troll':'签名引战'
 };
 
@@ -1112,8 +1113,8 @@ const FEATURE_DESCRIPTIONS = {
     '批量注册':   '注册日期集中在某几天→批量注册账号池。由注册日期集中度计算',
     '互动小圈子':  '反复@相同几个账号互相评论→小团体刷量。Top2占80%+即高分',
     'VIP异常':    '低等级+购买大会员→伪装水军。月费会员比年费更可疑(成本低)',
-    '账号骨架':   '无头像+ID乱码+无动态+无投稿→四要素全中=100%水军号',
-    '转发抽奖':   '动态中转发抽奖占比高→抽奖号。投稿越多稀释越多(≤5无影响,20+降50%)',
+    '账号骨架':   '无头像+用户名乱码+无动态+无投稿+默认签名→五要素全中=100%空壳水军号',
+    '转发模式':   '动态以转发为主(抽奖>投票>纯转发)。投稿越多稀释越多(≤5无影响,20+降50%)',
     '敏感内容':   '历史动态含女拳/国际政治/造谣抹黑→高级水军。任意命中=1.0',
     '商业引流':   '评论含赌博/色情/加微信/刷单等硬广告→广告水军。赌博/色情=1.0',
     '时间规律性':  '评论时间间隔高度规律→"上班式"机器人发帖。变异系数<0.3=0.9分',
@@ -1123,7 +1124,9 @@ const FEATURE_DESCRIPTIONS = {
 
 // ---- LLM 初筛手动触发 ----
 const LLM_SCREEN_URL = '/api/video/{{ bvid }}/llm-screen';
+const LLM_SCREEN_STATUS_URL = '/api/llm-screen-status/{{ bvid }}';
 let llmScreenModal = null;
+let llmScreenPollTimer = null;
 
 function openLlmScreenModal() {
     if (!llmScreenModal) {
@@ -1172,6 +1175,7 @@ async function startLlmScreen() {
     document.getElementById('llm-error-box').classList.add('d-none');
 
     try {
+        // 发起异步 LLM 初筛（立即返回）
         const resp = await fetch(LLM_SCREEN_URL, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1179,37 +1183,76 @@ async function startLlmScreen() {
         });
         const data = await resp.json();
 
-        document.getElementById('llm-loading-box').classList.add('d-none');
+        if (!data.success) {
+            document.getElementById('llm-loading-box').classList.add('d-none');
+            document.getElementById('llm-error-box').classList.remove('d-none');
+            document.getElementById('llm-error-box').textContent = '启动失败: ' + (data.error || '未知错误');
+            document.getElementById('llm-start-btn').disabled = false;
+            return;
+        }
 
-        if (data.success) {
-            // 显示结果
+        if (data.total === 0) {
+            document.getElementById('llm-loading-box').classList.add('d-none');
             document.getElementById('llm-result-box').classList.remove('d-none');
             document.getElementById('llm-result-icon').className = 'bi bi-check-circle-fill text-success fs-5';
-            if (data.total > 0) {
-                document.getElementById('llm-result-title').textContent =
-                    'LLM 初筛完成！成功 ' + data.success_count + '/' + data.total + ' 个用户';
-            } else {
-                document.getElementById('llm-result-title').textContent = '没有符合条件的用户（评分均 < ' + threshold + '）';
-            }
-            document.getElementById('llm-r-total').textContent = data.total || '--';
-            document.getElementById('llm-r-analyzed').textContent = data.success_count || '--';
-
-            // 统计识别的水军类型
-            let identified = 0;
-            if (data.identified_types) {
-                identified = Object.values(data.identified_types).reduce((a, b) => a + b, 0);
-            }
-            document.getElementById('llm-r-identified').textContent = identified || '--';
-
-            // 自动刷新页面
-            setTimeout(() => location.reload(), 2500);
-        } else {
-            // 显示错误
-            document.getElementById('llm-error-box').classList.remove('d-none');
-            document.getElementById('llm-error-box').textContent =
-                '初筛失败: ' + (data.error || '未知错误');
+            document.getElementById('llm-result-title').textContent = '没有符合条件的用户（评分均 < ' + threshold + '）';
             document.getElementById('llm-start-btn').disabled = false;
+            return;
         }
+
+        // 轮询进度
+        const PROGRESS_TEXT = document.getElementById('llm-progress-text');
+        const PROGRESS_BATCH = document.getElementById('llm-progress-batch');
+
+        function updateProgress(text, done, total) {
+            if (PROGRESS_TEXT) PROGRESS_TEXT.textContent = text;
+            if (PROGRESS_BATCH && total > 0) PROGRESS_BATCH.textContent = done + '/' + total;
+        }
+
+        updateProgress('正在初始化...', 0, 0);
+
+        llmScreenPollTimer = setInterval(async () => {
+            try {
+                const sResp = await fetch(LLM_SCREEN_STATUS_URL);
+                const sData = await sResp.json();
+                const st = sData.data || {};
+
+                const done = st.done_batches || 0;
+                const total = st.total_batches || 0;
+                updateProgress(st.progress || '分析中...', done, total);
+
+                if (st.status === 'done') {
+                    clearInterval(llmScreenPollTimer);
+                    llmScreenPollTimer = null;
+                    document.getElementById('llm-loading-box').classList.add('d-none');
+                    document.getElementById('llm-result-box').classList.remove('d-none');
+                    document.getElementById('llm-result-icon').className = 'bi bi-check-circle-fill text-success fs-5';
+                    document.getElementById('llm-result-title').textContent =
+                        'LLM 初筛完成！成功 ' + (st.success_count || 0) + '/' + (st.total || 0) + ' 个用户';
+                    document.getElementById('llm-r-total').textContent = st.total || '--';
+                    document.getElementById('llm-r-analyzed').textContent = st.success_count || '--';
+                    let identified = 0;
+                    if (st.identified_types) {
+                        identified = Object.values(st.identified_types).reduce((a, b) => a + b, 0);
+                    }
+                    document.getElementById('llm-r-identified').textContent = identified || '--';
+                    document.getElementById('llm-start-btn').disabled = false;
+                    // 自动刷新页面
+                    setTimeout(() => location.reload(), 2500);
+                } else if (st.status === 'error') {
+                    clearInterval(llmScreenPollTimer);
+                    llmScreenPollTimer = null;
+                    document.getElementById('llm-loading-box').classList.add('d-none');
+                    document.getElementById('llm-error-box').classList.remove('d-none');
+                    document.getElementById('llm-error-box').textContent = '初筛失败: ' + (st.error || '未知错误');
+                    document.getElementById('llm-start-btn').disabled = false;
+                }
+            } catch (pollErr) {
+                // 忽略轮询中的临时网络错误，继续重试
+                console.warn('LLM screen poll error:', pollErr);
+            }
+        }, 2000);
+
     } catch (err) {
         document.getElementById('llm-loading-box').classList.add('d-none');
         document.getElementById('llm-error-box').classList.remove('d-none');

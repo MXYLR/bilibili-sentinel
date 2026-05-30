@@ -37,8 +37,8 @@ WATER_ARMY_TYPES = {
     6: {
         "name": "黑产养号型",
         "description": "账号注册时间集中/相近，等级低但评论频率高，疑似批量注册后养号",
-        "signals": ["注册时间批次集中", "等级低 (Lv0-Lv2)", "无头像/默认头像", "ID乱码/默认名",
-                   "无动态 + 无投稿 = 账号骨架为空"],
+        "signals": ["注册时间批次集中", "等级低 (Lv0-Lv2)", "无头像/默认头像", "用户名乱码(bili_开头)/默认名",
+                   "无动态 + 无投稿 = 账号骨架为空", "默认签名(这个人没有填简介啊~~~)"],
     },
     7: {
         "name": "对立引战型",
@@ -66,7 +66,7 @@ SYSTEM_PROMPT = """你是一个专业的B站水军识别分析师。你的任务
 3. **AI生成型**：内容由AI生成，逻辑怪异、语句不通
 4. **引流广告型**：含联系方式、推广信息
 5. **批量操控型**：多账号同步操作，行为模式一致
-6. **黑产养号型**：批量注册、低等级高活跃、无头像+ID乱码+无动态+无投稿（账号骨架完全为空）
+6. **黑产养号型**：批量注册、低等级高活跃、无头像+用户名乱码(bili_默认名)+无动态+无投稿（账号骨架为空）
 7. **对立引战型**：制造二元对立，激化矛盾
 8. **敏感内容型**：动态含女拳极端言论/以色列乌克兰等时政/造谣抹黑，此类账号100%为职业水军
 
@@ -76,6 +76,7 @@ SYSTEM_PROMPT = """你是一个专业的B站水军识别分析师。你的任务
 - 如果用户行为正常，type_id 设为 0，confidence 设为 0，reasoning 说明正常原因
 - 注意：一个用户可能同时符合多种类型，请选择最匹配的一种
 - 如果看到无头像+ID乱码+无动态+无投稿的"四无账号"，直接判定为 type 6 且 confidence ≥ 90
+- **用户名乱码判定准则**: 仅当用户名为 bili_ 开头的默认名、纯数字串、无意义随机字母数字组合时才算乱码。中日韩文字(汉字/假名/谚文)和标点符号具有自然语义，不算乱码。如"扒饭の骇灵"是有意义的日文混合名≠乱码
 - 如果历史动态中出现女拳/以乌/造谣内容，直接判定为 type 8 且 confidence ≥ 95
 - 请严格按 JSON 格式输出
 
@@ -168,9 +169,12 @@ def build_user_prompt(users_data: list) -> str:
   * 批量注册: {features.get('f9_registration_batch', 0):.2f}
   * 互动圈子: {features.get('f10_interaction_ring', 0):.2f}
   * VIP异常: {features.get('f11_vip_anomaly', 0):.2f}
-  * 账号骨架: {features.get('f12_account_skeleton', 0):.2f} (无头像+ID乱码+无动态+无投稿)
-  * 转发抽奖: {features.get('f13_lottery_repost', 0):.2f} (无投稿+全转发抽奖)
+  * 账号骨架: {features.get('f12_account_skeleton', 0):.2f} (无头像+用户名乱码+无动态+无投稿+默认签名)
+  * 转发模式: {features.get('f13_lottery_repost', 0):.2f} (动态中以转发为主，分抽奖/投票/纯转发)
   * 敏感内容: {features.get('f14_sensitive_content', 0):.2f} (女拳/以乌/造谣)
+  * 商业引流: {features.get('f15_commercial_spam', 0):.2f} (赌博/色情/加微信等硬广告)
+  * 时间规律: {features.get('f16_time_regularity', 0):.2f} (评论间隔高度固定)
+  * 自评相似: {features.get('f17_self_similarity', 0):.2f} (多条评论雷同)
   * 签名引战: {features.get('f18_signature_troll', 0):.2f} (签名含挑衅/嘲讽话术)
   * 综合异常分: {features.get('综合异常分', user.get('suspicious_score', 0)):.2f}
 - 评论内容:

@@ -48,10 +48,14 @@ class FeatureExtractor:
         "别信", "骗人", "资本", "境外势力", "1450", "网军",
     }
 
-    # ---- F13 转发抽奖关键词 ----
+    # ---- F13 转发抽奖/投票关键词 (v2.17 扩展) ----
     _LOTTERY_KW = {
-        "抽奖", "转发", "送", "roll", "揪", "抽", "关注+",
+        "抽奖", "转发抽奖", "送", "roll", "揪", "抽", "关注+",
         "三连", "一键三连", "白嫖", "福利", "粉丝福利",
+    }
+    _VOTE_KW = {
+        "投票", "投一票", "打榜", "打投", "助力", "拉票",
+        "pick", "你最", "请投票", "帮投", "每日一票",
     }
 
     # ---- F18 签名引战关键词库 (v2.16) ----
@@ -560,22 +564,27 @@ class FeatureExtractor:
     #  Feature 12: Account Skeleton (账号骨架检测)
     # ================================================================
 
+    # B站默认个性签名（未修改过）
+    _DEFAULT_SIGN = "这个人没有填简介啊~~~"
+
     def _f12_account_skeleton(self, mid: int, user_comms: list) -> float:
         """
         特征12: 账号骨架检测。
 
-        规则: 无头像 + 用户名乱码 + 无动态 + 无投稿 → 百分百水军
+        规则: 无头像 + 用户名乱码 + 无动态 + 无投稿 + 默认签名 → 空壳号
 
-        四要素每项 0.25 分:
+        五要素每项 0.20 分:
           1. 无头像 (复用 F4 逻辑)
           2. 用户名乱码 (机器生成/默认名/纯数字/键盘乱按)
           3. 无动态 (帖子数=0)
           4. 无投稿 (视频数=0)
+          5. 默认签名 (B站默认"这个人没有填简介啊~~~"，从未修改过)
 
-        全部命中 → 1.0 (百分百水军)
-        三项命中 → 0.75
-        两项命中 → 0.5
-        一项命中 → 0.25
+        5/5 命中 → 1.0 (百分百空壳水军号)
+        4/5 命中 → 0.80
+        3/5 命中 → 0.60
+        2/5 命中 → 0.40
+        1/5 命中 → 0.20
         """
         user = self.users.get(mid, {})
 
@@ -584,12 +593,12 @@ class FeatureExtractor:
         # 1. 无头像
         face = user.get("face", "")
         if not face or "noface" in face:
-            score += 0.25
+            score += 0.20
 
         # 2. 用户名乱码（不是 MID ID）
         uname = user_comms[0].get("uname", "") if user_comms else ""
         if self._is_garbled_name(uname):
-            score += 0.25
+            score += 0.20
 
         # 3. 无动态: 优先用 API 返回的 post_count, 其次用 user_posts 列表长度
         post_count = user.get("post_count")
@@ -597,7 +606,7 @@ class FeatureExtractor:
             posts = self._user_posts.get(mid, [])
             post_count = len(posts)
         if post_count == 0:
-            score += 0.25
+            score += 0.20
 
         # 4. 无投稿
         uploads = user.get("upload_count", -1)
@@ -605,7 +614,12 @@ class FeatureExtractor:
             # 数据不足时不扣此项 (保守策略)
             pass
         elif uploads == 0:
-            score += 0.25
+            score += 0.20
+
+        # 5. 默认签名 (B站默认签名=从未修改过个人简介)
+        sign = user.get("sign", "")
+        if sign == self._DEFAULT_SIGN:
+            score += 0.20
 
         return score
 
@@ -615,19 +629,26 @@ class FeatureExtractor:
 
     def _f13_lottery_repost(self, mid: int) -> float:
         """
-        特征13: 转发抽奖模式。
+        特征13: 转发模式检测（转发动态/转发抽奖/转发投票）。
 
-        规则: 动态中转发抽奖内容占比越高 → 水军号概率越大。
+        规则: 动态中转发内容占比越高 + 转发类型越偏水军 → 得分越高。
         有视频投稿不再直接排除 — 部分水军号会混入少量投稿伪装。
 
-        判定:
-          1. 无动态数据或 <3 条 → 0.0 (数据不足)
-          2. 转发比 > 80% + 抽奖比 > 50% → 0.85 (极高概率)
-          3. 转发比 > 60% → 0.50
-          4. 转发比 > 40% → 0.30
+        三级信号:
+          1. 纯转发 (转发比高但无抽奖/投票特征) → 弱信号
+          2. 转发投票 (含打榜/拉票/投票) → 中等信号
+          3. 转发抽奖 (含抽奖/福利) → 强信号（水军号典型特征）
 
-        v2.16 修正: 移除"有投稿→0.0"硬规则。
-        改为投稿稀释: 少量投稿 (≤5) 几乎不降分, 大量投稿 (>20) 最多降 50%。
+        判定:
+          转发比 > 80% + 抽奖比 > 50% → 0.85 (极高——抽奖号)
+          转发比 > 80% + 投票比 > 50% → 0.65 (高——打投号)
+          转发比 > 80% + 纯转发 > 50%  → 0.40 (中——内容转发工具号)
+          转发比 > 60%                  → 0.50 (中)
+          转发比 > 40%                  → 0.30 (低)
+          其他                           → 0.00
+
+        v2.17: 扩展范围至「转发动态」「转发投票」。
+        v2.16: 移除"有投稿→0.0"硬规则，改为投稿稀释。
         """
         user = self.users.get(mid, {})
 
@@ -638,6 +659,7 @@ class FeatureExtractor:
 
         repost_count = 0
         lottery_count = 0
+        vote_count = 0
 
         for post in posts:
             content = post if isinstance(post, str) else (
@@ -653,28 +675,40 @@ class FeatureExtractor:
 
             if is_repost:
                 repost_count += 1
+                # 三级分类: 抽奖 > 投票 > 纯转发
                 if any(kw in content for kw in self._LOTTERY_KW):
                     lottery_count += 1
+                elif any(kw in content for kw in self._VOTE_KW):
+                    vote_count += 1
+                # else: 纯转发(无特定关键词) — 计入但权重低
 
         total = len(posts)
-        repost_ratio = repost_count / total
+        repost_ratio = repost_count / max(total, 1)
         lottery_ratio = lottery_count / max(repost_count, 1)
+        vote_ratio = vote_count / max(repost_count, 1)
+        pure_repost_ratio = (repost_count - lottery_count - vote_count) / max(repost_count, 1)
 
         # 基础分
         base = 0.0
-        if repost_ratio > 0.8 and lottery_ratio > 0.5:
-            base = 0.85
+        if repost_ratio >= 0.8:
+            if lottery_ratio > 0.5:
+                base = 0.85   # 抽奖号 — 典型水军
+            elif vote_ratio > 0.5:
+                base = 0.65   # 打投号 — 高概率批量操控
+            elif pure_repost_ratio > 0.5:
+                base = 0.40   # 内容转发工具号
+            else:
+                base = 0.30   # 混合型转发
         elif repost_ratio > 0.6:
-            base = 0.5
+            base = 0.50
         elif repost_ratio > 0.4:
-            base = 0.3
+            base = 0.30
         else:
             return 0.0
 
         # v2.16: 投稿稀释 (不再直接清零有投稿的账号)
         uploads = user.get("upload_count", 0)
         if uploads > 0:
-            # 投稿越多稀释越多, 但最多降 50% (保留基本信号)
             # ≤5 投稿 ≈ 不稀释, 10 投稿 ≈ 降 20%, 20+ 投稿 ≈ 降 50%
             dilution = max(0.50, 1.0 - min(uploads, 20) * 0.025)
             base *= dilution
@@ -933,6 +967,10 @@ class FeatureExtractor:
         sign = user.get("sign", "")
         if not sign:
             return 0.0  # 无签名 = 不触发引战检测（由F4三无检测覆盖）
+
+        # 默认签名（从未修改过个人简介）= 不触发引战，归 F12 账号骨架
+        if sign == self._DEFAULT_SIGN:
+            return 0.0
 
         score = 0.0
 

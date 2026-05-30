@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.7
+title Bilibili Sentinel v2.17
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -15,7 +15,7 @@ set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.7
+echo   Bilibili Sentinel v2.17
 echo ============================================================
 echo.
 
@@ -119,16 +119,15 @@ if exist "%ROOT%\analyzer\llm_analyzer.py" (
 if not exist "%ROOT%\data\logs" mkdir "%ROOT%\data\logs"
 
 echo.
-echo [1/4] Starting spiders (video + comment)...
-:: Note: comment spider auto-discovers BVs; user spider gets MID seeds from comment spider
-:: User spider + UP主 seed linkage via Dashboard: Crawler 页面
+echo [1/5] Starting spiders (video + comment + user)...
+:: Start all 3 spiders: video, comment, and user (for F12-F14 account space features)
 start "Bilibili Video Spider"   /MIN cmd /c %VENV_SCRAPY% crawl bilibili_video   ^> %ROOT%\data\logs\video.log   2^>^&1
 start "Bilibili Comment Spider" /MIN cmd /c %VENV_SCRAPY% crawl bilibili_comment ^> %ROOT%\data\logs\comment.log 2^>^&1
-echo   [OK] Video + Comment spiders launched
-echo   [TIP] User spider via Dashboard: Crawler 页面 ^(注入UID自动联动视频+评论爬虫^)
+start "Bilibili User Spider"    /MIN cmd /c %VENV_SCRAPY% crawl bilibili_user    ^> %ROOT%\data\logs\user.log    2^>^&1
+echo   [OK] Video + Comment + User spiders launched
 
 echo.
-echo [2/4] Starting Dashboard on port 5001...
+echo [2/5] Starting Dashboard on port 5001...
 start "Bilibili Sentinel Dashboard" /MIN cmd /c %VENV_PYTHON% -u dashboard\app.py ^> %ROOT%\data\logs\dashboard.log 2^>^&1
 echo   [OK] Dashboard starting...
 
@@ -136,11 +135,11 @@ echo   [OK] Dashboard starting...
 %SystemRoot%\System32\timeout.exe /t 3 /nobreak >nul
 
 echo.
-echo [3/4] Checking service health...
+echo [3/5] Checking service health...
 powershell -Command "try{$r=Invoke-WebRequest -Uri http://localhost:5001/api/system/health -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop;Write-Host '  [OK] Dashboard healthy'}catch{Write-Host '  [WARN] Dashboard not responding yet'}"
 
 echo.
-echo [4/4] Opening browser...
+echo [4/5] Opening browser...
 start http://localhost:5001
 
 echo.
@@ -171,9 +170,8 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.7: LLM初筛Modal化 + UP主种子联动 + AICU弹幕集成
-echo   3爬虫: video/comment/user, 注入UID自动联动视频+评论
-echo   分析流程: Scorer -> LLM初筛 -> AICU深度分析 -> 报告
+echo   v2.17: LLM初筛异步化 + F12五要素 + F13转发模式扩展 + 用户爬虫常驻
+echo   3爬虫: video/comment/user, 全自动种子联动 + 用户动态采集
 echo.
 echo ============================================================
 echo.

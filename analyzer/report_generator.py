@@ -194,9 +194,12 @@ class ReportGenerator:
             "f10_interaction_ring": "互动小圈子",
             "f11_vip_anomaly": "VIP异常",
             "f12_account_skeleton": "账号骨架",
-            "f13_lottery_repost": "转发抽奖",
+            "f13_lottery_repost": "转发模式",
             "f14_sensitive_content": "敏感内容",
             "f15_commercial_spam": "商业引流",
+            "f16_time_regularity": "时间规律性",
+            "f17_self_similarity": "自评相似度",
+            "f18_signature_troll": "签名引战",
         }
         sorted_features = sorted(
             features.items(), key=lambda x: x[1], reverse=True

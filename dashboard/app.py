@@ -1012,6 +1012,54 @@ class AnalysisManager:
                 self._write_state(state)
 
 
+# ============================================================
+#  LLM 初筛进度追踪器 (异步 + 轮询)
+# ============================================================
+
+class LlmScreenTracker:
+    """跟踪 LLM 初筛进度，支持前端轮询。"""
+
+    _tasks: dict = {}  # bvid -> {status, progress, total_batches, done_batches, ...}
+    _lock = threading.Lock()
+
+    @classmethod
+    def start(cls, bvid: str) -> bool:
+        with cls._lock:
+            if bvid in cls._tasks and cls._tasks[bvid].get("status") == "running":
+                return False
+            cls._tasks[bvid] = {
+                "status": "running",
+                "progress": "正在初始化...",
+                "total_batches": 0,
+                "done_batches": 0,
+                "success_count": 0,
+                "total": 0,
+                "error": None,
+            }
+            return True
+
+    @classmethod
+    def update(cls, bvid: str, **kwargs):
+        with cls._lock:
+            if bvid in cls._tasks:
+                cls._tasks[bvid].update(kwargs)
+
+    @classmethod
+    def get_status(cls, bvid: str) -> dict:
+        with cls._lock:
+            t = cls._tasks.get(bvid, {})
+        return {
+            "status": t.get("status", "idle"),
+            "progress": t.get("progress", ""),
+            "total_batches": t.get("total_batches", 0),
+            "done_batches": t.get("done_batches", 0),
+            "success_count": t.get("success_count", 0),
+            "total": t.get("total", 0),
+            "error": t.get("error"),
+            "identified_types": t.get("identified_types", {}),
+        }
+
+
 analysis_mgr = AnalysisManager()
 
 
@@ -1297,22 +1345,17 @@ def api_score_distribution(bvid: str):
     if not report:
         return jsonify({"success": False, "message": "报告不存在"}), 404
     stats = report.get("statistics", {})
-    score_buckets = {"0-10": 0, "10-20": 0, "20-30": 0, "30-40": 0,
-                     "40-50": 0, "50-60": 0, "60-70": 0, "70-80": 0,
-                     "80-90": 0, "90-100": 0}
-    scored = stats.get("score_distribution", [])
-    if scored:
-        for item in scored:
-            score = item.get("score", 0)
-            for bucket in score_buckets:
-                low, high = map(int, bucket.split("-"))
-                if low <= score < high + 1:
-                    score_buckets[bucket] += 1
-                    break
+
+    # score_distribution 由 scorer.get_statistics() 生成，格式为 {"0-20": N, ...}（5桶 dict）
+    # 直接使用，若为空则返回5桶默认值
+    score_dist = stats.get("score_distribution", {})
+    if not score_dist or not isinstance(score_dist, dict):
+        score_dist = {"0-20": 0, "20-40": 0, "40-60": 0, "60-80": 0, "80-100": 0}
+
     return jsonify({
         "success": True,
         "data": {
-            "buckets": score_buckets,
+            "buckets": score_dist,
             "high_risk": stats.get("high_risk_count", 0),
             "medium_risk": stats.get("medium_risk_count", 0),
             "low_risk": stats.get("low_risk_count", 0),
@@ -1577,56 +1620,96 @@ def api_user_llm_analyze(bvid: str, mid: int):
 
 @app.route("/api/video/<bvid>/llm-screen", methods=["POST"])
 def api_video_llm_screen(bvid: str):
-    """批量 LLM 初筛：对评分 >= threshold 的用户执行 LLM 语义分析，结果写回报告。"""
+    """批量 LLM 初筛：异步执行，前端轮询 /api/llm-screen-status/<bvid> 获取进度。"""
     data = request.get_json(silent=True) or {}
     threshold = max(0, int(data.get("threshold", 30)))
+
+    report = _load_report(bvid)
+    if not report:
+        return jsonify({"success": False, "error": "报告不存在"}), 404
+
+    # 检查是否已在运行
+    status = LlmScreenTracker.get_status(bvid)
+    if status["status"] == "running":
+        return jsonify({"success": True, "status": "running", "message": "LLM 初筛已在运行中"})
+
+    # 先收集候选人（验证参数和报告有效性）
+    _src = (report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or [])
+    _top_map = {u.get("mid"): u for u in (report.get("top_suspects") or []) if u.get("mid")}
+
+    candidates = []
+    for u in _src:
+        score = u.get("suspicious_score", u.get("score", 0))
+        if score < threshold:
+            continue
+        info = _top_map.get(u.get("mid"), {})
+        raw_features = info.get("features", {}) or {}
+        first_val = next(iter(raw_features.values()), 0) if raw_features else 0
+        features_01 = {k: round(v / 100, 4) for k, v in raw_features.items()} if first_val > 1.0 else raw_features
+        candidates.append({
+            "mid": u.get("mid"),
+            "uname": info.get("uname", u.get("uname", "")),
+            "suspicious_score": score,
+            "comments": info.get("sample_comments", []),
+            "features": features_01,
+            "sign": info.get("sign", u.get("sign", "")),
+        })
+
+    if not candidates:
+        return jsonify({"success": True, "total": 0, "success_count": 0, "message": "没有需要初筛的用户"})
+
+    # 验证 LLM 可用性
+    from analyzer.llm_analyzer import create_llm_analyzer
+    analyzer = create_llm_analyzer()
+    if not analyzer or not analyzer.is_available:
+        return jsonify({"success": False, "error": "LLM 分析未启用，请检查配置"}), 400
+
+    # 启动后台线程
+    if not LlmScreenTracker.start(bvid):
+        return jsonify({"success": True, "status": "running", "message": "LLM 初筛已在运行中"})
+
+    LlmScreenTracker.update(bvid, total=len(candidates), progress="准备中...")
+
+    threading.Thread(
+        target=_run_llm_screen_bg,
+        args=(bvid, report, candidates, threshold),
+        daemon=True,
+    ).start()
+
+    return jsonify({"success": True, "status": "started", "total": len(candidates)})
+
+
+def _run_llm_screen_bg(bvid: str, report: dict, candidates: list, threshold: int):
+    """后台执行 LLM 初筛的完整流程。"""
+    import math
+    batch_size = 5
+    total_batches = math.ceil(len(candidates) / batch_size)
+    enhanced_by_mid = {}
+    comments_data = _load_comments(bvid)
+
+    LlmScreenTracker.update(bvid, total_batches=total_batches, progress=f"开始分析 (0/{total_batches})")
+
     try:
-        report = _load_report(bvid)
-        if not report:
-            return jsonify({"success": False, "error": "报告不存在"}), 404
-
-        # 收集所有需要初筛的用户（score >= threshold）
-        candidates = []
-        _src = (report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or [])
-        for u in _src:
-            score = u.get("suspicious_score", u.get("score", 0))
-            if score < threshold:
-                continue
-            candidates.append({
-                "mid": u.get("mid"),
-                "uname": u.get("uname", ""),
-                "suspicious_score": score,
-                "comments": u.get("comments", []),
-                "features": u.get("features", {}),
-                "sign": u.get("sign", ""),
-            })
-
-        if not candidates:
-            return jsonify({"success": True, "total": 0, "success_count": 0, "message": "没有需要初筛的用户"})
-
-        # 调用 LLM 分析器（批量）
         from analyzer.llm_analyzer import create_llm_analyzer
         analyzer = create_llm_analyzer()
-        if not analyzer or not analyzer.is_available:
-            return jsonify({"success": False, "error": "LLM 分析未启用，请检查配置"}), 400
 
-        # 分批处理（每批 5 人）
-        batch_size = 5
-        enhanced_by_mid = {}
-        import math
-        total_batches = math.ceil(len(candidates) / batch_size)
-        # 加载评论数据（analyze 需要全部评论作为上下文）
-        comments_data = _load_comments(bvid)
         for i in range(0, len(candidates), batch_size):
-            batch = candidates[i:i+batch_size]
+            batch_num = i // batch_size + 1
+            batch = candidates[i:i + batch_size]
+            LlmScreenTracker.update(bvid, progress=f"分析中 ({batch_num}/{total_batches} 批)",
+                                     done_batches=batch_num - 1)
             try:
                 result = analyzer.analyze(batch, comments_data)
                 for u in result.get("enhanced_users", []):
                     enhanced_by_mid[u["mid"]] = u
+                LlmScreenTracker.update(bvid, done_batches=batch_num)
             except Exception as e:
-                logger.warning(f"LLM 初筛批次 {i//batch_size+1} 失败: {e}")
+                logger.warning(f"LLM 初筛批次 {batch_num} 失败: {e}")
+                LlmScreenTracker.update(bvid, progress=f"批次 {batch_num} 失败，继续中...",
+                                         done_batches=batch_num)
 
-        # 写回报告（更新数据源 + 同步 top_suspects）
+        # 写回报告
+        LlmScreenTracker.update(bvid, progress="正在保存结果...")
         updated = 0
         _writeback_src = report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or []
         for user in _writeback_src:
@@ -1641,7 +1724,6 @@ def api_video_llm_screen(bvid: str):
                 user["llm_analyzed"] = True
                 updated += 1
 
-        # 同步到 top_suspects（如果数据源不同）
         if _writeback_src is not report.get("top_suspects"):
             for user in report.get("top_suspects", []):
                 mid = user.get("mid")
@@ -1654,22 +1736,7 @@ def api_video_llm_screen(bvid: str):
                     user["llm_key_evidence"] = enh.get("llm_key_evidence", [])
                     user["llm_analyzed"] = True
 
-        # 重新计算 AI 摘要
-        try:
-            from analyzer.report_generator import ReportGenerator
-            gen = ReportGenerator.__new__(ReportGenerator)
-            gen.report = report
-            gen.llm_stats = report.get("llm_stats", {})
-            ai_parts = ["## LLM 初筛结果"]
-            ai_parts[0] += "\n"
-            for u in report.get("top_suspects", [])[:10]:
-                if u.get("llm_type_id", 0) > 0:
-                    ai_parts.append(f"**{u.get('uname', '')}**（{u.get('llm_type_name', '')}，置信度 {u.get('llm_confidence', 0):.0%}）")
-            report["ai_summary"] = "\n".join(ai_parts) if len(ai_parts) > 1 else report.get("ai_summary", "")
-        except Exception:
-            pass
-
-        # 统计识别的各类型水军数量
+        # 统计类型
         type_counts = {}
         for user in _writeback_src:
             tid = user.get("llm_type_id", 0)
@@ -1678,15 +1745,18 @@ def api_video_llm_screen(bvid: str):
                 type_counts[tname] = type_counts.get(tname, 0) + 1
 
         _save_report(bvid, report)
-        return jsonify({
-            "success": True,
-            "total": len(candidates),
-            "success_count": updated,
-            "identified_types": type_counts,
-        })
+
+        LlmScreenTracker.update(bvid, status="done", progress="初筛完成",
+                                 success_count=updated, identified_types=type_counts)
     except Exception as e:
         logger.error(f"批量 LLM 初筛失败 (bvid={bvid}): {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        LlmScreenTracker.update(bvid, status="error", progress="初筛出错", error=str(e))
+
+
+@app.route("/api/llm-screen-status/<bvid>")
+def api_llm_screen_status(bvid: str):
+    """轮询 LLM 初筛进度。"""
+    return jsonify({"success": True, "data": LlmScreenTracker.get_status(bvid)})
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/deep-analyze", methods=["POST"])

@@ -125,8 +125,8 @@ DEFAULT_WEIGHTS = {
     "f11_vip_anomaly":        0.03,  # 大会员异常: 低等级+VIP → 伪装嫌疑
 
     # --- 账号空间画像 ---
-    "f12_account_skeleton":   0.15,  # 账号骨架: 无头像+ID乱码+无动态+无投稿 ★ 最强信号
-    "f13_lottery_repost":     0.05,  # 转发抽奖: 无投稿+全转发抽奖动态
+    "f12_account_skeleton":   0.15,  # 账号骨架: 无头像+用户名乱码+无动态+无投稿+默认签名
+    "f13_lottery_repost":     0.05,  # 转发模式: 全转发动态(抽奖/投票/纯转发)
     "f14_sensitive_content":  0.10,  # 敏感内容: 历史动态含女拳/以乌/造谣抹黑
     "f15_commercial_spam":    0.10,  # 商业引流: 赌博/色情/加微信/刷单等硬广告
 

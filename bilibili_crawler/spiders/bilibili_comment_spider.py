@@ -23,6 +23,7 @@ import random
 import redis
 import scrapy
 from scrapy import signals
+from scrapy.exceptions import DontCloseSpider
 
 from bilibili_crawler.items import CommentItem
 from bilibili_crawler.utils.bilibili_api import (
@@ -627,6 +628,7 @@ class BilibiliCommentSpider(scrapy.Spider):
         if elapsed < self.max_idle_time:
             logger.info(f"[_check_seeds] 无种子 ({elapsed:.0f}s/{self.max_idle_time}s), 5s 后重试")
             self._seed_timer = reactor.callLater(5, self._check_and_consume_seeds)
+            raise DontCloseSpider("等待视频爬虫注入新种子...")
         else:
             logger.info(f"[_check_seeds] 空闲超时 ({elapsed:.0f}s), 允许关闭")
 

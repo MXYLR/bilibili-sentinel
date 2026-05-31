@@ -390,7 +390,7 @@ function refreshAll() {
 function startSpider(name) {
     fetch('/api/crawler/start/'+name, {method:'POST'}).then(r=>r.json()).then(d=>{
         showToast(d.message, d.success?'success':'warning');
-        if (d.success) refresh();
+        if (d.success) setTimeout(refresh, 800);  // 等进程启动后再刷新状态
     });
 }
 function stopSpider(name) {

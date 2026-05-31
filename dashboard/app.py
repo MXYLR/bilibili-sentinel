@@ -619,19 +619,44 @@ class SpiderManager:
             except Exception:
                 pass
 
+    def _is_spider_alive(self, spider_name: str, pid=None, log_file: str = None) -> bool:
+        """检测爬虫是否存活：PID 检测 + 日志活跃度回退。
+        
+        scrapy.exe 在 Windows 上会 fork 子进程后退出，PID 可能已失效。
+        回退方案：检查日志文件最近 15 秒内是否有新内容。
+        """
+        if pid and self._is_process_alive(pid):
+            return True
+        log_path = log_file or CRAWLER_LOG_PATH
+        if log_path and os.path.exists(log_path):
+            try:
+                mtime = os.path.getmtime(log_path)
+                if time.time() - mtime < 15:
+                    return True
+            except Exception:
+                pass
+        return False
+
     def get_status(self) -> dict:
         with self._lock:
             state = self._read_state()
             state_changed = False
             spiders = {}
             for name in ["bilibili_video", "bilibili_comment", "bilibili_user"]:
-                entry = state.get(name, {})
+                entry = state.get(name) or {}
                 pid = entry.get("pid")
-                alive = self._is_process_alive(pid) if pid else False
-                # 自愈：如果状态是 running 但进程已死，自动修正
+                log_file = entry.get("log_file")
+                alive = self._is_spider_alive(name, pid, log_file)
+                # 自愈：如果状态是 running 但进程已死，自动修正并持久化
                 if entry.get("status") == "running" and not alive:
                     entry["status"] = "stopped"
                     entry["stopped_at"] = datetime.now().isoformat()
+                    entry["pid"] = None
+                    state[name] = entry
+                    state_changed = True
+                # 如果 entry 不存在（首次启动），创建默认 stopped 状态
+                elif not entry:
+                    entry = {"status": "stopped", "pid": None, "started_at": None, "stopped_at": None}
                     state[name] = entry
                     state_changed = True
                 log_info = _read_spider_log(name, tail_lines=30)
@@ -2019,6 +2044,59 @@ def api_delete_all_data():
         "success": True,
         "message": f"已清空 {total} 个文件",
         "deleted": deleted_counts,
+    })
+
+
+@app.route("/api/data/category", methods=["DELETE"])
+def api_delete_category_data():
+    """删除指定分类的所有数据（热门视频 / UP主视频 / 搜索关键词）。
+    
+    请求体: {"source": "hot"}  或  {"owner_mid": 315812497}
+    
+    删除对应分类下所有视频的 JSON + 评论 + 报告。
+    """
+    data = request.get_json(silent=True) or {}
+    source_filter = data.get("source", "").strip()
+    owner_mid = data.get("owner_mid")
+    
+    if not source_filter and not owner_mid:
+        return jsonify({"success": False, "message": "缺少分类参数 (source 或 owner_mid)"}), 400
+    
+    # 列出所有视频
+    all_videos = _list_video_dirs()
+    matched = []
+    for v in all_videos:
+        if source_filter and v.get("source") == source_filter:
+            matched.append(v.get("bvid"))
+        elif owner_mid is not None and v.get("owner_mid") == owner_mid:
+            matched.append(v.get("bvid"))
+    
+    if not matched:
+        return jsonify({"success": False, "message": "未找到匹配的视频"}), 404
+    
+    # 批量删除
+    deleted_v = deleted_c = deleted_r = 0
+    for bvid in matched:
+        for label, path in [
+            ("v", Path(DATA_DIR) / "videos" / f"{bvid}.json"),
+            ("c", Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"),
+            ("r", Path(DATA_DIR) / "reports" / f"{bvid}_report.json"),
+        ]:
+            try:
+                if path.exists():
+                    path.unlink()
+                    if label == "v": deleted_v += 1
+                    elif label == "c": deleted_c += 1
+                    else: deleted_r += 1
+            except Exception:
+                pass
+    
+    category_name = source_filter or f"UP主(mid={owner_mid})"
+    return jsonify({
+        "success": True,
+        "message": f"已删除「{category_name}」: {len(matched)} 个视频, {deleted_v} 视频文件, {deleted_c} 评论文件, {deleted_r} 报告文件",
+        "video_count": len(matched),
+        "deleted": {"videos": deleted_v, "comments": deleted_c, "reports": deleted_r},
     })
 
 

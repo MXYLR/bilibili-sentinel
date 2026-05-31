@@ -231,7 +231,7 @@ function updateHealthCards() {
 // ---- 视频列表 (UP主分组 + 桶内分页) ----
 const BUCKET_PAGE_SIZE = 12;
 const bucketPageStates = {};
-const upGroupSortMode = {};  // {collId: 'views'|'comments'}
+const upGroupSortMode = {};  // {collId: 'views'|'comments'|'time'}
 const RANGES = {
     views: [
         { key: 'v-high', label: '高播放 ≥1万',    min: 10000, max: Infinity },
@@ -247,6 +247,18 @@ const RANGES = {
     ],
 };
 
+function getTimeRanges() {
+    const now = Math.floor(Date.now() / 1000);
+    const DAY = 86400;
+    return [
+        { key: 't-today',   label: '今天',      min: now - DAY,       max: Infinity },
+        { key: 't-yesterday',label: '昨天',      min: now - 2*DAY,    max: now - DAY - 1 },
+        { key: 't-week',    label: '本周内',     min: now - 7*DAY,    max: now - 2*DAY - 1 },
+        { key: 't-month',   label: '本月内',     min: now - 30*DAY,   max: now - 7*DAY - 1 },
+        { key: 't-older',   label: '更早',       min: 0,              max: now - 30*DAY - 1 },
+    ];
+}
+
 function loadVideos() {
     fetch('/api/videos?page=1&per_page=9999')
         .then(r => r.json())
@@ -260,38 +272,29 @@ function loadVideos() {
                 return;
             }
 
-            // 按UP主分组
-            const groups = {};
-            d.data.forEach(v => {
-                const mid = v.owner_mid || 0;
-                const on = v.owner_name || '未知UP主';
-                const key = mid || 'unknown_' + on;
-                if (!groups[key]) groups[key] = { mid, ownerName: on, videos: [] };
-                groups[key].videos.push(v);
-            });
+            // 分离热门榜视频 vs 其他视频
+            const hotVideos = d.data.filter(v => v.source === 'hot');
+            const restVideos = d.data.filter(v => v.source !== 'hot');
 
-            let html = '';
-            Object.values(groups).forEach((group, gi) => {
+            // 帮函: 构建视频分组 HTML（按UP主归组 + 桶内分页）
+            // sortModes: ['views','comments'] 默认; 热榜加 'time'
+            const buildGroupHtml = (group, collId, showFirst, icon, sortModes = ['views','comments']) => {
                 const totalVideos = group.videos.length;
                 const totalViews = group.videos.reduce((s, v) => s + (v.view_count || 0), 0);
                 const totalComments = group.videos.reduce((s, v) => s + (v.comment_count || 0), 0);
-                const collId = `up-group-${gi}`;
-                if (!(collId in upGroupSortMode)) upGroupSortMode[collId] = 'views';
+                if (!(collId in upGroupSortMode)) upGroupSortMode[collId] = sortModes[0];
 
-                // 构建两个排序下的分桶
                 const buildBuckets = (mode) => {
-                    const rs = RANGES[mode];
+                    const rs = mode === 'time' ? getTimeRanges() : RANGES[mode];
+                    const valFn = mode === 'views' ? (v => v.view_count || 0)
+                                : mode === 'time' ? (v => v.pubdate || 0)
+                                : (v => v.comment_count || 0);
                     return rs.map(r => {
-                        const valFn = mode === 'views' ? (v => v.view_count || 0) : (v => v.comment_count || 0);
                         const vids = group.videos.filter(v => {
                             const val = valFn(v);
                             return val >= r.min && val <= r.max;
                         });
-                        if (mode === 'views') {
-                            vids.sort((a, b) => (b.view_count || 0) - (a.view_count || 0));
-                        } else {
-                            vids.sort((a, b) => (b.comment_count || 0) - (a.comment_count || 0));
-                        }
+                        vids.sort((a, b) => valFn(b) - valFn(a));
                         const bucketKey = `${collId}-${r.key}`;
                         const totalPages = Math.max(1, Math.ceil(vids.length / BUCKET_PAGE_SIZE));
                         bucketPageStates[bucketKey] = { page: 1, totalPages, videos: vids, label: r.label };
@@ -299,28 +302,34 @@ function loadVideos() {
                     }).filter(b => b.count > 0);
                 };
 
-                const buckets = buildBuckets('views');
+                const buckets = buildBuckets(sortModes[0]);
 
-                html += `<div class="col-12 mb-3">
+                const sortBtns = sortModes.map(m => {
+                    const labels = { views: '播放量', comments: '评论数', time: '时间' };
+                    const actives = { views: 'btn-outline-info', comments: 'btn-outline-info', time: 'btn-outline-warning' };
+                    return `<button class="btn btn-sm ${actives[m]}${m===sortModes[0]?' active':''}" id="${collId}-sort-${m}" onclick="switchSortMode('${collId}','${m}')">${labels[m]}</button>`;
+                }).join('');
+
+                return `<div class="col-12 mb-3">
     <div class="card" id="${collId}-card">
         <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#${collId}">
             <div>
-                <strong><i class="bi bi-person-video me-1"></i>${group.ownerName}</strong>
-                <span class="text-muted ms-2">MID: ${group.mid || '--'}</span>
+                <strong><i class="${icon || 'bi bi-person-video'} me-1"></i>${group.ownerName}</strong>
+                <span class="text-muted ms-2">${group.mid ? 'MID: ' + group.mid : ''}</span>
                 <span class="badge bg-secondary ms-2">${totalVideos} 个视频</span>
                 <span class="badge bg-info ms-1">${formatNum(totalViews)} 总播放</span>
                 <span class="badge bg-success ms-1">${formatNum(totalComments)} 总评论</span>
             </div>
             <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation()">
                 <span class="small text-muted">排序:</span>
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-info btn-sm active" id="${collId}-sort-views" onclick="switchSortMode('${collId}','views')">播放量</button>
-                    <button class="btn btn-outline-info btn-sm" id="${collId}-sort-comments" onclick="switchSortMode('${collId}','comments')">评论数</button>
-                </div>
+                <div class="btn-group btn-group-sm">${sortBtns}</div>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteCategory('${collId}', '${group.mid || ''}', '${group.ownerName || ''}', ${totalVideos})" title="删除此分类下所有视频及相关数据">
+                    <i class="bi bi-trash"></i>
+                </button>
                 <i class="bi bi-chevron-down small" id="${collId}-icon"></i>
             </div>
         </div>
-        <div class="collapse${gi===0?' show':''}" id="${collId}">
+        <div class="collapse${showFirst?' show':''}" id="${collId}">
             <div class="card-body pt-2" id="${collId}-body">${buckets.map(b => `
                 <div class="mb-3">
                     <small class="fw-bold text-muted"><i class="bi bi-bar-chart"></i> ${b.label} (${b.count}个)</small>
@@ -334,11 +343,35 @@ function loadVideos() {
         </div>
     </div>
 </div>`;
+            };
+
+            let html = '';
+
+            // ---- 热门榜（单独分组） ----
+            if (hotVideos.length > 0) {
+                html += buildGroupHtml(
+                    { mid: 0, ownerName: '热门榜', videos: hotVideos },
+                    'hot-group', true, 'bi bi-fire', ['views','comments','time']
+                );
+            }
+
+            // ---- UP主分组（排除热门视频） ----
+            const groups = {};
+            restVideos.forEach(v => {
+                const mid = v.owner_mid || 0;
+                const on = v.owner_name || '未知UP主';
+                const key = mid || 'unknown_' + on;
+                if (!groups[key]) groups[key] = { mid, ownerName: on, videos: [] };
+                groups[key].videos.push(v);
+            });
+
+            Object.values(groups).forEach((group, gi) => {
+                html += buildGroupHtml(group, `up-group-${gi}`, gi === 0 && hotVideos.length === 0);
             });
             grid.innerHTML = html;
 
             // 展开时渲染
-            document.querySelectorAll('[id^="up-group-"]').forEach(el => {
+            document.querySelectorAll('[id^="hot-group"], [id^="up-group-"]').forEach(el => {
                 el.addEventListener('show.bs.collapse', function() {
                     const cid = this.id;
                     Object.keys(bucketPageStates).forEach(bk => {
@@ -387,13 +420,14 @@ function renderBucketPage(bucketKey, page = 1) {
 function switchSortMode(collId, mode) {
     upGroupSortMode[collId] = mode;
     // 更新按钮状态
-    document.getElementById(collId + '-sort-views').classList.toggle('active', mode === 'views');
-    document.getElementById(collId + '-sort-comments').classList.toggle('active', mode === 'comments');
+    ['views','comments','time'].forEach(m => {
+        const btn = document.getElementById(collId + '-sort-' + m);
+        if (btn) btn.classList.toggle('active', mode === m);
+    });
 
     // 重建桶数据
-    const rs = RANGES[mode];
-    const gi = parseInt(collId.split('-')[2]);
-    // 从 DOM 重新获取视频数据（从现有的 bucketPageStates 聚合）
+    const rs = mode === 'time' ? getTimeRanges() : RANGES[mode];
+    // 从现有的 bucketPageStates 聚合视频
     const allVids = [];
     const seen = new Set();
     Object.keys(bucketPageStates).forEach(bk => {
@@ -407,7 +441,9 @@ function switchSortMode(collId, mode) {
     if (allVids.length === 0) return;
 
     // 重建 bucketPageStates
-    const valFn = mode === 'views' ? (v => v.view_count || 0) : (v => v.comment_count || 0);
+    const valFn = mode === 'views' ? (v => v.view_count || 0)
+                : mode === 'time' ? (v => v.pubdate || 0)
+                : (v => v.comment_count || 0);
     const newBuckets = rs.map(r => {
         const vids = allVids.filter(v => {
             const val = valFn(v);
@@ -597,6 +633,27 @@ function deleteVideo(bvid, title) {
                     throw new Error(d.message);
                 }
             })
+    );
+}
+
+// ---- 删除分类数据 ----
+function deleteCategory(collId, mid, name, count) {
+    const label = mid ? `UP主「${name}」` : '「热门榜」';
+    confirmDelete(
+        `确定要删除 ${label} 下的全部数据吗？\n\n将删除:\n  - ${count} 个视频信息文件\n  - 对应的评论数据文件\n  - 对应的分析报告文件\n\n此操作不可撤销！`,
+        () => {
+            const body = mid ? { owner_mid: parseInt(mid) } : { source: 'hot' };
+            fetch('/api/data/category', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            })
+            .then(r => r.json())
+            .then(d => {
+                showToast(d.message, d.success ? 'success' : 'error');
+                if (d.success) loadVideos();
+            });
+        }
     );
 }
 

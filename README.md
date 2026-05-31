@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.17。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.18。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -60,10 +60,10 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 辅助措施: 浏览器级 HTTP 头伪装 (sec-ch-ua) / Referer 链伪造 / 自适应延迟降速 / 随机 page_size
 
 ### Dashboard 控制台
-- **系统总览** `/`: 健康卡片 + 统计数据 + UP主分组折叠面板 + 播放量/评论数分桶 + 桶内独立翻页 + 页码跳转
-- **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM/AICU Modal 弹窗分析 + 特征触发图表 + 用户详情弹窗 + UP主收录按钮
-- **爬虫控制** `/crawler`: 3 爬虫管理 (视频/评论/用户) + 种子注入 + 代理池状态 + 登录面板 + 按钮功能注释
-- **水军账号管理** `/water-army`: 收录水军库管理 + 搜索/筛选/排序 + 备注编辑 + CSV/JSON 导出 + 用户主页直达链接
+- **系统总览** `/`: 健康卡片 + 热门榜独立分类（按时间/播放量/评论数排序）+ UP主分组折叠面板 + 播放量/评论数分桶 + 桶内独立翻页 + 页码跳转 + 分类删除按钮
+- **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM初筛（异步轮询进度）/AICU Modal 弹窗分析 + 特征触发图表 + 用户详情弹窗 + UP主收录按钮
+- **爬虫控制** `/crawler`: 3 爬虫管理 (视频/评论/用户) + 进程存活日志回退检测 + 种子注入 + 代理池状态 + 登录面板
+- **水军账号管理** `/water-army`: 收录水军库管理 + 搜索/筛选/排序 + 备注编辑 + CSV/JSON 导出 + B站主页直达链接
 - **系统设置** `/settings`: 功能开关 + LLM 多 Provider 配置 + AICU 深度分析 + 代理参数
 
 ---
@@ -260,10 +260,12 @@ bilibili-sentinel/
 | | `GET /api/report/<bvid>` | 水军分析报告 |
 | 分析 | `POST /api/run-analysis/<bvid>` | 执行全量分析 |
 | | `GET /api/analysis-status/<bvid>` | 分析进度轮询 |
-| | `POST /api/video/<bvid>/llm-screen` | 批量 LLM 初筛（支持阈值参数） |
+| | `POST /api/video/<bvid>/llm-screen` | 批量 LLM 初筛（异步+轮询进度） |
+| | `GET /api/llm-screen-status/<bvid>` | LLM 初筛进度轮询 |
 | | `POST /api/video/<bvid>/user/<mid>/llm-analyze` | 单用户 LLM 分析 |
 | | `POST /api/video/<bvid>/user/<mid>/deep-analyze` | 单用户 AICU 深度分析 |
 | | `POST /api/video/<bvid>/deep-analyze` | 批量深度分析（支持阈值参数） |
+| | `DELETE /api/data/category` | 按分类删除数据 (热门/UP主) |
 | 爬虫 | `POST /api/crawler/start/<spider>` | 启动爬虫 |
 | | `POST /api/crawler/stop/<spider>` | 停止爬虫 |
 | | `POST /api/crawler/inject` | 注入种子 (BV/关键词/UID/UP主MID) |

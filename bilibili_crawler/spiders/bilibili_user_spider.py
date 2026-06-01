@@ -77,6 +77,7 @@ class BilibiliUserSpider(scrapy.Spider):
         self._total_posts = 0
         self._idle_start_time = None
         self._seen_mids = set()  # 本次运行已处理的 MID
+        logger.info(f"BilibiliUserSpider initialized (Redis db={_REDIS_DB}, key={_REDIS_KEY}, max_idle={MAX_IDLE_TIME}s)")
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -140,6 +141,7 @@ class BilibiliUserSpider(scrapy.Spider):
                 seeds.append(mid)
 
         if not seeds:
+            self._idle_start_time = time.time()
             logger.info("No user seeds in Redis. Entering idle mode, waiting for seeds...")
             return
 

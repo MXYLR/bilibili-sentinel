@@ -566,10 +566,18 @@ class BilibiliCommentSpider(scrapy.Spider):
         return spider
 
     def spider_idle(self, spider):
-        self._check_and_consume_seeds()
+        """空闲时检查 Redis 新种子，找到则继续爬，无则等定时器重试。"""
+        found = self._check_and_consume_seeds(from_idle=True)
+        if found:
+            raise DontCloseSpider("New comment seeds consumed, continue crawling")
 
-    def _check_and_consume_seeds(self):
-        """轮询 Redis 消费新种子。找到→重置空闲, 无→5s后重试, 超时→关闭。(v2.16)"""
+    def _check_and_consume_seeds(self, from_idle=False):
+        """轮询 Redis 消费新种子。找到→重置空闲, 无→5s后重试, 超时→关闭。(v2.16)
+
+        Args:
+            from_idle: True=从 spider_idle 信号调用(可抛 DontCloseSpider)
+                       False=从 reactor.callLater 定时器调用(不可抛,会炸 Twisted)
+        """
         from twisted.internet import reactor
         import redis as _rds
 
@@ -619,7 +627,7 @@ class BilibiliCommentSpider(scrapy.Spider):
 
         if new_count > 0:
             self._idle_start_time = None
-            return
+            return True  # 找到了种子，通知调用方
 
         now = time.time()
         if self._idle_start_time is None:
@@ -628,9 +636,12 @@ class BilibiliCommentSpider(scrapy.Spider):
         if elapsed < self.max_idle_time:
             logger.info(f"[_check_seeds] 无种子 ({elapsed:.0f}s/{self.max_idle_time}s), 5s 后重试")
             self._seed_timer = reactor.callLater(5, self._check_and_consume_seeds)
-            raise DontCloseSpider("等待视频爬虫注入新种子...")
+            if from_idle:
+                raise DontCloseSpider("等待视频爬虫注入新种子...")
+            # 定时器回调中不抛 DontCloseSpider——会炸 Twisted reactor
         else:
             logger.info(f"[_check_seeds] 空闲超时 ({elapsed:.0f}s), 允许关闭")
+        return False
 
     def spider_closed(self, spider, reason):
         """爬虫关闭时输出汇总统计"""

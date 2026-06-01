@@ -115,13 +115,21 @@
                     title="一键启动视频+评论两个爬虫（最常用）">
                 <i class="bi bi-play-circle"></i> 启动全部
             </button>
-            <button class="btn btn-danger" onclick="fetch('/api/crawler/stop-all',{method:'POST'}).then(()=>refresh())"
+            <button class="btn btn-danger" onclick="stopAll()"
                     title="停止所有运行中的爬虫进程">
                 <i class="bi bi-stop-circle"></i> 停止全部
             </button>
             <button class="btn btn-outline-warning" onclick="clearQueues()"
                     title="清空Redis中所有爬虫种子和去重记录（谨慎操作）">
                 <i class="bi bi-trash"></i> 清空队列
+            </button>
+            <button class="btn btn-outline-success" onclick="rescanCommentSeeds()"
+                    title="扫描已有视频数据，为有评论但未爬取的视频重新注入评论种子">
+                <i class="bi bi-search"></i> 补充评论种子
+            </button>
+            <button class="btn btn-outline-success" onclick="rescanUserSeeds()"
+                    title="扫描已有评论数据，提取所有评论者MID注入用户爬虫种子队列">
+                <i class="bi bi-person-plus"></i> 补充用户种子
             </button>
             <button class="btn btn-outline-info" onclick="refreshAll()"
                     title="刷新所有面板状态（爬虫进程+代理+登录+缓存）">
@@ -302,7 +310,7 @@ function refresh() {
         if (!d.success) return;
         const s = d.data;
         // 爬虫状态
-        const spiderMap = [
+                const spiderMap = [
                     {name:'bilibili_video', prefix:'vs', card:'spider-video'},
                     {name:'bilibili_comment', prefix:'cs', card:'spider-comment'},
                     {name:'bilibili_user', prefix:'us', card:'spider-user'},
@@ -328,6 +336,16 @@ function refresh() {
                     const borderColor = (alive && isStuck) ? 'var(--warning)' : (alive ? 'var(--success)' : 'var(--secondary)');
                     cardEl.style.borderLeft = '3px solid ' + borderColor;
                 });
+                // 自动停止日志刷新：当前查看的爬虫已停止时
+                if (_currentLogSpider) {
+                    const curSp = s.spiders[_currentLogSpider] || {};
+                    if (!curSp.alive) {
+                        if (_logAutoRefreshTimer) stopAutoRefresh();
+                        if (typeof stopCrawlerStream === 'function') stopCrawlerStream();
+                        const statusEl = document.getElementById('crawler-stream-status');
+                        if (statusEl) statusEl.textContent = '⏹';
+                    }
+                }
         // 统计
         const st = s.stats || {};
         document.getElementById('stat-videos').textContent = st.videos_collected || 0;
@@ -345,6 +363,27 @@ function refresh() {
         rOk.textContent = q.redis_ok ? 'Redis: 正常' : ('Redis: '+(q.error||'异常'));
         rOk.className = 'badge ' + (q.redis_ok ? 'bg-success' : 'bg-danger');
     }).catch(()=>{});
+}
+
+// ===== 停止全部（带状态预检）=====
+function stopAll() {
+    fetch('/api/crawler/status').then(r=>r.json()).then(d=>{
+        if (!d.success) return;
+        const spiders = d.data.spiders || {};
+        const running = Object.values(spiders).filter(s => s.alive);
+        if (running.length === 0) {
+            showToast('所有爬虫已经处于停止状态', 'info');
+            refresh();
+            return;
+        }
+        // 有爬虫在运行，执行停止
+        fetch('/api/crawler/stop-all', {method:'POST'})
+            .then(r=>r.json())
+            .then(d=>{
+                showToast(d.message || '已发送停止指令', d.success ? 'success' : 'error');
+                setTimeout(refresh, 800);
+            });
+    });
 }
 
 // ===== 子系统面板 =====
@@ -398,6 +437,36 @@ function stopSpider(name) {
         showToast(d.message, d.success?'success':'warning');
         refresh();
     });
+}
+function rescanCommentSeeds() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 扫描中...';
+    fetch('/api/crawler/rescan-comment-seeds', {method:'POST'})
+        .then(r=>r.json())
+        .then(d=>{
+            showToast(d.message, d.success ? 'success' : 'warning');
+            refresh();
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-search"></i> 补充评论种子';
+        });
+}
+function rescanUserSeeds() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 扫描中...';
+    fetch('/api/crawler/rescan-user-seeds', {method:'POST'})
+        .then(r=>r.json())
+        .then(d=>{
+            showToast(d.message, d.success ? 'success' : 'warning');
+            refresh();
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-person-plus"></i> 补充用户种子';
+        });
 }
 function clearQueues() {
     if (!confirm('确定清空所有Redis队列？')) return;

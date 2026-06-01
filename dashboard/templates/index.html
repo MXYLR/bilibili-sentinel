@@ -225,7 +225,18 @@ function updateHealthCards() {
                     </div>
                 </div>`;
         })
-        .catch(e => console.error('Health check failed:', e));
+        .catch(e => {
+            console.error('Health check failed:', e);
+            // 所有卡片展示"服务未启动"状态
+            ['proxy','cache','login','store'].forEach(s => {
+                const badge = document.getElementById(s + '-badge');
+                const detail = document.getElementById(s + '-detail');
+                const card = document.getElementById('card-' + s);
+                if (badge) { badge.textContent = '离线'; badge.className = 'badge bg-danger'; }
+                if (detail) detail.textContent = 'Dashboard 服务未启动';
+                if (card) card.style.borderLeft = '3px solid var(--danger)';
+            });
+        });
 }
 
 // ---- 视频列表 (UP主分组 + 桶内分页) ----
@@ -261,7 +272,10 @@ function getTimeRanges() {
 
 function loadVideos() {
     fetch('/api/videos?page=1&per_page=9999')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
         .then(d => {
             if (!d.success) return;
             const grid = document.getElementById('video-grid');
@@ -321,11 +335,13 @@ function loadVideos() {
                 <span class="badge bg-success ms-1">${formatNum(totalComments)} 总评论</span>
             </div>
             <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation()">
-                <span class="small text-muted">排序:</span>
+                <span class="small text-muted"${group.noMeta?'':' style="margin-right:4px"'}>排序:</span>
                 <div class="btn-group btn-group-sm">${sortBtns}</div>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteCategory('${collId}', '${group.mid || ''}', '${group.ownerName || ''}', ${totalVideos})" title="删除此分类下所有视频及相关数据">
+                ${group.noMeta ? `<button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteCategory('${collId}', '', '无视频源数据', ${totalVideos}, 'comment_only')" title="删除所有仅有评论数据条目">
                     <i class="bi bi-trash"></i>
-                </button>
+                </button>` : `<button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteCategory('${collId}', '${group.mid || ''}', '${group.ownerName || ''}', ${totalVideos})" title="删除此分类下所有视频及相关数据">
+                    <i class="bi bi-trash"></i>
+                </button>`}
                 <i class="bi bi-chevron-down small" id="${collId}-icon"></i>
             </div>
         </div>
@@ -351,7 +367,7 @@ function loadVideos() {
             if (hotVideos.length > 0) {
                 html += buildGroupHtml(
                     { mid: 0, ownerName: '热门榜', videos: hotVideos },
-                    'hot-group', true, 'bi bi-fire', ['views','comments','time']
+                    'hot-group', false, 'bi bi-fire', ['views','comments','time']
                 );
             }
 
@@ -360,23 +376,40 @@ function loadVideos() {
             restVideos.forEach(v => {
                 const mid = v.owner_mid || 0;
                 const on = v.owner_name || '未知UP主';
-                const key = mid || 'unknown_' + on;
-                if (!groups[key]) groups[key] = { mid, ownerName: on, videos: [] };
+                const key = mid ? ('up_' + mid) : 'no_source';
+                if (!groups[key]) {
+                    groups[key] = {
+                        mid,
+                        ownerName: mid ? on : '无视频源数据',
+                        videos: [],
+                        noMeta: !mid  // 标记为仅评论/无元数据的条目
+                    };
+                }
                 groups[key].videos.push(v);
             });
 
             Object.values(groups).forEach((group, gi) => {
-                html += buildGroupHtml(group, `up-group-${gi}`, gi === 0 && hotVideos.length === 0);
+                const collId = group.noMeta ? `no-source-group` : `up-group-${gi}`;
+                const icon = group.noMeta ? 'bi bi-exclamation-circle' : undefined;
+                html += buildGroupHtml(group, collId, false, icon);
             });
             grid.innerHTML = html;
 
-            // 展开时渲染
+            // 展开时渲染（懒加载）
             document.querySelectorAll('[id^="hot-group"], [id^="up-group-"]').forEach(el => {
                 el.addEventListener('show.bs.collapse', function() {
                     const cid = this.id;
                     Object.keys(bucketPageStates).forEach(bk => {
                         if (bk.startsWith(cid + '-')) renderBucketPage(bk);
                     });
+                });
+            });
+
+            // 立即渲染已展开的分组（show 类已存在，不会再触发 show.bs.collapse 事件）
+            document.querySelectorAll('[id^="hot-group"].show, [id^="up-group-"].show').forEach(el => {
+                const cid = el.id;
+                Object.keys(bucketPageStates).forEach(bk => {
+                    if (bk.startsWith(cid + '-')) renderBucketPage(bk);
                 });
             });
 
@@ -396,6 +429,18 @@ function loadVideos() {
             let monitored = 0;
             (d.data || []).forEach(v => { monitored += v.comment_count || 0; });
             document.getElementById('stat-monitored').textContent = formatNum(monitored);
+        })
+        .catch(e => {
+            console.error('Video list fetch failed:', e);
+            const grid = document.getElementById('video-grid');
+            grid.innerHTML = `<div class="col-12 text-center py-5">
+                <i class="bi bi-exclamation-triangle display-4 text-warning d-block mb-2"></i>
+                <p class="text-muted">无法连接到 Dashboard 后端</p>
+                <small class="text-secondary">请确保 Dashboard 服务已启动（端口 5001）</small>
+                <br><button class="btn btn-sm btn-outline-primary mt-2" onclick="loadVideos()"><i class="bi bi-arrow-clockwise"></i> 重试</button>
+            </div>`;
+            document.getElementById('pagination-row').style.display = 'none';
+            document.getElementById('up-stats-row').innerHTML = '';
         });
 }
 
@@ -637,22 +682,58 @@ function deleteVideo(bvid, title) {
 }
 
 // ---- 删除分类数据 ----
-function deleteCategory(collId, mid, name, count) {
-    const label = mid ? `UP主「${name}」` : '「热门榜」';
-    confirmDelete(
-        `确定要删除 ${label} 下的全部数据吗？\n\n将删除:\n  - ${count} 个视频信息文件\n  - 对应的评论数据文件\n  - 对应的分析报告文件\n\n此操作不可撤销！`,
+let deletePollTimer = null;
+
+function deleteCategory(collId, mid, name, count, source) {
+    let label, body;
+    if (source) {
+        label = `「${name}」`;
+        body = { source: source };
+    } else if (mid) {
+        label = `UP主「${name}」`;
+        body = { owner_mid: parseInt(mid) };
+    } else {
+        label = '「热门榜」';
+        body = { source: 'hot' };
+    }
+    confirmDeleteWithProgress(
+        `正在删除 ${label} 下的全部数据...`,
         () => {
-            const body = mid ? { owner_mid: parseInt(mid) } : { source: 'hot' };
-            fetch('/api/data/category', {
+            // 1. 发起异步删除
+            return fetch('/api/data/category', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             })
             .then(r => r.json())
             .then(d => {
-                showToast(d.message, d.success ? 'success' : 'error');
-                if (d.success) loadVideos();
+                if (!d.success) throw new Error(d.message);
+                // 2. 轮询进度
+                const STATUS_URL = '/api/data/category-status/' + d.task_id;
+                const total = d.total || 0;
+                return new Promise((resolve, reject) => {
+                    deletePollTimer = setInterval(() => {
+                        fetch(STATUS_URL).then(r => r.json()).then(sd => {
+                            const st = sd.data || {};
+                            updateDeleteProgress(st.done || 0, total, st.progress || '');
+                            if (st.status === 'done') {
+                                clearInterval(deletePollTimer);
+                                deletePollTimer = null;
+                                showToast(st.result?.message || '删除完成', 'success');
+                                resolve();
+                            } else if (st.status === 'error') {
+                                clearInterval(deletePollTimer);
+                                deletePollTimer = null;
+                                reject(new Error(st.error || '删除失败'));
+                            }
+                        }).catch(() => {});  // 忽略轮询网络错误
+                    }, 500);
+                });
             });
+        },
+        () => {
+            if (deletePollTimer) { clearInterval(deletePollTimer); deletePollTimer = null; }
+            loadVideos();
         }
     );
 }

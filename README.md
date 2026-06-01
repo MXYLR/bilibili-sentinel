@@ -1,18 +1,18 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.18。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.19。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
 ## 系统架构
 
 ```
-                          run_all.bat (一键启动 3 爬虫)
+                          run_all.bat (一键启动 Dashboard + 配套服务)
                                 |
      ┌────────────────────┬─────┴────────┬────────────────────┐
      v                    v              v                    v
 Video Spider       Comment Spider   User Spider        Flask Dashboard
-(Scrapy-Redis)     (Scrapy-Redis)   (Scrapy-Redis)    (Port 5001, 58 routes)
+(手动启动)         (手动启动)       (手动启动)        (Port 5001, 60+ routes)
      |                    |              |                    |
      `---------+----------+------+-------`                    |
                v                 v                            v
@@ -265,10 +265,13 @@ bilibili-sentinel/
 | | `POST /api/video/<bvid>/user/<mid>/llm-analyze` | 单用户 LLM 分析 |
 | | `POST /api/video/<bvid>/user/<mid>/deep-analyze` | 单用户 AICU 深度分析 |
 | | `POST /api/video/<bvid>/deep-analyze` | 批量深度分析（支持阈值参数） |
-| | `DELETE /api/data/category` | 按分类删除数据 (热门/UP主) |
+| | `DELETE /api/data/category` | 按分类删除数据 (热门/UP主/无源数据) |
+| | `GET /api/data/category-status/<task_id>` | 删除进度轮询 |
 | 爬虫 | `POST /api/crawler/start/<spider>` | 启动爬虫 |
 | | `POST /api/crawler/stop/<spider>` | 停止爬虫 |
 | | `POST /api/crawler/inject` | 注入种子 (BV/关键词/UID/UP主MID) |
+| | `POST /api/crawler/rescan-comment-seeds` | 从已有视频数据重新注入评论种子 |
+| | `POST /api/crawler/rescan-user-seeds` | 从已有评论数据提取MID注入用户种子 |
 | 水军库 | `GET /water-army` | 水军账号管理页面 |
 | | `GET /api/water-army/list` | 水军账号列表（分页/搜索/筛选） |
 | | `GET /api/water-army/stats` | 水军库统计数据 |
@@ -311,3 +314,29 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 **Q: 412 风控频繁出现？**
 系统已内置三层对抗。可尝试：降低并发（`crawler_config.py` 中调大 `DOWNLOAD_DELAY`）、增加 Cookie 池账号、启用 Playwright 兜底。
+
+---
+
+## v2.19 更新 (2026-06-01)
+
+### Bug 修复
+- **爬虫启动崩溃**: `start_spider` 改用 `python -m scrapy crawl` 确保项目路径正确，移除 `CREATE_NO_WINDOW`
+- **评论爬虫 DontCloseSpider 崩溃**: `_check_and_consume_seeds` 加 `from_idle` 参数区分信号处理器/定时器调用源
+- **用户爬虫僵尸进程**: `_idle_start_time` 无种子初始化缺失导致永不超时 → 补 `time.time()` 赋值
+- **停止按钮杀不掉进程**: 三重杀链失败后调用 `_force_kill_all_bilibili` 终极兜底; `_force_kill_by_command_line` 同时搜 `python.exe`/`scrapy.exe`
+- **已停止爬虫误判为运行**: `_is_spider_alive` 同时检查 per-spider 日志和共享 Scrapy 日志 (CRAWLER_LOG_PATH)
+- **爬虫日志 404**: `_read_spider_log` 共享日志不存在时回退到 per-spider 专属日志
+- **删除 Modal backdrop 残留**: 强制清理 `.modal-backdrop` / `modal-open` / `overflow` 样式
+- **run_all.bat 闪退**: 移除含中文路径的 if/else 块，默认不自动启动爬虫
+- **日志轮询不停止**: 爬虫状态更新时自动关 `setInterval` / SSE 流
+
+### 新功能
+- **补充评论种子**: `POST /api/crawler/rescan-comment-seeds` 从已有视频数据自动重新注入（扫描 1934 视频 → 1816 条种子）
+- **补充用户种子**: `POST /api/crawler/rescan-user-seeds` 从评论数据提取 MID 自动注入（130 文件 → 3204 个唯一 MID）
+- **首页无后端提示**: fetch 失败时显示「服务未启动」而非静默 N/A
+
+### 优化
+- 视频总览各分类默认折叠，点击展开
+- 仅评论数据分组显示为「无视频源数据」+ 警告图标
+- 爬虫日志选择器移除弹幕爬虫选项
+- `stop_spider` 杀失败时返回 `success: False` 而非欺骗用户

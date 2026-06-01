@@ -287,15 +287,6 @@ class BilibiliVideoSpider(RedisSpider):
                 dont_filter=True,
             )
 
-    def _push_comment_seed(self, bvid: str, aid: int, reply_count: int):
-        """将视频注入评论爬虫 Redis 队列。"""
-        if not bvid or reply_count <= 0:
-            return
-        try:
-            task = json.dumps({"bvid": bvid, "aid": aid, "reply_count": reply_count})
-            self._redis.lpush("bilibili_crawler:comment_seeds", task)
-        except Exception:
-            pass
 
     def parse_video_api(self, response):
         """

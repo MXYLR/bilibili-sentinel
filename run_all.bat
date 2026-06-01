@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.17
+title Bilibili Sentinel v2.19
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -15,7 +15,7 @@ set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.17
+echo   Bilibili Sentinel v2.19
 echo ============================================================
 echo.
 
@@ -119,12 +119,10 @@ if exist "%ROOT%\analyzer\llm_analyzer.py" (
 if not exist "%ROOT%\data\logs" mkdir "%ROOT%\data\logs"
 
 echo.
-echo [1/5] Starting spiders (video + comment + user)...
-:: Start all 3 spiders: video, comment, and user (for F12-F14 account space features)
-start "Bilibili Video Spider"   /MIN cmd /c %VENV_SCRAPY% crawl bilibili_video   ^> %ROOT%\data\logs\video.log   2^>^&1
-start "Bilibili Comment Spider" /MIN cmd /c %VENV_SCRAPY% crawl bilibili_comment ^> %ROOT%\data\logs\comment.log 2^>^&1
-start "Bilibili User Spider"    /MIN cmd /c %VENV_SCRAPY% crawl bilibili_user    ^> %ROOT%\data\logs\user.log    2^>^&1
-echo   [OK] Video + Comment + User spiders launched
+echo [1/5] Spiders NOT auto-started.
+echo   Use the Dashboard to start spiders: http://localhost:5001/crawler
+echo.
+echo   To restore auto-start, set AUTO_START_SPIDERS=1 above.
 
 echo.
 echo [2/5] Starting Dashboard on port 5001...
@@ -133,6 +131,23 @@ echo   [OK] Dashboard starting...
 
 :: Wait a moment for services to initialize
 %SystemRoot%\System32\timeout.exe /t 3 /nobreak >nul
+
+:: Capture PIDs of all spawned processes for reliable cleanup
+echo   [PID] Capturing process IDs...
+powershell -Command ^
+  "$pids=@();" ^
+  "Get-Process cmd -ErrorAction SilentlyContinue | Where-Object {" ^
+  "  $_.MainWindowTitle -like 'Bilibili Video Spider*' -or" ^
+  "  $_.MainWindowTitle -like 'Bilibili Comment Spider*' -or" ^
+  "  $_.MainWindowTitle -like 'Bilibili User Spider*' -or" ^
+  "  $_.MainWindowTitle -like 'Bilibili Sentinel Dashboard*'" ^
+  "} | ForEach-Object { $pids += $_.Id };" ^
+  "if ($pids.Count -gt 0) {" ^
+  "  $pids | Out-File '%ROOT%\data\spider_pids.txt' -Encoding ascii;" ^
+  "  Write-Host '    Captured' $pids.Count 'process PIDs'" ^
+  "} else {" ^
+  "  Write-Host '    [WARN] No spider/Dashboard windows found (may need admin?)'" ^
+  "}"
 
 echo.
 echo [3/5] Checking service health...
@@ -170,7 +185,7 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.17: LLM初筛异步化 + F12五要素 + F13转发模式扩展 + 用户爬虫常驻
+echo   v2.19: PID精准杀进程 + 删除Modal backdrop清理 + 分组懒加载修复
 echo   3爬虫: video/comment/user, 全自动种子联动 + 用户动态采集
 echo.
 echo ============================================================
@@ -190,14 +205,30 @@ powershell -Command "try { Invoke-WebRequest -Uri http://localhost:5001/api/syst
 :: Give API time to stop spiders and close
 %SystemRoot%\System32\timeout.exe /t 2 /nobreak >nul
 
-:: Stage 2: Clean up remaining processes (lightweight fallback)
+:: Stage 2: Clean up remaining processes
 echo [2/3] Cleaning up remaining processes...
-:: Kill by window title (no PID scanning, no WMI, no hidden windows)
+set KILLED=0
+
+:: Step 2a: Kill by captured PIDs (most reliable — Scrapy may change window title)
+if exist "%ROOT%\data\spider_pids.txt" (
+    for /f "usebackq delims=" %%p in ("%ROOT%\data\spider_pids.txt") do (
+        taskkill /F /T /PID %%p >nul 2>&1
+        if not errorlevel 128 set /a KILLED+=1
+    )
+    echo   [PID] Killed %KILLED% tracked process tree(s)
+)
+
+:: Step 2b: Fallback — kill by window title prefix (may fail if Scrapy renamed the window)
 taskkill /FI "WINDOWTITLE eq Bilibili Video Spider*"    /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Comment Spider*"  /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili User Spider*"     /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Sentinel Dashboard*" /F >nul 2>&1
-echo   [OK] Processes cleaned
+echo   [Title] Window-title cleanup done
+
+:: Step 2c: Final fallback — kill any scrapy.exe that might be orphaned
+taskkill /F /T /IM scrapy.exe >nul 2>&1
+if not errorlevel 128 (echo   [Fallback] Orphan scrapy.exe cleaned) else (echo   [Fallback] No orphan scrapy.exe)
+echo   [OK] All processes cleaned
 
 :: Stage 3: Clean up generated files
 echo [3/3] Cleaning up temp files...

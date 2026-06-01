@@ -91,26 +91,51 @@ CRAWLER_LOG_PATH = os.path.join(DATA_DIR, "logs", "bilibili_crawler.log")
 
 
 def _read_spider_log(spider_name: str, tail_lines: int = 50) -> dict:
-    """从共享的 Scrapy LOG_FILE 中按爬虫名过滤日志行。
+    """读取爬虫日志：优先共享 LOG_FILE，回退到 per-spider 日志文件。
 
     Scrapy LOG_FORMAT: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
     爬虫的 logger name 即爬虫名,所以过滤 [bilibili_video] / [bilibili_comment]
+    如果共享日志不存在（run_all.bat 启动时清理了旧日志），回退到 start_spider 创建的专属日志。
     """
-    if not os.path.exists(CRAWLER_LOG_PATH):
-        return {"total_lines": 0, "recent": "", "log_file": CRAWLER_LOG_PATH}
+    # 优先读共享日志
+    if os.path.exists(CRAWLER_LOG_PATH):
+        try:
+            with open(CRAWLER_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                all_lines = f.readlines()
+            marker = f"[{spider_name}]"
+            matched = [ln for ln in all_lines if marker in ln]
+            recent = "".join(matched[-tail_lines:])
+            return {
+                "log_file": CRAWLER_LOG_PATH,
+                "total_lines": len(matched),
+                "recent": recent,
+            }
+        except Exception:
+            pass
+    # 回退：找最新的 per-spider 日志文件
+    log_dir = os.path.join(DATA_DIR, "logs")
+    pattern = f"{spider_name}_*.log"
     try:
-        with open(CRAWLER_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-            all_lines = f.readlines()
-        marker = f"[{spider_name}]"
-        matched = [ln for ln in all_lines if marker in ln]
-        recent = "".join(matched[-tail_lines:])
-        return {
-            "log_file": CRAWLER_LOG_PATH,
-            "total_lines": len(matched),
-            "recent": recent,
-        }
+        candidates = sorted(
+            [f for f in os.listdir(log_dir) if f.startswith(spider_name + "_") and f.endswith(".log")],
+            key=lambda x: os.path.getmtime(os.path.join(log_dir, x)),
+            reverse=True,
+        )
+        if candidates:
+            fallback_path = os.path.join(log_dir, candidates[0])
+            with open(fallback_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            # per-spider 日志没有 [name] 标记，直接返回尾部
+            lines = content.split("\n")
+            recent = "\n".join(lines[-tail_lines:])
+            return {
+                "log_file": fallback_path,
+                "total_lines": len(lines),
+                "recent": recent,
+            }
     except Exception:
-        return {"total_lines": 0, "recent": "", "log_file": CRAWLER_LOG_PATH}
+        pass
+    return {"total_lines": 0, "recent": "", "log_file": CRAWLER_LOG_PATH}
 
 
 # ============================================================
@@ -370,12 +395,12 @@ class SpiderManager:
                 )
                 os.makedirs(os.path.dirname(log_file), exist_ok=True)
                 with open(log_file, "w", encoding="utf-8") as log_f:
+                    # 使用 python -m scrapy crawl (非 scrapy.exe) 以确保 project root 在 Python path
                     proc = subprocess.Popen(
-                        [SCRAPY_EXE, "crawl", spider_name],
+                        [sys.executable, "-m", "scrapy", "crawl", spider_name],
                         cwd=SCRAPY_CWD,
                         stdout=log_f,
                         stderr=subprocess.STDOUT,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                 entry = {
                     "status": "running", "pid": proc.pid,
@@ -409,10 +434,13 @@ class SpiderManager:
                     self._nuke_redis_queues(spider_name, keep_seeds=True)
                     entry["status"] = "stopped"
                     entry["stopped_at"] = datetime.now().isoformat()
+                    entry["pid"] = None
                     state[spider_name] = entry
                     self._write_state(state)
                     return {"success": True, "message": f"爬虫 {spider_name} 已停止（状态记录曾标记为 {entry.get('status', '?')}，但进程已被杀死）"}
-                return {"success": False, "message": f"爬虫 {spider_name} 未在运行"}
+                # 最终兜底：全杀 scrapy.exe
+                self._force_kill_all_bilibili()
+                return {"success": False, "message": f"爬虫 {spider_name} 未在运行（已尝试全面清理）"}
 
             pid = entry.get("pid")
             # 三重杀链：PID → 窗口标题 → 命令行扫描
@@ -425,23 +453,28 @@ class SpiderManager:
                 killed_by_cmdline = self._force_kill_by_command_line(spider_name)
             killed = killed_by_pid or killed_by_name or killed_by_cmdline
 
+            # 终极兜底：全杀 scrapy.exe（无论前面杀了没）
+            if not killed:
+                self._force_kill_all_bilibili()
+
             # 清空工作队列（dupefilter），但保留种子队列。
             # taskkill /T /F 已强杀进程树，不需要靠空队列来逼退。
             # 保留 start_urls / comment_seeds 避免用户刚注入的种子被误删。
             self._nuke_redis_queues(spider_name, keep_seeds=True)
 
-            entry["status"] = "stopped"
-            entry["stopped_at"] = datetime.now().isoformat()
-            state[spider_name] = entry
-            self._write_state(state)
-
             if killed:
+                entry["status"] = "stopped"
+                entry["stopped_at"] = datetime.now().isoformat()
+                entry["pid"] = None
+                state[spider_name] = entry
+                self._write_state(state)
                 return {"success": True, "message": f"爬虫 {spider_name} 已停止（队列已清空）"}
             else:
+                # 杀进程失败——不清 Redis 队列，等下次 idle 超时自然退出
                 return {
-                    "success": True,
-                    "message": f"爬虫 {spider_name} 状态已停止，队列已清空。"
-                               f"若进程未退出，下次 idle 检查（最长 30 秒）后将自动释放。",
+                    "success": False,
+                    "message": f"无法停止爬虫 {spider_name}：进程杀灭失败。"
+                               f"请使用「强制停止」按钮，或等待爬虫 idle 超时后自动退出。",
                 }
 
     def stop_all(self) -> dict:
@@ -545,41 +578,42 @@ class SpiderManager:
 
         在 spider_idle 场景下，scrapy 进程可能没有可见窗口（CREATE_NO_WINDOW），
         WINDOWTITLE 过滤会失效。此方法使用 PowerShell Get-CimInstance 扫描命令行，
-        然后用 taskkill 杀进程（避免杀软误报）。
+        同时搜索 python.exe 和 scrapy.exe 进程，然后用 taskkill 杀进程。
         """
         spider_to_spider = {
             "bilibili_video": "bilibili_video",
             "bilibili_comment": "bilibili_comment",
+            "bilibili_user": "bilibili_user",
+            "bilibili_danmaku": "bilibili_danmaku",
         }
         target = spider_to_spider.get(spider_name)
         if not target:
             return False
-        try:
-            ps_cmd = (
-                f'Get-CimInstance Win32_Process -Filter "Name=\'python.exe\'" | '
-                f'Where-Object {{ $_.CommandLine -like \'*scrapy*crawl*{target}*\' }} | '
-                f'Select-Object -ExpandProperty ProcessId'
-            )
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True, text=True, timeout=10,
-            )
-            pids = [p.strip() for p in result.stdout.strip().split("\n") if p.strip().isdigit()]
-            if not pids:
-                return False
-            killed_any = False
-            for pid in pids:
-                try:
-                    subprocess.run(
-                        ["taskkill", "/PID", pid, "/T", "/F"],
-                        capture_output=True, timeout=10,
-                    )
-                    killed_any = True
-                except Exception:
-                    continue
-            return killed_any
-        except Exception:
-            return False
+        killed_any = False
+        for exe_name in ("python.exe", "scrapy.exe"):
+            try:
+                ps_cmd = (
+                    f'Get-CimInstance Win32_Process -Filter "Name=\'{exe_name}\'" | '
+                    f'Where-Object {{ $_.CommandLine -like \'*scrapy*crawl*{target}*\' }} | '
+                    f'Select-Object -ExpandProperty ProcessId'
+                )
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True, text=True, timeout=10,
+                )
+                pids = [p.strip() for p in result.stdout.strip().split("\n") if p.strip().isdigit()]
+                for pid in pids:
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", pid, "/T", "/F"],
+                            capture_output=True, timeout=10,
+                        )
+                        killed_any = True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return killed_any
 
     def _nuke_redis_queues(self, spider_name: str, keep_seeds: bool = False):
         """清空指定爬虫的 Redis 工作队列。
@@ -605,10 +639,12 @@ class SpiderManager:
             pass  # Redis 不可用就跳过，不影响进程杀灭
 
     def _force_kill_all_bilibili(self):
-        """最终兜底：杀光所有 bilibili scrapy 进程（窗口标题匹配，不涉及 WMI）。"""
+        """最终兜底：杀光所有 bilibili scrapy 进程（窗口标题 + scrapy.exe 全杀）。"""
         titles = [
             "Bilibili Video Spider",
             "Bilibili Comment Spider",
+            "Bilibili User Spider",
+            "Bilibili Danmaku Spider",
         ]
         for t in titles:
             try:
@@ -618,31 +654,59 @@ class SpiderManager:
                 )
             except Exception:
                 pass
+        # 终极兜底：杀所有 scrapy.exe 孤儿进程
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/IM", "scrapy.exe"],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass
 
     def _is_spider_alive(self, spider_name: str, pid=None, log_file: str = None) -> bool:
         """检测爬虫是否存活：PID 检测 + 日志活跃度回退。
-        
+
         scrapy.exe 在 Windows 上会 fork 子进程后退出，PID 可能已失效。
-        回退方案：检查日志文件最近 15 秒内是否有新内容。
+        回退方案：先查 per-spider 日志，再查共享 Scrapy 日志。
+        排除信号：如果日志尾部包含 [CLOSED]，立即判死。
         """
         if pid and self._is_process_alive(pid):
             return True
-        log_path = log_file or CRAWLER_LOG_PATH
-        if log_path and os.path.exists(log_path):
+        # 先查 per-spider 日志（stdout 重定向），再查共享日志（Scrapy LOG_FILE）
+        for log_path in (log_file, CRAWLER_LOG_PATH):
+            if not log_path or not os.path.exists(log_path):
+                continue
             try:
                 mtime = os.path.getmtime(log_path)
                 if time.time() - mtime < 15:
+                    if self._log_has_closed(log_path):
+                        return False
                     return True
             except Exception:
-                pass
+                continue
         return False
+
+    def _log_has_closed(self, log_path: str) -> bool:
+        """读取日志文件尾部 4KB，检查是否包含 [CLOSED] 标记。"""
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                if size > 4096:
+                    f.seek(size - 4096)
+                else:
+                    f.seek(0)
+                tail = f.read()
+                return "[CLOSED]" in tail
+        except Exception:
+            return False
 
     def get_status(self) -> dict:
         with self._lock:
             state = self._read_state()
             state_changed = False
             spiders = {}
-            for name in ["bilibili_video", "bilibili_comment", "bilibili_user"]:
+            for name in ["bilibili_video", "bilibili_comment", "bilibili_user", "bilibili_danmaku"]:
                 entry = state.get(name) or {}
                 pid = entry.get("pid")
                 log_file = entry.get("log_file")
@@ -1044,11 +1108,11 @@ class AnalysisManager:
 class LlmScreenTracker:
     """跟踪 LLM 初筛进度，支持前端轮询。"""
 
-    _tasks: dict = {}  # bvid -> {status, progress, total_batches, done_batches, ...}
+    _tasks: dict = {}  # bvid -> {status, progress, total, total_batches, done_batches, ...}
     _lock = threading.Lock()
 
     @classmethod
-    def start(cls, bvid: str) -> bool:
+    def start(cls, bvid: str, **initial) -> bool:
         with cls._lock:
             if bvid in cls._tasks and cls._tasks[bvid].get("status") == "running":
                 return False
@@ -1060,6 +1124,8 @@ class LlmScreenTracker:
                 "success_count": 0,
                 "total": 0,
                 "error": None,
+                "identified_types": {},
+                **initial,
             }
             return True
 
@@ -1082,6 +1148,43 @@ class LlmScreenTracker:
             "total": t.get("total", 0),
             "error": t.get("error"),
             "identified_types": t.get("identified_types", {}),
+        }
+
+
+class DeleteTaskTracker:
+    """跟踪分类删除进度，支持前端轮询。"""
+
+    _tasks: dict = {}  # task_id -> {status, progress, total, done, error, result}
+    _lock = threading.Lock()
+
+    @classmethod
+    def start(cls, task_id: str, total: int = 0) -> bool:
+        with cls._lock:
+            if task_id in cls._tasks and cls._tasks[task_id].get("status") == "running":
+                return False
+            cls._tasks[task_id] = {
+                "status": "running", "progress": f"准备删除 0/{total}...",
+                "total": total, "done": 0, "error": None, "result": None,
+            }
+            return True
+
+    @classmethod
+    def update(cls, task_id: str, **kwargs):
+        with cls._lock:
+            if task_id in cls._tasks:
+                cls._tasks[task_id].update(kwargs)
+
+    @classmethod
+    def get_status(cls, task_id: str) -> dict:
+        with cls._lock:
+            t = cls._tasks.get(task_id, {})
+        return {
+            "status": t.get("status", "idle"),
+            "progress": t.get("progress", ""),
+            "total": t.get("total", 0),
+            "done": t.get("done", 0),
+            "error": t.get("error"),
+            "result": t.get("result"),
         }
 
 
@@ -1120,7 +1223,7 @@ def _list_video_dirs() -> list:
                 videos.append({
                     "bvid": bvid,
                     "title": info.get("title", "N/A"),
-                    "owner_name": info.get("owner_name", info.get("owner", {}).get("name", "N/A")),
+                    "owner_name": info.get("owner_name", info.get("owner", {}).get("name", "未知")),
                     "owner_mid": info.get("owner_mid", info.get("owner", {}).get("mid", 0)),
                     "view_count": info.get("view_count", info.get("stat", {}).get("view", 0)),
                     "reply_count": info.get("reply_count", info.get("stat", {}).get("reply", 0)),
@@ -1136,6 +1239,9 @@ def _list_video_dirs() -> list:
                 continue
 
     # ---- 第二轮: 补充"有评论但无视频元数据"的视频 ----
+    # 跳过最近 5 分钟内修改的仅评论文件——这些是评论爬虫正在写入的活跃文件，
+    # 对应的视频元数据可能还未抓取，不应显示为「无视频源数据」。
+    _COMMENT_ONLY_GRACE_SECONDS = 300
     comment_path = Path(DATA_DIR) / "comments"
     if comment_path.exists():
         for cf in sorted(comment_path.glob("*_comments.json"), reverse=True):
@@ -1143,13 +1249,20 @@ def _list_video_dirs() -> list:
             bvid = cf.stem.replace("_comments", "")
             if not bvid or bvid in seen_bvids:
                 continue  # 已有视频元数据，跳过
+            # 跳过"新鲜"的仅评论文件（可能正在被评论爬虫写入）
+            try:
+                file_age = time.time() - os.path.getmtime(str(cf))
+                if file_age < _COMMENT_ONLY_GRACE_SECONDS:
+                    continue
+            except Exception:
+                pass
             seen_bvids.add(bvid)
             comment_count = _load_comment_count(cf, bvid)
             report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
             videos.append({
                 "bvid": bvid,
                 "title": f"[仅有评论数据] {bvid}",
-                "owner_name": "N/A",
+                "owner_name": "[仅评论]",
                 "owner_mid": 0,
                 "view_count": 0,
                 "reply_count": 0,
@@ -1158,7 +1271,7 @@ def _list_video_dirs() -> list:
                 "pic": "",
                 "has_report": report_path.exists(),
                 "comment_count": comment_count,
-                "source": "",
+                "source": "comment_only",
             })
 
     return videos
@@ -1247,7 +1360,7 @@ def video_detail(bvid: str):
             "desc": "",
             "pic": "",
             "owner_name": first_comment.get("uname", "") if isinstance(first_comment, dict) else "",
-            "owner_mid": first_comment.get("mid", 0) if isinstance(first_comment, dict) else 0,
+            "owner_mid": int(first_comment.get("mid", 0)) if isinstance(first_comment, dict) else 0,
             "view_count": 0,
             "danmaku_count": 0,
             "reply_count": 0,
@@ -1690,10 +1803,8 @@ def api_video_llm_screen(bvid: str):
         return jsonify({"success": False, "error": "LLM 分析未启用，请检查配置"}), 400
 
     # 启动后台线程
-    if not LlmScreenTracker.start(bvid):
+    if not LlmScreenTracker.start(bvid, total=len(candidates)):
         return jsonify({"success": True, "status": "running", "message": "LLM 初筛已在运行中"})
-
-    LlmScreenTracker.update(bvid, total=len(candidates), progress="准备中...")
 
     threading.Thread(
         target=_run_llm_screen_bg,
@@ -2049,34 +2160,53 @@ def api_delete_all_data():
 
 @app.route("/api/data/category", methods=["DELETE"])
 def api_delete_category_data():
-    """删除指定分类的所有数据（热门视频 / UP主视频 / 搜索关键词）。
-    
+    """异步删除指定分类的所有数据（热门视频 / UP主视频 / 搜索关键词）。
+
     请求体: {"source": "hot"}  或  {"owner_mid": 315812497}
-    
-    删除对应分类下所有视频的 JSON + 评论 + 报告。
+
+    立即返回 task_id，前端轮询 /api/data/category-status/<task_id> 获取进度。
     """
     data = request.get_json(silent=True) or {}
     source_filter = data.get("source", "").strip()
     owner_mid = data.get("owner_mid")
-    
+
     if not source_filter and not owner_mid:
         return jsonify({"success": False, "message": "缺少分类参数 (source 或 owner_mid)"}), 400
-    
-    # 列出所有视频
+
+    # 列出匹配视频（source_filter 必须非空才过滤，避免空字符串误匹配）
     all_videos = _list_video_dirs()
     matched = []
     for v in all_videos:
         if source_filter and v.get("source") == source_filter:
             matched.append(v.get("bvid"))
-        elif owner_mid is not None and v.get("owner_mid") == owner_mid:
+        elif owner_mid is not None and not source_filter and v.get("owner_mid") == owner_mid:
             matched.append(v.get("bvid"))
-    
+
     if not matched:
         return jsonify({"success": False, "message": "未找到匹配的视频"}), 404
-    
-    # 批量删除
+
+    # 生成 task_id 并启动后台线程
+    import uuid
+    task_id = uuid.uuid4().hex[:8]
+    DeleteTaskTracker.start(task_id, total=len(matched))
+    category_name = source_filter or f"UP主(mid={owner_mid})"
+
+    threading.Thread(
+        target=_run_delete_bg,
+        args=(task_id, matched, category_name),
+        daemon=True,
+    ).start()
+
+    return jsonify({"success": True, "task_id": task_id, "total": len(matched),
+                     "message": f"开始删除「{category_name}」({len(matched)} 个视频)..."})
+
+
+def _run_delete_bg(task_id: str, bvids: list, category_name: str):
+    """后台删除指定 BV 列表的所有文件（视频 + 评论 + 报告）。"""
     deleted_v = deleted_c = deleted_r = 0
-    for bvid in matched:
+    total = len(bvids)
+
+    for i, bvid in enumerate(bvids):
         for label, path in [
             ("v", Path(DATA_DIR) / "videos" / f"{bvid}.json"),
             ("c", Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"),
@@ -2090,14 +2220,26 @@ def api_delete_category_data():
                     else: deleted_r += 1
             except Exception:
                 pass
-    
-    category_name = source_filter or f"UP主(mid={owner_mid})"
-    return jsonify({
-        "success": True,
-        "message": f"已删除「{category_name}」: {len(matched)} 个视频, {deleted_v} 视频文件, {deleted_c} 评论文件, {deleted_r} 报告文件",
-        "video_count": len(matched),
+        # 每 10 个更新一次进度
+        if (i + 1) % 10 == 0 or i + 1 == total:
+            DeleteTaskTracker.update(task_id,
+                done=i + 1,
+                progress=f"已删除 {i+1}/{total}...",
+            )
+
+    result = {
+        "video_count": total,
         "deleted": {"videos": deleted_v, "comments": deleted_c, "reports": deleted_r},
-    })
+        "message": f"已删除「{category_name}」: {total} 个视频, {deleted_v} 视频文件, {deleted_c} 评论文件, {deleted_r} 报告文件",
+    }
+    DeleteTaskTracker.update(task_id, status="done", progress="删除完成", done=total, result=result)
+
+
+@app.route("/api/data/category-status/<task_id>")
+def api_delete_category_status(task_id: str):
+    """轮询删除进度。"""
+    status = DeleteTaskTracker.get_status(task_id)
+    return jsonify({"success": True, "data": status})
 
 
 @app.route("/api/video/<bvid>/refresh", methods=["POST"])
@@ -2747,6 +2889,103 @@ def api_crawler_force_stop(spider_name: str):
     return jsonify(spider_mgr.force_stop(spider_name))
 
 
+@app.route("/api/crawler/rescan-comment-seeds", methods=["POST"])
+def api_crawler_rescan_comment_seeds():
+    """扫描已有视频数据，为有评论但未爬取的视频重新注入评论种子。
+
+    适用场景：评论爬虫意外中断后，Redis 种子丢失，但视频 JSON 和评论数据仍在。
+    此接口扫描 data/videos/*.json，找到 reply_count > 0 但无对应评论文件的视频，
+    将其 BVID 注入 Redis comment_seeds 队列。
+    """
+    import redis as redis_mod
+    try:
+        r = redis_mod.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+        r.ping()
+    except Exception:
+        return jsonify({"success": False, "message": "Redis 连接失败"}), 503
+
+    # 扫描视频文件
+    video_dir = Path(DATA_DIR) / "videos"
+    comment_dir = Path(DATA_DIR) / "comments"
+    injected = 0
+    skipped_no_reply = 0
+    skipped_has_comment = 0
+
+    for vf in sorted(video_dir.glob("*.json")):
+        bvid = vf.stem
+        # 检查是否已有评论文件
+        if (comment_dir / f"{bvid}_comments.json").exists():
+            skipped_has_comment += 1
+            continue
+        try:
+            with open(vf, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            reply = data.get("reply_count", 0)
+            aid = data.get("aid", 0)
+            if not reply or not aid:
+                skipped_no_reply += 1
+                continue
+            # 注入种子
+            task = json.dumps({"bvid": bvid, "aid": int(aid), "reply_count": int(reply)})
+            r.lpush("bilibili_crawler:comment_seeds", task)
+            injected += 1
+        except Exception:
+            continue
+
+    return jsonify({
+        "success": True,
+        "injected": injected,
+        "skipped_has_comment": skipped_has_comment,
+        "skipped_no_reply": skipped_no_reply,
+        "total_videos": skipped_has_comment + skipped_no_reply + injected,
+        "message": f"已从 {injected + skipped_has_comment + skipped_no_reply} 个视频中注入 {injected} 条评论种子"
+    })
+
+
+@app.route("/api/crawler/rescan-user-seeds", methods=["POST"])
+def api_crawler_rescan_user_seeds():
+    """扫描已有评论数据，提取所有评论者 MID，注入用户爬虫种子队列。
+
+    扫描 data/comments/*_comments.json，提取每个评论的 mid，
+    去重后注入 Redis user_seeds 队列。
+    """
+    import redis as redis_mod
+    try:
+        r = redis_mod.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+        r.ping()
+    except Exception:
+        return jsonify({"success": False, "message": "Redis 连接失败"}), 503
+
+    comment_dir = Path(DATA_DIR) / "comments"
+    all_mids = set()
+    scanned = 0
+
+    for cf in comment_dir.glob("*_comments.json"):
+        try:
+            with open(cf, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            comments = data if isinstance(data, list) else data.get("comments", [])
+            for c in comments:
+                if isinstance(c, dict) and c.get("mid"):
+                    all_mids.add(int(c["mid"]))
+            scanned += 1
+        except Exception:
+            continue
+
+    injected = 0
+    for mid in all_mids:
+        r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))
+        injected += 1
+
+    return jsonify({
+        "success": True,
+        "scanned_comments": scanned,
+        "unique_mids": len(all_mids),
+        "injected": injected,
+        "message": f"从 {scanned} 个评论文件中提取 {injected} 个唯一 MID，已注入用户爬虫种子队列"
+    })
+
+
 @app.route("/api/crawler/start-both", methods=["POST"])
 def api_crawler_start_both():
     results = {}
@@ -2778,7 +3017,7 @@ def api_crawler_clear():
 def api_crawler_log(spider_name: str):
     lines = request.args.get("lines", 50, type=int)
     log_info = _read_spider_log(spider_name, tail_lines=lines)
-    if log_info["total_lines"] == 0 and not os.path.exists(CRAWLER_LOG_PATH):
+    if log_info["total_lines"] == 0:
         return jsonify({"success": False, "message": "暂无日志（爬虫未启动或日志文件不存在）"}), 404
     return jsonify({"success": True, "data": log_info})
 

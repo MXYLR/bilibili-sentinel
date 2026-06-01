@@ -79,6 +79,30 @@
         </div>
     </div>
 
+    <!-- 删除进度 Modal -->
+    <div class="modal fade" id="deleteProgressModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title"><i class="bi bi-arrow-repeat spinner-icon"></i> 正在删除</h5>
+                </div>
+                <div class="modal-body text-center py-4">
+                    <div id="delete-progress-text" class="mb-3 text-muted">准备中...</div>
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-danger"
+                             id="delete-progress-bar" role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                    <small class="text-muted mt-2 d-block" id="delete-progress-count">0 / 0</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="delete-cancel-btn" style="display:none">
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="toast-container position-fixed bottom-0 end-0 p-3"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -111,7 +135,6 @@
                 <select id="crawler-log-spider" class="form-select form-select-sm py-0" style="width:auto;font-size:11px" onchange="switchCrawlerLog()">
                     <option value="bilibili_video">视频爬虫</option>
                     <option value="bilibili_comment">评论爬虫</option>
-                    <option value="bilibili_user">用户爬虫</option>
                     <option value="bilibili_user">用户爬虫</option>
                 </select>
                 <span id="crawler-stream-status" class="text-muted small">⏸</span>
@@ -367,6 +390,66 @@
                 .catch(() => { newBtn.disabled = false; newBtn.innerHTML = '<i class="bi bi-trash-fill"></i> 确认删除'; });
         });
         modal.show();
+    }
+
+    // 带进度条的删除确认
+    let deleteProgressModal = null;
+    function confirmDeleteWithProgress(message, onStart, onDone) {
+        // 先确认
+        if (!confirm(message.replace('正在删除','确定要删除') + '\n\n此操作不可撤销！')) return;
+
+        if (!deleteProgressModal) {
+            deleteProgressModal = new bootstrap.Modal(document.getElementById('deleteProgressModal'));
+        }
+        // 重置进度条状态
+        document.getElementById('delete-progress-text').textContent = '准备中...';
+        const bar = document.getElementById('delete-progress-bar');
+        bar.style.width = '0%';
+        bar.textContent = '0%';
+        bar.classList.remove('bg-secondary');
+        bar.classList.add('progress-bar-animated', 'bg-danger');
+        document.getElementById('delete-progress-count').textContent = '0 / 0';
+        // 重置取消按钮
+        const cancelBtn = document.getElementById('delete-cancel-btn');
+        cancelBtn.style.display = 'none';
+        cancelBtn.onclick = null;
+        deleteProgressModal.show();
+
+        onStart().then(() => {
+            // 等 Modal 动画完成后再关闭，避免 backdrop 残留
+            setTimeout(() => {
+                deleteProgressModal.hide();
+                // 强制清理可能残留的 backdrop
+                const backdrop = document.querySelector('.modal-backdrop');
+                if (backdrop) backdrop.remove();
+                document.body.classList.remove('modal-open');
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('padding-right');
+                setTimeout(onDone, 100);
+            }, 800);
+        }).catch(err => {
+            document.getElementById('delete-progress-text').textContent = '删除失败: ' + err.message;
+            bar.classList.remove('progress-bar-animated', 'bg-danger');
+            bar.classList.add('bg-secondary');
+            cancelBtn.style.display = 'inline-block';
+            cancelBtn.onclick = () => {
+                deleteProgressModal.hide();
+                const bd = document.querySelector('.modal-backdrop');
+                if (bd) bd.remove();
+                document.body.classList.remove('modal-open');
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('padding-right');
+                onDone();
+            };
+        });
+    }
+
+    function updateDeleteProgress(done, total, text) {
+        const pct = total > 0 ? Math.round(done * 100 / total) : 0;
+        document.getElementById('delete-progress-text').textContent = text || `已删除 ${done}/${total}...`;
+        document.getElementById('delete-progress-bar').style.width = pct + '%';
+        document.getElementById('delete-progress-bar').textContent = pct + '%';
+        document.getElementById('delete-progress-count').textContent = done + ' / ' + total;
     }
     </script>
     {% block extra_scripts %}{% endblock %}

@@ -340,3 +340,8 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 - 仅评论数据分组显示为「无视频源数据」+ 警告图标
 - 爬虫日志选择器移除弹幕爬虫选项
 - `stop_spider` 杀失败时返回 `success: False` 而非欺骗用户
+- 视频详情页 Chart.js/Bootstrap 改用本地加载 (消除 CDN 依赖)
+- 水军账号管理：头像为空时显示 B站默认头像，不再显示 `--`
+- LLM 置信度显示保护：自动纠正 `9500%` → `95%`
+- `base_config.py` 清理 8 个零引用废弃配置项
+- `settings.py` 清理无效 import

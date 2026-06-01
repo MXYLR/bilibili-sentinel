@@ -2,6 +2,10 @@
 {% block title %}系统总览{% endblock %}
 {% block content %}
 
+<style>
+.up-stat-card:hover { background: rgba(13,110,253,0.08); border-color: var(--bs-info) !important; }
+</style>
+
 <!-- 系统健康卡片 -->
 <div class="row mb-3" id="health-cards">
     <div class="col-lg-3 col-md-6 mb-2">
@@ -69,10 +73,10 @@
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-2">
-        <div class="card stat-card">
+        <div class="card stat-card" style="cursor:pointer" onclick="filterAnalyzed()" title="点击筛选已分析视频" id="stat-analyzed-card">
             <div class="card-body text-center">
                 <div class="stat-number" id="stat-analyzed">0</div>
-                <div class="stat-label">已分析</div>
+                <div class="stat-label">已分析 <small id="filter-indicator" class="text-info" style="display:none">★筛选</small></div>
             </div>
         </div>
     </div>
@@ -287,8 +291,8 @@ function loadVideos() {
             }
 
             // 分离热门榜视频 vs 其他视频
-            const hotVideos = d.data.filter(v => v.source === 'hot');
-            const restVideos = d.data.filter(v => v.source !== 'hot');
+            const hotVideos = (_analyzedFilter ? d.data.filter(v => v.has_report && v.source === 'hot') : d.data.filter(v => v.source === 'hot'));
+            const restVideos = (_analyzedFilter ? d.data.filter(v => v.has_report && v.source !== 'hot') : d.data.filter(v => v.source !== 'hot'));
 
             // 帮函: 构建视频分组 HTML（按UP主归组 + 桶内分页）
             // sortModes: ['views','comments'] 默认; 热榜加 'time'
@@ -389,14 +393,14 @@ function loadVideos() {
             });
 
             Object.values(groups).forEach((group, gi) => {
-                const collId = group.noMeta ? `no-source-group` : `up-group-${gi}`;
+                const collId = group.noMeta ? 'no-source-group' : 'up_' + group.mid;
                 const icon = group.noMeta ? 'bi bi-exclamation-circle' : undefined;
                 html += buildGroupHtml(group, collId, false, icon);
             });
             grid.innerHTML = html;
 
             // 展开时渲染（懒加载）
-            document.querySelectorAll('[id^="hot-group"], [id^="up-group-"]').forEach(el => {
+            document.querySelectorAll('[id^="hot-group"], [id^="up_"]').forEach(el => {
                 el.addEventListener('show.bs.collapse', function() {
                     const cid = this.id;
                     Object.keys(bucketPageStates).forEach(bk => {
@@ -405,22 +409,38 @@ function loadVideos() {
                 });
             });
 
-            // 立即渲染已展开的分组（show 类已存在，不会再触发 show.bs.collapse 事件）
-            document.querySelectorAll('[id^="hot-group"].show, [id^="up-group-"].show').forEach(el => {
+            // 立即渲染已展开的分组
+            document.querySelectorAll('[id^="hot-group"].show, [id^="up_"].show').forEach(el => {
                 const cid = el.id;
                 Object.keys(bucketPageStates).forEach(bk => {
                     if (bk.startsWith(cid + '-')) renderBucketPage(bk);
                 });
             });
 
-            // 统计行
+            // 统计行——UP主列表 + 翻页
             allUpGroups = d.up_groups || [];
-            const stats = document.getElementById('up-stats-row');
-            if (allUpGroups.length > 0) {
-                stats.innerHTML = allUpGroups.slice(0, 6).map(g =>
-                    `<div class="col-lg-2 col-md-4 col-6 mb-2"><div class="border rounded p-1 text-center small"><strong title="${g.name}">${g.name.substring(0,10)}${g.name.length>10?'..':''}</strong><br><span class="text-muted">${g.count}视频 ${formatNum(g.total_views)}播放</span></div></div>`
-                ).join('') + (allUpGroups.length > 6 ? `<div class="col-lg-2 col-md-4 col-6 mb-2 small text-muted align-self-center">...共 ${allUpGroups.length} 个UP主</div>` : '');
-            }
+            const UP_PER_PAGE = 6;
+            window._upPage = 0;
+            window._upGroups = allUpGroups;
+            window._renderUpStats = () => {
+                const stats = document.getElementById('up-stats-row');
+                const start = window._upPage * UP_PER_PAGE;
+                const pageGroups = window._upGroups.slice(start, start + UP_PER_PAGE);
+                const totalPages = Math.ceil(window._upGroups.length / UP_PER_PAGE);
+                stats.innerHTML = pageGroups.map((g, i) =>
+                    `<div class="col-lg-2 col-md-4 col-6 mb-2"><div class="border rounded p-1 text-center small up-stat-card" style="cursor:pointer" onclick="scrollToUpGroup('up_${g.mid}')" title="点击定位到该UP主的视频列表">
+                    <strong>${g.name.substring(0,12)}${g.name.length>12?'..':''}</strong><br>
+                    <span class="text-muted">${g.count}视频 ${formatNum(g.total_views)}播放</span></div></div>`
+                ).join('');
+                if (totalPages > 1) {
+                    stats.innerHTML += '<div class="col-12 text-center small mt-1">' +
+                        '<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="window._upPage=Math.max(0,window._upPage-1);window._renderUpStats()" ' + (window._upPage===0?'disabled':'') + '>&laquo; 上一页</button>' +
+                        '<span class="mx-2 text-muted">' + (window._upPage+1) + '/' + totalPages + '</span>' +
+                        '<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="window._upPage=Math.min(' + (totalPages-1) + ',window._upPage+1);window._renderUpStats()" ' + (window._upPage>=totalPages-1?'disabled':'') + '>下一页 &raquo;</button>' +
+                        '</div>';
+                }
+            };
+            if (allUpGroups.length > 0) window._renderUpStats();
 
             document.getElementById('pagination-row').style.display = 'none';
             document.getElementById('stat-videos').textContent = d.total || d.data.length;
@@ -679,6 +699,38 @@ function deleteVideo(bvid, title) {
                 }
             })
     );
+}
+
+// ---- UP主定位 + 已分析筛选 ----
+let _analyzedFilter = false;
+
+function scrollToUpGroup(upKey) {
+    // 展开对应的 UP主分组卡片并滚动到
+    const el = document.getElementById(upKey);
+    if (el) {
+        const collapse = bootstrap.Collapse.getInstance(el);
+        if (!collapse || !el.classList.contains('show')) {
+            new bootstrap.Collapse(el, { toggle: true });
+        }
+        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
+    }
+}
+
+function filterAnalyzed() {
+    _analyzedFilter = !_analyzedFilter;
+    const indicator = document.getElementById('filter-indicator');
+    const card = document.getElementById('stat-analyzed-card');
+    if (_analyzedFilter) {
+        indicator.style.display = 'inline';
+        card.style.borderLeft = '3px solid var(--info)';
+        card.style.backgroundColor = 'rgba(13,110,253,0.05)';
+    } else {
+        indicator.style.display = 'none';
+        card.style.borderLeft = '';
+        card.style.backgroundColor = '';
+    }
+    // 重新加载视频列表（后端已返回 has_report 字段）
+    loadVideos();
 }
 
 // ---- 删除分类数据 ----

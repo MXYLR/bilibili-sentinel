@@ -22,43 +22,36 @@ PLATFORM = "bilibili"
 # ============================================================
 
 # IP代理池
-ENABLE_IP_PROXY = False              # 是否启用IP代理池
-IP_PROXY_PROVIDER = "free_proxy"     # 代理供应商: free_proxy, kuaidaili
-IP_PROXY_POOL_COUNT = 5              # 代理池大小
-IP_PROXY_VALIDATE_TIMEOUT = 5        # 代理验证超时(秒)
+ENABLE_IP_PROXY = False              # 是否启用IP代理池 (proxy/ 模块使用)
 
 # Clash Verge 代理 (用于 requests 库直连 B站 API)
-# 注意: Clash 混合端口同时支持 HTTP/SOCKS5，此处使用 socks5 协议（需 PySocks）
 CLASH_PROXY_ENABLED = True                  # 是否启用 Clash 代理
 CLASH_PROXY_URL = "socks5://192.168.1.104:7897"  # Clash Verge SOCKS5 代理地址
 
 # CDP 浏览器反检测
-ENABLE_CDP_MODE = False              # 是否启用CDP浏览器模式
-CDP_HEADLESS = True                  # CDP模式下是否无头
-ENABLE_STEALTH_JS = True             # 是否注入stealth.js反检测脚本
+ENABLE_CDP_MODE = True              # 是否启用CDP浏览器模式
 
 # 数据采集
 ENABLE_GET_COMMENTS = True           # 是否爬取评论
 ENABLE_GET_SUB_COMMENTS = True       # 是否爬取子评论（楼中楼）
-ENABLE_GET_MEDIAS = False            # 是否下载视频媒体
 
 # 数据存储
 SAVE_DATA_OPTION = "json"            # 存储后端: json, sqlite
 ENABLE_CACHE_DEDUP = True            # 是否启用缓存去重
 
 # 登录
-SAVE_LOGIN_STATE = False             # 是否持久化登录态
+SAVE_LOGIN_STATE = True             # 是否持久化登录态
 LOGIN_TYPE = "qrcode"                # 登录方式: qrcode, phone, cookie
 
 # LLM 水军分析
-ENABLE_LLM_ANALYSIS = False          # 是否启用大语言模型语义分析
+ENABLE_LLM_ANALYSIS = True          # 是否启用大语言模型语义分析
 
 # AICU 深度分析
 ENABLE_DEEP_ANALYSIS = False         # 是否启用 AICU 历史评论深度分析
 AICU_COOKIE = ""                     # AICU 登录 Cookie (可选, 提升数据质量)
 
 # 用户数据采集 (v2.1: F12-F14 数据源)
-ENABLE_USER_CRAWL = False            # 是否启用用户空间数据采集 (画像+动态)
+ENABLE_USER_CRAWL = True            # 是否启用用户空间数据采集 (画像+动态)
 USER_CRAWL_MAX_USERS = 500           # 单次运行最大用户数
 USER_CRAWL_MAX_POSTS = 50            # 每个用户最多采集动态条数
 
@@ -71,17 +64,11 @@ BILIBILI_REFERER = "https://www.bilibili.com"
 # 请求限速 (B站限制约 3-5 req/s，保守设 3 req/s)
 REQUEST_INTERVAL = 0.34              # 秒，约 3 req/s
 COMMENT_PAGE_SIZE = 20               # B站评论API固定每页20条
-COMMENT_MAX_PAGES = 100              # 每个视频最大评论页数 (v2.2: 从25提升到100)
-COMMENT_MAX_TOTAL = 10000            # 单个视频评论采集上限 (v2.2: 从2000提升到10000)
-COMMENT_DUAL_SORT = True             # v2.2: 时间排序耗尽后自动切换热度排序
-COMMENT_SUB_MAX_PAGES = 5            # 子评论最大翻页数 (v2.2: 从3提升到5)
-MAX_COMMENT_PAGES = 100               # [已废弃] 请使用 COMMENT_MAX_PAGES
-MAX_SUB_REPLIES = 5                   # [已废弃] 请使用 COMMENT_SUB_MAX_PAGES
-
-# 搜索配置
-BILI_SEARCH_MODE = "normal"          # normal, all_in_time_range, daily_limit_in_time_range
-START_PAGE = 1                       # 搜索起始页
-CRAWLER_MAX_NOTES_COUNT = 50         # 单次最大爬取条目数
+COMMENT_MAX_PAGES = 100              # 每个视频最大评论页数
+COMMENT_MAX_TOTAL = 10000            # 单个视频评论采集上限
+COMMENT_DUAL_SORT = True             # 时间排序耗尽后自动切换热度排序
+COMMENT_SUB_MAX_PAGES = 5            # 子评论最大翻页数
+# [已废弃 v2.2] MAX_COMMENT_PAGES → COMMENT_MAX_PAGES, MAX_SUB_REPLIES → COMMENT_SUB_MAX_PAGES
 
 # WBI 签名 — 混肴密钥表 (B站前端源码提取)
 MIXIN_KEY_ENC_TAB = [

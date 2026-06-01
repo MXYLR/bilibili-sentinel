@@ -180,7 +180,7 @@ function renderTable(accounts) {
         const riskBadge = a.risk_level === 'high' ? 'danger' : a.risk_level === 'medium' ? 'warning' : 'secondary';
         const riskLabel = a.risk_level === 'high' ? '高' : a.risk_level === 'medium' ? '中' : '低';
         const addedIcon = a.added_by === 'auto' ? '<i class="bi bi-robot text-info" title="自动检测"></i>' : '<i class="bi bi-hand-index text-success" title="手动标记"></i>';
-        const avatarHtml = a.avatar ? `<img src="${a.avatar}" width="36" height="36" class="rounded-circle" onerror="this.style.display='none'">` : '<span class="text-muted">--</span>';
+        const avatarHtml = a.avatar ? `<img src="${a.avatar}" width="36" height="36" class="rounded-circle" onerror="this.style.display='none'">` : `<img src="https://static.hdslb.com/images/member/noface.gif" width="36" height="36" class="rounded-circle">`;
         const reasonsCount = a.reasons ? a.reasons.length : 0;
         return `<tr>
             <td><input type="checkbox" class="form-check-input wa-cb" value="${a.mid}" onchange="updateBatchBtn()"></td>

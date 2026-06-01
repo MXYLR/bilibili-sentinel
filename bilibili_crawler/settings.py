@@ -19,7 +19,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.base_config import (
     BILIBILI_REFERER, LOG_DIR, COMMENT_PAGE_SIZE,
-    MAX_COMMENT_PAGES, MAX_SUB_REPLIES, CRAWLER_MAX_NOTES_COUNT,
     ENABLE_IP_PROXY, ENABLE_CACHE_DEDUP, SAVE_DATA_OPTION,
 )
 from config.db_config import (

@@ -412,6 +412,7 @@ class LLMAnalyzer:
         comments_data: list,
         video_info: dict = None,
         threshold_override: float = None,
+        progress_callback=None,
     ) -> dict:
         """
         对高风险用户进行第二轮深度 LLM 分析（基于 AICU 历史数据）。
@@ -502,6 +503,9 @@ class LLMAnalyzer:
                 aicu_success += 1
             else:
                 aicu_failed += 1
+
+            if progress_callback:
+                progress_callback(aicu_success + aicu_failed, u.get("uname", str(mid)))
 
             if data.waf_blocked:
                 aicu_waf_blocked = True

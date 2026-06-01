@@ -2,7 +2,7 @@
 {% block title %}{{ video.get('title', '视频详情') }}{% endblock %}
 
 {% block extra_head %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="/static/js/chart.umd.min.js" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -277,7 +277,7 @@
                                           onclick="showUserDetail({{ loop.index0 }})"
                                           style="cursor:pointer"
                                           title="点击查看 LLM + AICU 详细分析">🔍 {{ user.llm_type_name }}</span>
-                                    <small class="text-muted d-block">{{ user.llm_confidence }}%</small>
+                                    <small class="text-muted d-block">{{ (user.llm_confidence|float / 100 if user.llm_confidence|float > 100 else user.llm_confidence|float)|round(1) }}%</small>
                                     {% else %}
                                     <small class="text-muted">-</small>
                                     {% endif %}

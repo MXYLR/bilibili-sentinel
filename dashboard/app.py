@@ -85,6 +85,21 @@ from config import DATA_DIR, VIDEO_DIR, COMMENT_DIR, REPORT_DIR
 app = Flask(__name__)
 app.secret_key = "bilibili-sentinel-dashboard-v2"
 
+
+@app.template_filter("tojson_lite")
+def _tojson_lite(value):
+    """内联 JSON 过滤器：剔除大字段（features/sample_comments 等），保留图表所需的 top_features。"""
+    import json as _json
+    # 大字段（单条可达数十KB），剔除后页面 JS 显著缩小
+    LARGE_FIELDS = {"features", "sample_comments", "llm_key_evidence", "deep_key_evidence",
+                    "aicu_stats", "aicu_names", "aicu_device", "deep_reasoning", "llm_reasoning",
+                    "sign", "rank"}
+    # top_features 保留：每个用户只有 ~10 条小的 {name, score}，特征图表依赖它
+    if isinstance(value, list):
+        value = [{k: v for k, v in (u.items() if isinstance(u, dict) else {})
+                  if k not in LARGE_FIELDS} for u in value]
+    return _json.dumps(value, ensure_ascii=False)
+
 SCRAPY_EXE = os.path.join(PROJECT_ROOT, "venv", "Scripts", "scrapy.exe")
 SCRAPY_CWD = PROJECT_ROOT
 CRAWLER_LOG_PATH = os.path.join(DATA_DIR, "logs", "bilibili_crawler.log")
@@ -1188,6 +1203,53 @@ class DeleteTaskTracker:
         }
 
 
+class AicuBatchTracker:
+    """跟踪批量 AICU 深度分析进度，支持前端轮询。"""
+
+    _tasks: dict = {}  # bvid -> {status, total, done, current_user, progress}
+    _lock = threading.Lock()
+
+    @classmethod
+    def start(cls, bvid: str, total: int = 0):
+        with cls._lock:
+            cls._tasks[bvid] = {
+                "status": "running", "total": total, "done": 0,
+                "current_user": "准备中...", "progress": f"0/{total}",
+            }
+
+    @classmethod
+    def update(cls, bvid: str, done: int, current_user: str = ""):
+        with cls._lock:
+            if bvid in cls._tasks:
+                t = cls._tasks[bvid]
+                t["done"] = done
+                t["current_user"] = current_user
+                t["progress"] = f"{done}/{t['total']}"
+
+    @classmethod
+    def finish(cls, bvid: str, result: dict = None, error: str = None):
+        with cls._lock:
+            if bvid in cls._tasks:
+                t = cls._tasks[bvid]
+                t["status"] = "error" if error else "done"
+                t["error"] = error
+                t["result"] = result
+
+    @classmethod
+    def get_status(cls, bvid: str) -> dict:
+        with cls._lock:
+            t = cls._tasks.get(bvid, {})
+        return {
+            "status": t.get("status", "idle"),
+            "total": t.get("total", 0),
+            "done": t.get("done", 0),
+            "current_user": t.get("current_user", ""),
+            "progress": t.get("progress", ""),
+            "error": t.get("error"),
+            "result": t.get("result"),
+        }
+
+
 analysis_mgr = AnalysisManager()
 
 
@@ -1342,6 +1404,25 @@ def index():
     return render_template("index.html", videos=videos)
 
 
+@app.route("/debug-js")
+def debug_js():
+    # 加载真实 user_scores 供测试
+    user_scores = {}
+    import glob, os
+    reports = sorted(glob.glob(os.path.join(DATA_DIR, "reports", "*_report.json")))
+    if reports:
+        with open(reports[0], "r", encoding="utf-8") as f:
+            report = json.load(f)
+        _src = report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or []
+        for u in _src:
+            mid = u.get("mid", 0)
+            if mid:
+                user_scores[mid] = {"score": u.get("suspicious_score", u.get("score", 0)), "level": u.get("risk_level", u.get("level", "low")), "type": u.get("water_army_type", u.get("llm_type_name", ""))}
+    resp = make_response(render_template("video_debug.html", user_scores=user_scores))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return resp
+
+
 @app.route("/video/<bvid>")
 def video_detail(bvid: str):
     video_info = _load_video_info(bvid)
@@ -1381,10 +1462,14 @@ def video_detail(bvid: str):
     # ---- 后端预渲染 AI 摘要 Markdown → HTML ----
     ai_summary_html = ""
     if report and report.get("ai_summary"):
+        # 修复 LLM 置信度显示异常（如 9500% → 95%）
+        import re as _re
+        ai_text = report["ai_summary"]
+        ai_text = _re.sub(r'(\d{3,})%', lambda m: str(int(int(m.group(1))/100)) + '%' if int(m.group(1)) > 100 else m.group(0), ai_text)
         try:
-            ai_summary_html = _md_to_html(report["ai_summary"])
+            ai_summary_html = _md_to_html(ai_text)
         except Exception:
-            ai_summary_html = report["ai_summary"].replace("\n", "<br>")
+            ai_summary_html = ai_text.replace("\n", "<br>")
 
     # ---- 构建全量 user_scores（供前端 riskMap 使用）----
     user_scores = {}
@@ -1403,7 +1488,7 @@ def video_detail(bvid: str):
                 "llm_type_id": u.get("llm_type_id", 0),
             }
 
-    return render_template(
+    resp = make_response(render_template(
         "video_detail.html",
         bvid=bvid,
         video=video_info,
@@ -1412,7 +1497,11 @@ def video_detail(bvid: str):
         comment_count=comment_count,
         ai_summary_html=ai_summary_html,
         user_scores=user_scores,
-    )
+    ))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route("/crawler")
@@ -1477,6 +1566,20 @@ def api_timeline(bvid: str):
     return jsonify({"success": True, "data": report.get("comment_timeline", [])})
 
 
+@app.route("/api/video/<bvid>/scored-users")
+def api_scored_users(bvid: str):
+    """返回裁剪后的 top_suspects（与 tojson_lite 相同字段），供前端异步加载。"""
+    report = _load_report(bvid)
+    if not report:
+        return jsonify({"success": False, "error": "报告不存在"}), 404
+    top = report.get("top_suspects", [])
+    LARGE_FIELDS = {"features", "sample_comments", "llm_key_evidence", "deep_key_evidence",
+                    "aicu_stats", "aicu_names", "aicu_device", "deep_reasoning", "llm_reasoning",
+                    "sign", "rank"}
+    lite = [{k: v for k, v in u.items() if k not in LARGE_FIELDS} for u in top]
+    return jsonify({"success": True, "data": lite})
+
+
 @app.route("/api/score-distribution/<bvid>")
 def api_score_distribution(bvid: str):
     report = _load_report(bvid)
@@ -1519,10 +1622,10 @@ def api_analysis_status(bvid: str):
 
 @app.route("/api/video/<bvid>/deep-analyze", methods=["POST"])
 def api_video_deep_analyze(bvid: str):
-    """手动触发深度分析 (AICU)，可自定义分数阈值。
+    """异步批量深度分析 (AICU)，后台执行 + 前端轮询进度。
 
-    请求体: {"threshold": 30}  (可选, 默认30, 范围20-70)
-    返回: {"success": true, "deep_stats": {...}, "threshold": 30}
+    请求体: {"threshold": 30}  (可选, 默认30, 范围10-70)
+    立即返回 bvid 作为 task 标识符，前端轮询 GET /api/video/<bvid>/deep-analyze-status
     """
     # ---- 1. 加载数据 ----
     report = _load_report(bvid)
@@ -1543,11 +1646,11 @@ def api_video_deep_analyze(bvid: str):
     data = request.get_json(silent=True) or {}
     try:
         threshold = float(data.get("threshold", 30))
-        threshold = max(10, min(70, threshold))  # 限制 10-70
+        threshold = max(10, min(70, threshold))
     except (TypeError, ValueError):
         threshold = 30
 
-    # ---- 3. 构建 deep_analyze 所需的 scored_users ----
+    # ---- 3. 构建 scored_users ----
     scored_users = []
     for u in top_suspects:
         scored_users.append({
@@ -1571,34 +1674,55 @@ def api_video_deep_analyze(bvid: str):
             "deep_key_evidence": u.get("deep_key_evidence", []),
         })
 
-    # ---- 4. 创建 LLM 分析器 ----
+    # ---- 4. 创建分析器并校验 ----
     from analyzer.llm_analyzer import create_llm_analyzer
     analyzer = create_llm_analyzer()
     if not analyzer:
         return jsonify({"success": False, "error": "LLM 分析器不可用，请检查 API Key 配置"}), 503
 
-    # ---- 5. 记录分析前状态 ----
-    before_deep_count = sum(1 for u in top_suspects if u.get("deep_analyzed"))
-    before_candidate_count = sum(
-        1 for u in scored_users if u["suspicious_score"] >= threshold
-    )
-    if before_candidate_count == 0:
+    candidate_count = sum(1 for u in scored_users if u["suspicious_score"] >= threshold)
+    if candidate_count == 0:
         return jsonify({
             "success": False,
-            "error": f"阈值 {threshold} 下无候选用户（最高评分 {max((u['suspicious_score'] for u in scored_users), default=0)}）",
+            "error": f"阈值 {threshold} 下无候选用户",
         }), 400
 
-    # ---- 6. 执行深度分析 ----
+    # ---- 5. 启动后台线程 + 追踪器 ----
+    AicuBatchTracker.start(bvid, total=candidate_count)
+
+    threading.Thread(
+        target=_run_aicu_deep_analyze_bg,
+        args=(bvid, report, scored_users, comments, video_info, threshold, analyzer),
+        daemon=True,
+    ).start()
+
+    return jsonify({
+        "success": True,
+        "message": f"深度分析已启动，{candidate_count} 个候选用户",
+        "total": candidate_count,
+        "bvid": bvid,
+    })
+
+
+def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, threshold, analyzer):
+    """后台执行批量 AICU 深度分析，逐步更新进度追踪器。"""
     try:
+        candidate_users = [u for u in scored_users if u["suspicious_score"] >= threshold]
+        total = len(candidate_users)
+
         result = analyzer.deep_analyze(
             scored_users, comments, video_info,
             threshold_override=threshold,
+            progress_callback=lambda done, uname: AicuBatchTracker.update(
+                bvid, done=done, current_user=f"{done}/{total} {uname}"
+            ),
         )
     except Exception as e:
-        logger.exception(f"[Deep] 深度分析异常: {e}")
-        return jsonify({"success": False, "error": f"深度分析异常: {str(e)}"}), 500
+        logger.exception(f"[AICU-bg] 深度分析异常: {e}")
+        AicuBatchTracker.finish(bvid, error=str(e))
+        return
 
-    # ---- 7. 合并结果回报告 ----
+    # 合并结果回报告
     enhanced_users = result.get("enhanced_users", [])
     enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}
 
@@ -1606,7 +1730,6 @@ def api_video_deep_analyze(bvid: str):
         mid = u.get("mid", 0)
         enhanced = enhanced_by_mid.get(mid)
         if enhanced:
-            # 优先用深度分析后的融合分；fallback 用原有的 score/uspicious_score
             new_score = enhanced.get("suspicious_score", u.get("score", u.get("suspicious_score", 0)))
             u["suspicious_score"] = new_score
             u["score"] = new_score
@@ -1624,26 +1747,25 @@ def api_video_deep_analyze(bvid: str):
 
     deep_stats = result.get("stats", {})
     report["deep_stats"] = deep_stats
+    newly_analyzed = sum(1 for u in report["top_suspects"] if u.get("deep_analyzed"))
 
-    # ---- 8. 保存报告 ----
+    # 保存报告
     report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
-    after_deep_count = sum(1 for u in report["top_suspects"] if u.get("deep_analyzed"))
-    newly_analyzed = after_deep_count - before_deep_count
-
-    return jsonify({
-        "success": True,
+    AicuBatchTracker.finish(bvid, result={
         "deep_stats": deep_stats,
         "threshold": threshold,
         "newly_analyzed": newly_analyzed,
-        "total_candidates": before_candidate_count,
         "deep_confirmed": deep_stats.get("deep_confirmed", 0),
-        "aicu_success": deep_stats.get("aicu_success", 0),
-        "aicu_failed": deep_stats.get("aicu_failed", 0),
-        "deep_summary": result.get("deep_summary", ""),
     })
+
+
+@app.route("/api/video/<bvid>/deep-analyze-status")
+def api_deep_analyze_status(bvid: str):
+    """轮询批量 AICU 深度分析进度。"""
+    return jsonify({"success": True, "data": AicuBatchTracker.get_status(bvid)})
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/llm-analyze", methods=["POST"])

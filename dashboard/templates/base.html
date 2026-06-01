@@ -107,35 +107,40 @@
 
     <script src="/static/js/bootstrap.bundle.min.js" defer></script>
 
-    {# ---- 右下角调试控制台 ---- #}
-    <div id="debug-fab" class="position-fixed" style="bottom:24px;right:24px;z-index:1090;display:none">
+    {# ---- 右下角调试控制台（可拖动） ---- #}
+    <div id="debug-fab" class="position-fixed" style="bottom:24px;right:24px;z-index:1090;cursor:grab;user-select:none">
         <button class="btn btn-dark rounded-circle shadow d-flex align-items-center justify-content-center"
-                style="width:52px;height:52px" onclick="toggleDebugPanel()" title="调试控制台">
+                style="width:52px;height:52px" title="调试控制台">
             <i class="bi bi-terminal fs-5"></i>
         </button>
     </div>
 
     <div id="debug-panel" class="position-fixed bg-dark text-light border border-secondary rounded-3 shadow-lg"
          style="display:none;bottom:86px;right:24px;width:520px;max-height:75vh;z-index:1091;flex-direction:column;overflow:hidden">
-        <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom border-secondary bg-black bg-opacity-25">
-            <span class="small fw-bold"><i class="bi bi-terminal"></i> 调试控制台</span>
+        <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom border-secondary bg-black bg-opacity-25"
+             id="debug-panel-header" style="cursor:grab;user-select:none">
+            <span class="small fw-bold" style="pointer-events:none"><i class="bi bi-terminal"></i> 调试控制台</span>
             <div class="d-flex gap-2">
                 <span id="debug-mode-badge" class="badge bg-secondary small">HTTP</span>
                 <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="clearDebugLog()" title="清空">🗑</button>
                 <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="toggleDebugPanel()" title="关闭">✕</button>
             </div>
         </div>
-        <div id="debug-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh"></div>
+        <div id="debug-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh;display:none"></div>
+        <div id="aicu-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh;display:none"><div class="text-muted small p-2">暂无 AICU 分析日志。<br>在视频详情页执行深度分析后，日志将显示在这里。</div></div>
         <div class="px-2 py-1 border-top border-secondary bg-black bg-opacity-10 d-flex gap-1 flex-wrap align-items-center">
             <span class="text-muted small me-1">模式:</span>
-            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-http" onclick="switchDebugMode('http')">HTTP</button>
-            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-crawler" onclick="switchDebugMode('crawler')">爬虫日志</button>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2 active" id="btn-mode-http" onclick="switchDebugMode('http')">HTTP</button>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-crawler" onclick="switchDebugMode('crawler')">爬虫</button>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-aicu" onclick="switchDebugMode('aicu')">AICU</button>
             <span class="text-muted small mx-1">|</span>
             <span id="crawler-log-controls" style="display:none" class="d-flex align-items-center gap-1">
                 <select id="crawler-log-spider" class="form-select form-select-sm py-0" style="width:auto;font-size:11px" onchange="switchCrawlerLog()">
                     <option value="bilibili_video">视频爬虫</option>
                     <option value="bilibili_comment">评论爬虫</option>
                     <option value="bilibili_user">用户爬虫</option>
+                    <option value="bilibili_danmaku">弹幕爬虫</option>
+                    <option value="bilibili_up_videos">UP主视频爬虫</option>
                 </select>
                 <span id="crawler-stream-status" class="text-muted small">⏸</span>
             </span>
@@ -149,15 +154,21 @@
 
     <script>
     // ---- 全局调试日志 ----
-    const _debugLogs = [];
-    let _debugPanelOpen = false;
-    let _debugMode = 'http';           // 'http' | 'crawler'
-    let _crawlerEventSource = null;
-    let _crawlerLogLines = [];         // 爬虫日志缓冲区（最多 500 行）
+    var _debugLogs = [];
+    var _aicuLogLines = [];             // AICU 日志缓冲区（最多 300 行）
+    var _debugPanelOpen = false;
+    var _debugMode = 'http';           // 'http' | 'crawler' | 'aicu'
+    var _crawlerEventSource = null;
+    var _crawlerLogLines = [];         // 爬虫日志缓冲区（最多 500 行）
 
     function initDebugFab() {
-        const fab = document.getElementById('debug-fab');
-        if (fab) fab.style.display = 'block';
+        // 注册按钮拖动
+        var fab = document.getElementById('debug-fab');
+        if (fab) fab.addEventListener('mousedown', startFabDrag);
+        // 注册面板拖动
+        var pnlHdr = document.getElementById('debug-panel-header');
+        if (pnlHdr) pnlHdr.addEventListener('mousedown', startPanelDrag);
+        // 注册 fetch 拦截
         if (!window.__debugFetchPatched) {
             const _origFetch = window.fetch;
             window.fetch = function(...args) {
@@ -203,18 +214,32 @@
         const badge = document.getElementById('debug-mode-badge');
         const btnHttp = document.getElementById('btn-mode-http');
         const btnCrawler = document.getElementById('btn-mode-crawler');
+        const btnAicu = document.getElementById('btn-mode-aicu');
+        const debugLog = document.getElementById('debug-log');
+        const aicuLog = document.getElementById('aicu-log');
         const controls = document.getElementById('crawler-log-controls');
+
+        [btnHttp, btnCrawler, btnAicu].forEach(b => b && b.classList.remove('active'));
+        if (debugLog) debugLog.style.display = 'none';
+        if (aicuLog) aicuLog.style.display = 'none';
 
         if (mode === 'crawler') {
             badge.textContent = '爬虫日志'; badge.className = 'badge bg-info small';
-            btnHttp.classList.remove('active'); btnCrawler.classList.add('active');
+            if (btnCrawler) btnCrawler.classList.add('active');
             if (controls) controls.style.display = '';
-            // 断开旧连接，建立新 SSE
+            if (debugLog) debugLog.style.display = 'block';
             startCrawlerStream();
+        } else if (mode === 'aicu') {
+            badge.textContent = 'AICU日志'; badge.className = 'badge bg-primary small';
+            if (btnAicu) btnAicu.classList.add('active');
+            if (controls) controls.style.display = 'none';
+            if (aicuLog) aicuLog.style.display = 'block';
+            stopCrawlerStream();
         } else {
             badge.textContent = 'HTTP'; badge.className = 'badge bg-secondary small';
-            btnHttp.classList.add('active'); btnCrawler.classList.remove('active');
+            if (btnHttp) btnHttp.classList.add('active');
             if (controls) controls.style.display = 'none';
+            if (debugLog) debugLog.style.display = 'block';
             stopCrawlerStream();
         }
         renderDebugLog();
@@ -277,16 +302,29 @@
     }
 
     function renderDebugLog() {
-        const el = document.getElementById('debug-log');
-        if (!el || !_debugPanelOpen) return;
+        if (!_debugPanelOpen) return;
 
         if (_debugMode === 'crawler') {
+            const el = document.getElementById('debug-log');
+            if (!el) return;
             el.innerHTML = _crawlerLogLines.length === 0
                 ? '<div class="text-muted small p-2">正在连接爬虫日志流...</div>'
                 : _crawlerLogLines.map(l =>
                     `<div class="${l.cls || ''}" style="border-bottom:1px solid #1e293b;padding:1px 0;white-space:pre-wrap;word-break:break-all">${l.text}</div>`
                   ).join('');
+            el.scrollTop = el.scrollHeight;
+        } else if (_debugMode === 'aicu') {
+            const el = document.getElementById('aicu-log');
+            if (!el) return;
+            el.innerHTML = _aicuLogLines.length === 0
+                ? '<div class="text-muted small p-2">暂无 AICU 分析日志。<br>在视频详情页执行深度分析后，日志将显示在这里。</div>'
+                : _aicuLogLines.map(l =>
+                    `<div class="${l.cls || ''}" style="border-bottom:1px solid #1e293b;padding:1px 0;white-space:pre-wrap;word-break:break-all">${l.text}</div>`
+                  ).join('');
+            el.scrollTop = el.scrollHeight;
         } else {
+            const el = document.getElementById('debug-log');
+            if (!el) return;
             el.innerHTML = _debugLogs.slice(0, 80).map(e => {
                 const color = e.ok ? '#4ade80' : '#f87171';
                 const errTag = e.err ? ` <span style="color:#fbbf24">${e.err}</span>` : '';
@@ -299,15 +337,16 @@
                     ${errTag}
                 </div>`;
             }).join('') || '<div class="text-muted small p-2">暂无请求日志</div>';
+            el.scrollTop = el.scrollHeight;
         }
 
-        // 自动滚动到底部
-        el.scrollTop = el.scrollHeight;
     }
 
     function clearDebugLog() {
         if (_debugMode === 'crawler') {
             _crawlerLogLines = [];
+        } else if (_debugMode === 'aicu') {
+            _aicuLogLines = [];
         } else {
             _debugLogs.length = 0;
         }
@@ -324,6 +363,83 @@
         } catch(e) {
             if (el && _debugMode === 'http') el.innerHTML += `<div class="text-danger small">✗ ${e.message}</div>`;
         }
+    }
+
+    // ---- AICU 日志输出 ----
+    window.consoleLog = function(msg, level) {
+        level = level || 'info';
+        // 自动打开面板并切换到 AICU 模式
+        if (!_debugPanelOpen) toggleDebugPanel();
+        if (_debugMode !== 'aicu') switchDebugMode('aicu');
+        var cls = '';
+        if (level === 'success') cls = 'text-success';
+        else if (level === 'warn') cls = 'text-warning';
+        else if (level === 'error') cls = 'text-danger';
+        else cls = 'text-info';
+        var now = new Date();
+        var ts = now.toTimeString().slice(0, 8);
+        _aicuLogLines.push({ text: '[' + ts + '] ' + msg, cls: cls });
+        if (_aicuLogLines.length > 300) _aicuLogLines = _aicuLogLines.slice(-300);
+        renderDebugLog();
+    };
+
+    // ---- 浮动按钮拖动 ----
+    var _fabDragging = false, _fabStartX = 0, _fabStartY = 0, _fabStartLeft = 0, _fabStartTop = 0, _fabMoved = false;
+    window.startFabDrag = function(e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        var fab = document.getElementById('debug-fab');
+        _fabDragging = true; _fabMoved = false;
+        _fabStartX = e.clientX; _fabStartY = e.clientY;
+        _fabStartLeft = fab.offsetLeft; _fabStartTop = fab.offsetTop;
+        fab.style.cursor = 'grabbing';
+        document.addEventListener('mousemove', _onFabDrag);
+        document.addEventListener('mouseup', _onFabDrop);
+    };
+    function _onFabDrag(e) {
+        if (!_fabDragging) return;
+        var dx = e.clientX - _fabStartX, dy = e.clientY - _fabStartY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _fabMoved = true;
+        var fab = document.getElementById('debug-fab');
+        fab.style.left = Math.max(8, Math.min(window.innerWidth - 68, _fabStartLeft + dx)) + 'px';
+        fab.style.top = Math.max(8, Math.min(window.innerHeight - 68, _fabStartTop + dy)) + 'px';
+        fab.style.bottom = 'auto'; fab.style.right = 'auto';
+    }
+    function _onFabDrop(e) {
+        _fabDragging = false;
+        var fab = document.getElementById('debug-fab');
+        fab.style.cursor = 'grab';
+        document.removeEventListener('mousemove', _onFabDrag);
+        document.removeEventListener('mouseup', _onFabDrop);
+        if (!_fabMoved) toggleDebugPanel();
+    }
+
+    // ---- 面板拖动 ----
+    var _pnlDragging = false, _pnlStartX = 0, _pnlStartY = 0, _pnlStartLeft = 0, _pnlStartTop = 0;
+    window.startPanelDrag = function(e) {
+        if (e.target.closest('button') || e.target.closest('select')) return;
+        e.preventDefault();
+        var pnl = document.getElementById('debug-panel');
+        _pnlDragging = true;
+        _pnlStartX = e.clientX; _pnlStartY = e.clientY;
+        _pnlStartLeft = pnl.offsetLeft; _pnlStartTop = pnl.offsetTop;
+        document.getElementById('debug-panel-header').style.cursor = 'grabbing';
+        document.addEventListener('mousemove', _onPanelDrag);
+        document.addEventListener('mouseup', _onPanelDrop);
+    };
+    function _onPanelDrag(e) {
+        if (!_pnlDragging) return;
+        var pnl = document.getElementById('debug-panel');
+        pnl.style.left = Math.max(0, Math.min(window.innerWidth - 200, _pnlStartLeft + (e.clientX - _pnlStartX))) + 'px';
+        pnl.style.top = Math.max(0, Math.min(window.innerHeight - 40, _pnlStartTop + (e.clientY - _pnlStartY))) + 'px';
+        pnl.style.bottom = 'auto'; pnl.style.right = 'auto';
+    }
+    function _onPanelDrop() {
+        _pnlDragging = false;
+        var hdr = document.getElementById('debug-panel-header');
+        if (hdr) hdr.style.cursor = 'grab';
+        document.removeEventListener('mousemove', _onPanelDrag);
+        document.removeEventListener('mouseup', _onPanelDrop);
     }
 
     // 页面卸载时关闭 SSE 连接

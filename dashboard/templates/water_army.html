@@ -111,7 +111,7 @@
                         <th>昵称 / MID</th>
                         <th style="width:100px">可疑度</th>
                         <th style="width:80px">等级</th>
-                        <th style="width:80px">来源</th>
+                        <th style="width:160px">来源</th>
                         <th style="width:90px">收录次数</th>
                         <th style="width:140px">收录时间</th>
                         <th style="width:110px">操作</th>
@@ -181,6 +181,9 @@ function renderTable(accounts) {
         const riskLabel = a.risk_level === 'high' ? '高' : a.risk_level === 'medium' ? '中' : '低';
         const addedIcon = a.added_by === 'auto' ? '<i class="bi bi-robot text-info" title="自动检测"></i>' : '<i class="bi bi-hand-index text-success" title="手动标记"></i>';
         const avatarHtml = a.avatar ? `<img src="${a.avatar}" width="36" height="36" class="rounded-circle" onerror="this.style.display='none'">` : `<img src="https://static.hdslb.com/images/member/noface.gif" width="36" height="36" class="rounded-circle">`;
+        const sourcesHtml = (a.sources || []).map(s => 
+            s.startsWith('BV') ? `<a href="/video/${s}" class="text-decoration-none small" title="查看视频详情">${s}</a>` : `<span class="small text-muted">${s}</span>`
+        ).join('<br>') || '<span class="text-muted">-</span>';
         const reasonsCount = a.reasons ? a.reasons.length : 0;
         return `<tr>
             <td><input type="checkbox" class="form-check-input wa-cb" value="${a.mid}" onchange="updateBatchBtn()"></td>
@@ -193,7 +196,7 @@ function renderTable(accounts) {
             </td>
             <td><span class="fw-bold text-${riskBadge}">${a.suspicion_score.toFixed(1)}</span></td>
             <td><span class="badge bg-${riskBadge}">${riskLabel}</span></td>
-            <td class="text-center">${addedIcon}</td>
+            <td>${addedIcon}&nbsp;<small>${sourcesHtml}</small></td>
             <td>${reasonsCount}</td>
             <td><small>${(a.added_at||'').slice(0,16)}</small></td>
             <td>

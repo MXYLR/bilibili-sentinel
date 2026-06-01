@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -413,6 +414,7 @@ class LLMAnalyzer:
         video_info: dict = None,
         threshold_override: float = None,
         progress_callback=None,
+        log_callback=None,
     ) -> dict:
         """
         对高风险用户进行第二轮深度 LLM 分析（基于 AICU 历史数据）。
@@ -480,6 +482,8 @@ class LLMAnalyzer:
             f"[Deep] 开始 AICU 深度分析: {len(limited)} 个高风险用户 "
             f"(阈值≥{_threshold})"
         )
+        if log_callback:
+            log_callback("info", f"AICU 深度分析启动: {len(limited)} 个候选, 阈值≥{_threshold}")
 
         # ---- 2. AICU 数据抓取 ----
         aicu_data_map = {}  # mid -> AicuUserData
@@ -488,24 +492,43 @@ class LLMAnalyzer:
         aicu_waf_blocked = False
 
         from analyzer.aicu_fetcher import AicuFetcher
-        fetcher = AicuFetcher(cookie=AICU_COOKIE, timeout=15)
+        fetcher = AicuFetcher(cookie=AICU_COOKIE, timeout=15, log_callback=log_callback)
 
-        for u in limited:
+        for idx, u in enumerate(limited):
             mid = u.get("mid", 0)
+            uname = u.get("uname", str(mid))
             if not mid:
                 continue
 
-            logger.info(f"[Deep] 抓取 AICU 数据: mid={mid} ({u.get('uname', '?')})")
+            logger.info(f"[Deep] 抓取 AICU 数据: mid={mid} ({uname})")
+            if log_callback:
+                log_callback("info", f"[{idx+1}/{len(limited)}] 调用 AICU API: mid={mid} ({uname})")
+
             data = fetcher.fetch_all(mid)
             aicu_data_map[mid] = data
 
             if data.fetch_ok:
                 aicu_success += 1
+                if log_callback:
+                    extra = []
+                    if data.comment_count > 0:
+                        extra.append(f"评论{data.comment_count}条")
+                    if data.danmu_count > 0:
+                        extra.append(f"弹幕{data.danmu_count}条")
+                    if data.device_name:
+                        extra.append(f"设备:{data.device_name}")
+                    if data.history_names:
+                        extra.append(f"曾用名:{len(data.history_names)}个")
+                    detail = ", ".join(extra) if extra else "无有效数据"
+                    log_callback("success", f"  AICU 返回 (mid={mid}): {detail}")
             else:
                 aicu_failed += 1
+                reason = "WAF拦截" if data.waf_blocked else (data.fetch_error or "API 无响应")
+                if log_callback:
+                    log_callback("warn", f"  抓取失败 (mid={mid}): {reason}")
 
             if progress_callback:
-                progress_callback(aicu_success + aicu_failed, u.get("uname", str(mid)))
+                progress_callback(aicu_success + aicu_failed, uname)
 
             if data.waf_blocked:
                 aicu_waf_blocked = True
@@ -544,6 +567,9 @@ class LLMAnalyzer:
             end = min(start + batch_size, len(deep_candidates))
             batch = deep_candidates[start:end]
 
+            if log_callback:
+                log_callback("info", f"LLM 深度分析 批次 {batch_idx+1}/{total_batches} (共{len(batch)}人)")
+
             # 构建合并 prompt（每人独立区块）
             prompt_parts = [
                 f"## 深度分析批次 {batch_idx + 1}/{total_batches}\n"
@@ -558,6 +584,8 @@ class LLMAnalyzer:
             client = self._get_client()
             if client is None:
                 logger.error("[Deep] LLM 客户端不可用，终止深度分析")
+                if log_callback:
+                    log_callback("error", "LLM 客户端不可用，深度分析终止")
                 break
 
             batch_results = self._call_deep_llm(client, DEEP_SYSTEM_PROMPT, full_prompt)
@@ -570,6 +598,10 @@ class LLMAnalyzer:
                 f"[Deep] 批 {batch_idx + 1}/{total_batches} 完成 "
                 f"({len(batch_results)} 结果)"
             )
+            if log_callback:
+                type_counts = Counter(r.get("deep_type_name", "未知") for r in batch_results)
+                summary = ", ".join(f"{k}:{v}" for k, v in type_counts.most_common(3))
+                log_callback("success", f"  批次{batch_idx+1}完成: {summary}")
 
             if batch_idx < total_batches - 1:
                 time.sleep(1.5)
@@ -662,6 +694,10 @@ class LLMAnalyzer:
             f"{deep_confirmed} 深度确认, "
             f"AICU 成功={aicu_success}/失败={aicu_failed}"
         )
+        if log_callback:
+            log_callback("success",
+                f"深度分析完成: {len(limited)}候选 → {deep_confirmed}确认水军, "
+                f"AICU成功={aicu_success}/失败={aicu_failed}")
 
         return {
             "enhanced_users": enhanced_users,

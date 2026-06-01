@@ -1218,8 +1218,21 @@ class DeleteTaskTracker:
 class AicuBatchTracker:
     """跟踪批量 AICU 深度分析进度，支持前端轮询。"""
 
-    _tasks: dict = {}  # bvid -> {status, total, done, current_user, progress}
+    _tasks: dict = {}  # bvid -> {status, total, done, current_user, progress, logs}
     _lock = threading.Lock()
+    MAX_LOGS = 200  # 最多保留日志条数
+
+    @classmethod
+    def _ts(cls) -> str:
+        from datetime import datetime
+        return datetime.now().strftime("%H:%M:%S")
+
+    @classmethod
+    def _append_log(cls, t: dict, msg: str, level: str = "info"):
+        t.setdefault("logs", [])
+        t["logs"].append({"ts": cls._ts(), "msg": msg, "level": level})
+        if len(t["logs"]) > cls.MAX_LOGS:
+            t["logs"] = t["logs"][-cls.MAX_LOGS:]
 
     @classmethod
     def start(cls, bvid: str, total: int = 0):
@@ -1227,7 +1240,10 @@ class AicuBatchTracker:
             cls._tasks[bvid] = {
                 "status": "running", "total": total, "done": 0,
                 "current_user": "准备中...", "progress": f"0/{total}",
+                "logs": [],
             }
+            cls._append_log(cls._tasks[bvid],
+                f"开始批量 AICU 深度分析，共 {total} 个候选用户", "info")
 
     @classmethod
     def update(cls, bvid: str, done: int, current_user: str = ""):
@@ -1237,6 +1253,18 @@ class AicuBatchTracker:
                 t["done"] = done
                 t["current_user"] = current_user
                 t["progress"] = f"{done}/{t['total']}"
+                # 解析 "done/total uname" 格式
+                parts = current_user.split(" ", 1)
+                uname = parts[1] if len(parts) > 1 else current_user
+                cls._append_log(t, f"[{done}/{t['total']}] 分析用户: {uname}", "info")
+
+    @classmethod
+    def log(cls, bvid: str, msg: str, level: str = "info"):
+        """外部写入日志条目（用于更细粒度的步骤追踪）。"""
+        with cls._lock:
+            t = cls._tasks.get(bvid)
+            if t:
+                cls._append_log(t, msg, level)
 
     @classmethod
     def finish(cls, bvid: str, result: dict = None, error: str = None):
@@ -1246,11 +1274,20 @@ class AicuBatchTracker:
                 t["status"] = "error" if error else "done"
                 t["error"] = error
                 t["result"] = result
+                if error:
+                    cls._append_log(t, f"分析异常: {error}", "error")
+                else:
+                    newly = result.get("newly_analyzed", 0) if result else 0
+                    confirmed = result.get("deep_confirmed", 0) if result else 0
+                    cls._append_log(t,
+                        f"分析完成！新增 {newly} 个用户，确认水军 {confirmed} 人", "success")
 
     @classmethod
-    def get_status(cls, bvid: str) -> dict:
+    def get_status(cls, bvid: str, since_log: int = 0) -> dict:
         with cls._lock:
             t = cls._tasks.get(bvid, {})
+            all_logs = t.get("logs", [])
+            new_logs = all_logs[since_log:]
         return {
             "status": t.get("status", "idle"),
             "total": t.get("total", 0),
@@ -1259,6 +1296,8 @@ class AicuBatchTracker:
             "progress": t.get("progress", ""),
             "error": t.get("error"),
             "result": t.get("result"),
+            "logs": new_logs,
+            "log_count": len(all_logs),
         }
 
 
@@ -1718,6 +1757,17 @@ def api_video_deep_analyze(bvid: str):
 
 def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, threshold, analyzer):
     """后台执行批量 AICU 深度分析，逐步更新进度追踪器。"""
+
+    def _track_log(level, msg):
+        """将日志同时写入 Python logger 和前端追踪器。"""
+        if level == "error":
+            logger.error(f"[AICU-bg] {msg}")
+        elif level == "warn":
+            logger.warning(f"[AICU-bg] {msg}")
+        else:
+            logger.info(f"[AICU-bg] {msg}")
+        AicuBatchTracker.log(bvid, msg, level)
+
     try:
         candidate_users = [u for u in scored_users if u["suspicious_score"] >= threshold]
         total = len(candidate_users)
@@ -1728,6 +1778,7 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
             progress_callback=lambda done, uname: AicuBatchTracker.update(
                 bvid, done=done, current_user=f"{done}/{total} {uname}"
             ),
+            log_callback=_track_log,
         )
     except Exception as e:
         logger.exception(f"[AICU-bg] 深度分析异常: {e}")
@@ -1738,7 +1789,28 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
     enhanced_users = result.get("enhanced_users", [])
     enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}
 
+    _track_log("info", f"增强用户: {len(enhanced_users)} total, {len(enhanced_by_mid)} 有效mid")
+    _track_log("info", f"报告用户: {len(report['top_suspects'])} total")
+
+    # ★ 备份 sample_comments（防止合并覆盖）
+    sample_comments_backup = {}
     for u in report["top_suspects"]:
+        mid = u.get("mid", 0)
+        sc = u.get("sample_comments")
+        if sc:
+            sample_comments_backup[mid] = sc
+    _track_log("info", f"备份样本评论: {len(sample_comments_backup)} 个用户有评论数据")
+
+    merged_count = 0
+    for u in report["top_suspects"]:
+        mid = u.get("mid", 0)
+        enhanced = enhanced_by_mid.get(mid)
+        if enhanced:
+            merged_count += 1
+            old_deep = u.get("deep_analyzed", False)
+            new_deep = enhanced.get("deep_analyzed", False)
+            if new_deep:
+                _track_log("info", f"  mid={mid} {u.get('uname','?')}: deep_analyzed {old_deep}→{new_deep}, type={enhanced.get('deep_type_name','?')}")
         mid = u.get("mid", 0)
         enhanced = enhanced_by_mid.get(mid)
         if enhanced:
@@ -1757,14 +1829,51 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
             u["aicu_device"] = enhanced.get("aicu_device", "")
             u["aicu_names"] = enhanced.get("aicu_names", [])
 
+    # ★ 恢复合并中被覆盖的 sample_comments
+    restored_count = 0
+    for u in report["top_suspects"]:
+        mid = u.get("mid", 0)
+        if mid in sample_comments_backup and not u.get("sample_comments"):
+            u["sample_comments"] = sample_comments_backup[mid]
+            restored_count += 1
+    if restored_count > 0:
+        _track_log("warn", f"恢复了 {restored_count} 个用户的样本评论数据")
+
+    skipped = len(report["top_suspects"]) - merged_count
+    if skipped > 0:
+        _track_log("warn", f"{skipped} 个用户在增强结果中未找到 (mid不匹配)")
+
     deep_stats = result.get("stats", {})
     report["deep_stats"] = deep_stats
     newly_analyzed = sum(1 for u in report["top_suspects"] if u.get("deep_analyzed"))
 
-    # 保存报告
+    # 验证：保存前记录关键字段状态
+    user_with_comments = sum(1 for u in report["top_suspects"] if u.get("sample_comments"))
+    _track_log("info", f"报告合并完成: {newly_analyzed} 深度分析用户, {user_with_comments} 用户有样本评论")
+
+    # 保存报告（确保落盘）
     report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as save_err:
+        logger.exception(f"[AICU-bg] 保存报告失败: {save_err}")
+        _track_log("error", f"报告保存失败: {save_err}")
+        AicuBatchTracker.finish(bvid, error=f"保存报告失败: {save_err}")
+        return
+
+    # 验证：重新读取确认
+    try:
+        with open(report_path, "r", encoding="utf-8") as f:
+            reloaded = json.load(f)
+        reloaded_suspects = reloaded.get("top_suspects", [])
+        reloaded_analyzed = sum(1 for u in reloaded_suspects if u.get("deep_analyzed"))
+        reloaded_with_comments = sum(1 for u in reloaded_suspects if u.get("sample_comments"))
+        _track_log("info", f"报告已保存并验证: {reloaded_analyzed} 深度分析用户, {reloaded_with_comments} 用户有样本评论")
+    except Exception as verify_err:
+        _track_log("warn", f"报告验证失败 (非致命): {verify_err}")
 
     AicuBatchTracker.finish(bvid, result={
         "deep_stats": deep_stats,
@@ -1776,8 +1885,9 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
 
 @app.route("/api/video/<bvid>/deep-analyze-status")
 def api_deep_analyze_status(bvid: str):
-    """轮询批量 AICU 深度分析进度。"""
-    return jsonify({"success": True, "data": AicuBatchTracker.get_status(bvid)})
+    """轮询批量 AICU 深度分析进度。支持 ?since=N 增量获取日志。"""
+    since = request.args.get("since", 0, type=int)
+    return jsonify({"success": True, "data": AicuBatchTracker.get_status(bvid, since_log=since)})
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/llm-analyze", methods=["POST"])
@@ -2065,12 +2175,27 @@ def api_user_deep_analyze(bvid: str, mid: int):
         if not analyzer:
             return jsonify({"success": False, "error": "LLM 分析器不可用，请检查 API Key 配置"}), 503
 
+        # 收集日志，结束后一并返回给前端
+        _log_entries = []
+        def _log(level, msg):
+            _log_entries.append({"level": level, "msg": msg})
+            logger.info(f"[AICU单用户] {msg}")
+
+        _log("info", f"开始单用户深度分析: mid={mid} score={single_user['suspicious_score']}")
+
         # 注意：aicu.cc API 是公开的，不需要 Cookie
-        result = analyzer.deep_analyze([single_user], comments_data=comments, video_info=video_info, threshold_override=0)
+        result = analyzer.deep_analyze(
+            [single_user], comments_data=comments, video_info=video_info,
+            threshold_override=0,
+            log_callback=_log,
+        )
         # Bug 修复：deep_analyze 返回 {"enhanced_users": [...]}, 不是 "enhanced_by_mid"
         enhanced_users = result.get("enhanced_users", [])
         enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}
         enhanced = enhanced_by_mid.get(mid, single_user)
+
+        _log("info", f"deep_analyze返回: deep_analyzed={enhanced.get('deep_analyzed')}, "
+             f"stats={result.get('stats',{})}")
 
         # 写回报告
         user["deep_analyzed"] = enhanced.get("deep_analyzed", False)
@@ -2114,6 +2239,7 @@ def api_user_deep_analyze(bvid: str, mid: int):
             "aicu_comment_count": enhanced.get("aicu_comment_count", 0),
             "aicu_device": enhanced.get("aicu_device", ""),
             "aicu_waf_blocked": enhanced.get("aicu_waf_blocked", False),
+            "logs": _log_entries,
         })
     except Exception as e:
         logger.error(f"单用户 AICU 深度分析失败 (mid={mid}): {e}", exc_info=True)

@@ -137,13 +137,14 @@ class AicuFetcher:
         通过 AicuUserData.fetch_ok 判断成功与否。
     """
 
-    def __init__(self, cookie: str = "", timeout: int = 15):
+    def __init__(self, cookie: str = "", timeout: int = 15, log_callback=None):
         self.cookie = cookie
         self.timeout = timeout
         self._session = None
         self._request_count = 0
         self._last_request_time = 0.0
         self._waf_detected = False  # 当前 fetcher 是否遇到 WAF 拦截
+        self._log = log_callback    # (level, msg) -> None, 用于前端实时日志
 
     def _get_session(self):
         """懒初始化 curl_cffi session（Chrome 131 TLS 指纹伪装）"""
@@ -316,8 +317,12 @@ class AicuFetcher:
             {device_name, history_names: [str]}
         """
         try:
+            if self._log:
+                self._log("info", f"  AICU API: 获取设备标记 mid={mid}")
             raw = self._get(AICU_USERMARK_API, {"uid": mid})
             if not raw or raw.get("code") != 0:
+                if self._log:
+                    self._log("warn", f"  设备标记获取失败 mid={mid}, code={raw.get('code') if raw else 'N/A'}")
                 logger.debug(f"[AICU] 设备标记获取失败: mid={mid}")
                 return {}
 
@@ -335,12 +340,20 @@ class AicuFetcher:
             if not isinstance(hnames, list):
                 hnames = []
 
+            if self._log:
+                extra = []
+                if device: extra.append(f"设备:{device}")
+                if hnames: extra.append(f"曾用名:{len(hnames)}个")
+                self._log("success", f"  设备标记完成 mid={mid}: {', '.join(extra) if extra else '无数据'}")
+
             return {
                 "device_name": device,
                 "history_names": hnames,
             }
         except Exception as e:
             logger.error(f"[AICU] fetch_user_marks({mid}) 异常: {e}")
+            if self._log:
+                self._log("error", f"  设备标记异常 mid={mid}: {e}")
             return {}
 
     def fetch_user_comments(self, mid: int) -> dict:
@@ -379,6 +392,9 @@ class AicuFetcher:
                 return {"comments": [], "count": 0, "stats": {}}
 
             logger.info(f"[AICU] 用户 {mid} 共有 {all_count} 条历史评论，开始分页获取...")
+            if self._log:
+                total_pages = (all_count + page_size - 1) // page_size
+                self._log("info", f"  AICU API: 分页获取评论 mid={mid}, 共{all_count}条/{total_pages}页")
 
         except Exception as e:
             logger.error(f"[AICU] fetch_user_comments({mid}) 获取总数异常: {e}")
@@ -450,9 +466,15 @@ class AicuFetcher:
                 # 检查是否结束
                 if data.get("cursor", {}).get("is_end", False):
                     logger.info(f"[AICU] 评论分页获取完成 (cursor.is_end=True): 获取 {len(parsed)}/{all_count}")
+                    if self._log:
+                        self._log("success", f"  评论获取完成 mid={mid}: {len(parsed)}/{all_count}条")
                     break
 
                 page += 1
+
+                # 进度日志（每5页或最后一页）
+                if self._log and (page % 5 == 0 or page > (all_count // page_size)):
+                    self._log("info", f"  评论分页中 mid={mid}: 第{page-1}页, 已获{len(parsed)}/{all_count}条")
 
                 # 安全退出：防止无限循环
                 if page > (all_count // page_size) + 10:
@@ -469,6 +491,8 @@ class AicuFetcher:
         hour_dist = dict(hour_counter.most_common(5))
 
         logger.info(f"[AICU] 评论获取完成: mid={mid}, 实际={len(parsed)}, 总数={all_count}")
+        if self._log:
+            self._log("success", f"  评论获取完成 mid={mid}: {len(parsed)}条, 活跃时段={active_hour}点, 均长={avg_length}字")
         return {
             "comments": parsed,
             "count": len(parsed),
@@ -515,6 +539,8 @@ class AicuFetcher:
                 return {"danmus": [], "count": 0, "stats": {}}
 
             logger.info(f"[AICU] 用户 {mid} 共有 {all_count} 条历史弹幕，开始分页获取...")
+            if self._log:
+                self._log("info", f"  AICU API: 分页获取弹幕 mid={mid}, 共{all_count}条")
 
         except Exception as e:
             logger.error(f"[AICU] fetch_user_danmu({mid}) 获取总数异常: {e}")
@@ -576,6 +602,8 @@ class AicuFetcher:
                 break
 
         logger.info(f"[AICU] 弹幕获取完成: mid={mid}, 实际={len(parsed)}, 总数={all_count}")
+        if self._log:
+            self._log("success", f"  弹幕获取完成 mid={mid}: {len(parsed)}条")
         return {
             "danmus": parsed,
             "count": len(parsed),
@@ -617,6 +645,9 @@ class AicuFetcher:
             # 3. 快速探测 getreply/getvideodm（5s 超时，不重试）
             count_params = {"uid": mid, "pn": 1, "ps": 0, "mode": 0, "keyword": ""}
 
+            if self._log:
+                self._log("info", f"  AICU API: 探测评论/弹幕总数 mid={mid}")
+
             reply_fast = self._get_fast(AICU_REPLY_API, count_params)
             comment_total = 0
             if reply_fast and reply_fast.get("code") == 0:
@@ -626,6 +657,9 @@ class AicuFetcher:
             danmu_total = 0
             if danmu_fast and danmu_fast.get("code") == 0:
                 danmu_total = danmu_fast.get("data", {}).get("cursor", {}).get("all_count", 0)
+
+            if self._log:
+                self._log("info", f"  探测结果 mid={mid}: 评论={comment_total}条, 弹幕={danmu_total}条")
 
             logger.info(f"[AICU] mid={mid} 探测: marks={'OK' if marks else 'EMPTY'}, "
                        f"comments={comment_total}, danmus={danmu_total}")

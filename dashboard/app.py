@@ -998,18 +998,30 @@ class SpiderManager:
         except Exception as e:
             comment_msg = f"（获取评论种子失败: {str(e)[:50]}）"
 
-        # 4. 启动视频和评论爬虫
+        # 4. 启动视频和评论爬虫（先清理可能残留的僵尸状态）
         start_results = {}
         for spider_name in ("bilibili_video", "bilibili_comment"):
+            # 如果状态是 running 但进程早已死亡，先重置
+            st = self._read_state()
+            entry = st.get(spider_name, {})
+            if entry.get("status") == "running":
+                pid = entry.get("pid")
+                if not pid or not self._is_process_alive(pid):
+                    entry["status"] = "stopped"
+                    entry["pid"] = None
+                    st[spider_name] = entry
+                    self._write_state(st)
             result = self.start_spider(spider_name)
             start_results[spider_name] = {
                 "started": result.get("success", False),
                 "message": result.get("message", ""),
             }
 
+        spider_failed = not any(r["started"] for r in start_results.values())
         return {
-            "success": True,
-            "message": f"已刷新 {bvid}：去重记录清除了 {removed_count} 条，种子已注入{comment_msg}",
+            "success": not spider_failed,
+            "message": f"已刷新 {bvid}：去重记录清除了 {removed_count} 条，种子已注入{comment_msg}"
+                        + ("，但爬虫启动失败" if spider_failed else ""),
             "bvid": bvid,
             "fingerprint": fingerprint,
             "removed_dupefilter": removed_count,
@@ -2511,6 +2523,34 @@ def api_water_army_list():
         sort_by=sort_by, order=order, risk_filter=risk_filter,
         search=search, added_by=added_by, page=page, per_page=per_page,
     )
+
+    # 从评论数据中补充缺失的头像
+    missing = [a for a in result.get("data", []) if not a.get("avatar")]
+    if missing:
+        mid_set = {str(a["mid"]) for a in missing}
+        avatar_map = {}
+        comment_dir = Path(DATA_DIR) / "comments"
+        for cf in comment_dir.glob("*_comments.json"):
+            if not mid_set:
+                break
+            try:
+                with open(cf, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                comments = data if isinstance(data, list) else data.get("comments", data.get("replies", []))
+                for c in comments:
+                    if isinstance(c, dict):
+                        c_mid = str(c.get("mid", ""))
+                        if c_mid in mid_set and c_mid not in avatar_map:
+                            avatar_map[c_mid] = c.get("avatar", "")
+                            mid_set.discard(c_mid)
+                            if not mid_set:
+                                break
+            except Exception:
+                continue
+        for a in missing:
+            if str(a["mid"]) in avatar_map:
+                a["avatar"] = avatar_map[str(a["mid"])]
+
     return jsonify({"success": True, **result})
 
 

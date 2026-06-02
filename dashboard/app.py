@@ -1967,6 +1967,23 @@ def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer,
             user["llm_type_name"] = deep_type_name
             user["score"] = enhanced.get("suspicious_score", user.get("score", 0))
 
+        # ★ 重新注入样本评论（防止保存后丢失）
+        try:
+            comments = _load_comments(bvid)
+            comments_by_mid = {}
+            for c in comments:
+                cmid = c.get("mid", 0)
+                if cmid not in comments_by_mid:
+                    comments_by_mid[cmid] = []
+                if len(comments_by_mid[cmid]) < 5:
+                    comments_by_mid[cmid].append(c.get("content", c.get("message", ""))[:200])
+            for u in report["top_suspects"]:
+                umid = u.get("mid", 0)
+                if umid in comments_by_mid:
+                    u["sample_comments"] = comments_by_mid[umid]
+        except Exception as e:
+            _log("warn", f"重新注入评论失败: {e}")
+
         # 保存报告
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
         with open(report_path, "w", encoding="utf-8") as f:
@@ -2080,6 +2097,20 @@ def api_user_llm_analyze(bvid: str, mid: int):
         user["llm_type_name"] = llm_type_name
         user["score"] = enhanced.get("suspicious_score", user.get("score", 0))
         # 注意：不写 deep_* / aicu_* 字段，避免 LLM 初筛误触发 AICU 深度分析展示
+
+        # ★ 重新注入样本评论
+        try:
+            comments_all = _load_comments(bvid)
+            by_mid = {}
+            for c in comments_all:
+                cmid = c.get("mid", 0)
+                if cmid not in by_mid: by_mid[cmid] = []
+                if len(by_mid[cmid]) < 5:
+                    by_mid[cmid].append(c.get("content", c.get("message", ""))[:200])
+            for u in report["top_suspects"]:
+                umid = u.get("mid", 0)
+                if umid in by_mid: u["sample_comments"] = by_mid[umid]
+        except Exception: pass
 
         # 保存报告
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"

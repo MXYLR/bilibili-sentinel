@@ -421,16 +421,24 @@ class AicuFetcher:
             }
 
             try:
-                raw = self._get(AICU_REPLY_API, params)
-                if not raw or raw.get("code") != 0:
-                    logger.warning(f"[AICU] 评论分页获取失败: mid={mid}, page={page}, code={raw.get('code') if raw else 'N/A'}, 尝试 _get_fast 回退")
+                # 直接发请求，不限速不重试（探测已确认 API 可用）
+                try:
+                    resp = self._get_session().get(
+                        AICU_REPLY_API, params=params, timeout=20, verify=False
+                    )
+                    if resp.status_code == 200:
+                        raw = resp.json()
+                    else:
+                        raw = None
+                        if self._log:
+                            self._log("warn", f"  评论分页 HTTP {resp.status_code}: page={page}")
+                except Exception as req_err:
+                    raw = None
                     if self._log:
-                        self._log("warn", f"  评论分页 page={page} _get失败, 尝试_get_fast回退")
-                    # 回退：用 _get_fast (12s 超时 + 1次重试，无限速)
-                    raw = self._get_fast(AICU_REPLY_API, params)
+                        self._log("warn", f"  评论分页请求异常 page={page}: {str(req_err)[:80]}")
+
                 if not raw or raw.get("code") != 0:
-                    if self._log:
-                        self._log("warn", f"  评论分页 page={page} _get_fast也失败, code={raw.get('code') if raw else 'N/A'}")
+                    logger.warning(f"[AICU] 评论分页失败: page={page}, code={raw.get('code') if raw else 'N/A'}")
                     break
 
                 data = raw.get("data", {})

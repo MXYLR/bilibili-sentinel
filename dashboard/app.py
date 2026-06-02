@@ -1843,6 +1843,26 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
     if skipped > 0:
         _track_log("warn", f"{skipped} 个用户在增强结果中未找到 (mid不匹配)")
 
+    # ★ 直接从评论文件重新注入 sample_comments，确保永不去失
+    try:
+        comments = _load_comments(bvid)
+        comments_by_mid = {}
+        for c in comments:
+            mid = c.get("mid", 0)
+            if mid not in comments_by_mid:
+                comments_by_mid[mid] = []
+            if len(comments_by_mid[mid]) < 5:
+                comments_by_mid[mid].append(c.get("content", c.get("message", ""))[:200])
+        reloaded_count = 0
+        for u in report["top_suspects"]:
+            mid = u.get("mid", 0)
+            if mid in comments_by_mid:
+                u["sample_comments"] = comments_by_mid[mid]
+                reloaded_count += 1
+        _track_log("info", f"从评论文件重新注入: {reloaded_count} 个用户的样本评论")
+    except Exception as e:
+        _track_log("warn", f"重新注入评论失败: {e}")
+
     deep_stats = result.get("stats", {})
     report["deep_stats"] = deep_stats
     newly_analyzed = sum(1 for u in report["top_suspects"] if u.get("deep_analyzed"))
@@ -1885,9 +1905,89 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
 
 @app.route("/api/video/<bvid>/deep-analyze-status")
 def api_deep_analyze_status(bvid: str):
-    """轮询批量 AICU 深度分析进度。支持 ?since=N 增量获取日志。"""
+    """轮询 AICU 深度分析进度。支持 ?since=N 增量获取日志, ?key= 指定任务 key。"""
     since = request.args.get("since", 0, type=int)
-    return jsonify({"success": True, "data": AicuBatchTracker.get_status(bvid, since_log=since)})
+    key = request.args.get("key", bvid)
+    return jsonify({"success": True, "data": AicuBatchTracker.get_status(key, since_log=since)})
+
+
+def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer, task_key):
+    """后台执行单用户 AICU 深度分析，逐步更新 AicuBatchTracker。"""
+    def _log(level, msg):
+        AicuBatchTracker.log(task_key, msg, level)
+        logger.info(f"[AICU单用户] {msg}")
+
+    try:
+        single_user = {
+            "mid": mid,
+            "uname": user.get("uname", ""),
+            "suspicious_score": user.get("score", 0),
+            "engine_score_raw": user.get("engine_score_raw", user.get("score", 0)),
+            "llm_confidence": user.get("llm_confidence", 0),
+            "llm_type_id": user.get("llm_type_id", 0),
+            "llm_type_name": user.get("llm_type_name", ""),
+            "comment_count": user.get("comment_count", 1),
+        }
+
+        _log("info", f"开始单用户深度分析: mid={mid} score={single_user['suspicious_score']}")
+
+        result = analyzer.deep_analyze(
+            [single_user], comments_data=comments, video_info=video_info,
+            threshold_override=0,
+            log_callback=_log,
+        )
+
+        enhanced_users = result.get("enhanced_users", [])
+        enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}
+        enhanced = enhanced_by_mid.get(mid, single_user)
+
+        _log("info", f"deep_analyze返回: deep_analyzed={enhanced.get('deep_analyzed')}, "
+             f"stats={result.get('stats',{})}")
+
+        # 写回报告
+        user["deep_analyzed"] = enhanced.get("deep_analyzed", False)
+        if enhanced.get("deep_analyzed"):
+            deep_conf = enhanced.get("deep_confidence", 0)
+            deep_type_id = enhanced.get("deep_type_id", 0)
+            deep_type_name = enhanced.get("deep_type_name", "") or ("正常用户" if deep_type_id == 0 else "")
+
+            user["deep_type_id"] = deep_type_id
+            user["deep_type_name"] = deep_type_name
+            user["deep_confidence"] = deep_conf
+            user["deep_reasoning"] = enhanced.get("deep_reasoning", "")
+            user["deep_key_evidence"] = enhanced.get("deep_key_evidence", [])
+            user["deep_risk_confirmed"] = enhanced.get("deep_risk_confirmed", False)
+            user["aicu_comment_count"] = enhanced.get("aicu_comment_count")
+            user["aicu_device"] = enhanced.get("aicu_device", "")
+            user["aicu_names"] = enhanced.get("aicu_names", [])
+            user["aicu_stats"] = enhanced.get("aicu_stats")
+            user["aicu_waf_blocked"] = enhanced.get("aicu_waf_blocked", False)
+            user["llm_confidence"] = deep_conf
+            user["llm_type_id"] = deep_type_id
+            user["llm_type_name"] = deep_type_name
+            user["score"] = enhanced.get("suspicious_score", user.get("score", 0))
+
+        # 保存报告
+        report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+
+        _log("success", f"单用户深度分析完成: deep_analyzed={enhanced.get('deep_analyzed')}, "
+             f"type={enhanced.get('deep_type_name','?')}, "
+             f"aicu_comments={enhanced.get('aicu_comment_count',0)}")
+
+        AicuBatchTracker.finish(task_key, result={
+            "deep_analyzed": enhanced.get("deep_analyzed", False),
+            "deep_type_name": enhanced.get("deep_type_name", ""),
+            "deep_confidence": enhanced.get("deep_confidence", 0),
+            "aicu_comment_count": enhanced.get("aicu_comment_count", 0),
+            "aicu_device": enhanced.get("aicu_device", ""),
+            "score": enhanced.get("suspicious_score", 0),
+        })
+    except Exception as e:
+        logger.error(f"单用户 AICU 深度分析失败 (mid={mid}): {e}", exc_info=True)
+        _log("error", f"分析失败: {e}")
+        AicuBatchTracker.finish(task_key, error=str(e))
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/llm-analyze", methods=["POST"])
@@ -2141,7 +2241,7 @@ def api_llm_screen_status(bvid: str):
 
 @app.route("/api/video/<bvid>/user/<int:mid>/deep-analyze", methods=["POST"])
 def api_user_deep_analyze(bvid: str, mid: int):
-    """对单个用户执行 AICU 深度分析（爬取历史评论/空间/标记），结果写回报告。"""
+    """对单个用户执行 AICU 深度分析（异步，前端轮询 status 获取日志）。"""
     report = _load_report(bvid)
     if not report:
         return jsonify({"success": False, "error": "报告不存在，请先运行分析"}), 404
@@ -2157,93 +2257,28 @@ def api_user_deep_analyze(bvid: str, mid: int):
 
     video_info = report.get("video_info", {}) or _load_video_info(bvid) or {}
 
-    # 构造单用户 scored_users 列表
-    single_user = {
-        "mid": mid,
-        "uname": user.get("uname", ""),
-        "suspicious_score": user.get("score", 0),
-        "engine_score_raw": user.get("engine_score_raw", user.get("score", 0)),
-        "llm_confidence": user.get("llm_confidence", 0),
-        "llm_type_id": user.get("llm_type_id", 0),
-        "llm_type_name": user.get("llm_type_name", ""),
-        "comment_count": user.get("comment_count", 1),
-    }
+    from analyzer.llm_analyzer import create_llm_analyzer
+    analyzer = create_llm_analyzer()
+    if not analyzer:
+        return jsonify({"success": False, "error": "LLM 分析器不可用"}), 503
 
-    try:
-        from analyzer.llm_analyzer import create_llm_analyzer
-        analyzer = create_llm_analyzer()
-        if not analyzer:
-            return jsonify({"success": False, "error": "LLM 分析器不可用，请检查 API Key 配置"}), 503
+    # 使用复合 key 区分单用户任务
+    task_key = f"{bvid}_user_{mid}"
+    AicuBatchTracker.start(task_key, total=1)
+    AicuBatchTracker.update(task_key, done=0, current_user=f"0/1 {user.get('uname', str(mid))}")
 
-        # 收集日志，结束后一并返回给前端
-        _log_entries = []
-        def _log(level, msg):
-            _log_entries.append({"level": level, "msg": msg})
-            logger.info(f"[AICU单用户] {msg}")
+    # 后台线程执行
+    threading.Thread(
+        target=_run_single_aicu_bg,
+        args=(bvid, mid, report, user, comments, video_info, analyzer, task_key),
+        daemon=True,
+    ).start()
 
-        _log("info", f"开始单用户深度分析: mid={mid} score={single_user['suspicious_score']}")
-
-        # 注意：aicu.cc API 是公开的，不需要 Cookie
-        result = analyzer.deep_analyze(
-            [single_user], comments_data=comments, video_info=video_info,
-            threshold_override=0,
-            log_callback=_log,
-        )
-        # Bug 修复：deep_analyze 返回 {"enhanced_users": [...]}, 不是 "enhanced_by_mid"
-        enhanced_users = result.get("enhanced_users", [])
-        enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}
-        enhanced = enhanced_by_mid.get(mid, single_user)
-
-        _log("info", f"deep_analyze返回: deep_analyzed={enhanced.get('deep_analyzed')}, "
-             f"stats={result.get('stats',{})}")
-
-        # 写回报告
-        user["deep_analyzed"] = enhanced.get("deep_analyzed", False)
-        if enhanced.get("deep_analyzed"):
-            deep_conf = enhanced.get("deep_confidence", 0)
-            deep_type_id = enhanced.get("deep_type_id", 0)
-            deep_type_name = enhanced.get("deep_type_name", "") or ("正常用户" if deep_type_id == 0 else "")
-
-            user["deep_type_id"] = deep_type_id
-            user["deep_type_name"] = deep_type_name
-            user["deep_confidence"] = deep_conf
-            user["deep_reasoning"] = enhanced.get("deep_reasoning", "")
-            user["deep_key_evidence"] = enhanced.get("deep_key_evidence", [])
-            user["deep_risk_confirmed"] = enhanced.get("deep_risk_confirmed", False)
-            user["aicu_comment_count"] = enhanced.get("aicu_comment_count")
-            user["aicu_device"] = enhanced.get("aicu_device", "")
-            user["aicu_names"] = enhanced.get("aicu_names", [])
-            user["aicu_stats"] = enhanced.get("aicu_stats")
-            user["aicu_waf_blocked"] = enhanced.get("aicu_waf_blocked", False)
-            # 同步 llm_* 字段（前台主展示用这些字段）
-            user["llm_confidence"] = deep_conf
-            user["llm_type_id"] = deep_type_id
-            user["llm_type_name"] = deep_type_name
-            fused_score = enhanced.get("suspicious_score", user.get("score", 0))
-            user["score"] = fused_score
-
-        # 保存报告
-        report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
-
-        return jsonify({
-            "success": True,
-            "mid": mid,
-            "deep_analyzed": enhanced.get("deep_analyzed", False),
-            "deep_type_name": enhanced.get("deep_type_name", "") or ("正常用户" if enhanced.get("deep_type_id", 0) == 0 else ""),
-            "deep_confidence": enhanced.get("deep_confidence", 0),
-            "llm_type_name": enhanced.get("deep_type_name", "") or ("正常用户" if enhanced.get("deep_type_id", 0) == 0 else ""),
-            "llm_confidence": enhanced.get("deep_confidence", 0),
-            "score": enhanced.get("suspicious_score", user.get("score", 0)),
-            "aicu_comment_count": enhanced.get("aicu_comment_count", 0),
-            "aicu_device": enhanced.get("aicu_device", ""),
-            "aicu_waf_blocked": enhanced.get("aicu_waf_blocked", False),
-            "logs": _log_entries,
-        })
-    except Exception as e:
-        logger.error(f"单用户 AICU 深度分析失败 (mid={mid}): {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({
+        "success": True,
+        "message": "单用户深度分析已启动",
+        "task_key": task_key,
+    })
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/detail")

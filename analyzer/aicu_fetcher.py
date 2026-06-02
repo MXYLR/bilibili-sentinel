@@ -356,7 +356,7 @@ class AicuFetcher:
                 self._log("error", f"  设备标记异常 mid={mid}: {e}")
             return {}
 
-    def fetch_user_comments(self, mid: int) -> dict:
+    def fetch_user_comments(self, mid: int, known_count: int = None) -> dict:
         """
         分页获取用户历史评论（AICU API）。
 
@@ -372,21 +372,25 @@ class AicuFetcher:
                 stats: {active_hour, avg_length, hour_dist}
             }
         """
-        # 第一步：获取评论总数
+        # 第一步：获取评论总数（如果已有探测结果则跳过）
         try:
-            count_params = {
-                "uid": mid,
-                "pn": 1,
-                "ps": 0,  # ps=0 只返回总数
-                "mode": 0,
-                "keyword": "",
-            }
-            count_raw = self._get(AICU_REPLY_API, count_params)
-            if not count_raw or count_raw.get("code") != 0:
-                logger.debug(f"[AICU] 评论总数获取失败: mid={mid}, code={count_raw.get('code') if count_raw else 'N/A'}")
-                return {"comments": [], "count": 0, "stats": {}}
-
-            all_count = count_raw.get("data", {}).get("cursor", {}).get("all_count", 0)
+            if known_count is not None:
+                all_count = known_count
+                if self._log:
+                    self._log("info", f"  使用探测结果: 评论总数={all_count}")
+            else:
+                count_params = {
+                    "uid": mid,
+                    "pn": 1,
+                    "ps": 0,
+                    "mode": 0,
+                    "keyword": "",
+                }
+                count_raw = self._get(AICU_REPLY_API, count_params)
+                if not count_raw or count_raw.get("code") != 0:
+                    logger.debug(f"[AICU] 评论总数获取失败: mid={mid}, code={count_raw.get('code') if count_raw else 'N/A'}")
+                    return {"comments": [], "count": 0, "stats": {}}
+                all_count = count_raw.get("data", {}).get("cursor", {}).get("all_count", 0)
             if all_count == 0:
                 logger.info(f"[AICU] 用户 {mid} 无历史评论")
                 return {"comments": [], "count": 0, "stats": {}}
@@ -419,7 +423,14 @@ class AicuFetcher:
             try:
                 raw = self._get(AICU_REPLY_API, params)
                 if not raw or raw.get("code") != 0:
-                    logger.warning(f"[AICU] 评论分页获取失败: mid={mid}, page={page}, code={raw.get('code') if raw else 'N/A'}")
+                    logger.warning(f"[AICU] 评论分页获取失败: mid={mid}, page={page}, code={raw.get('code') if raw else 'N/A'}, 尝试 _get_fast 回退")
+                    if self._log:
+                        self._log("warn", f"  评论分页 page={page} _get失败, 尝试_get_fast回退")
+                    # 回退：用 _get_fast (12s 超时 + 1次重试，无限速)
+                    raw = self._get_fast(AICU_REPLY_API, params)
+                if not raw or raw.get("code") != 0:
+                    if self._log:
+                        self._log("warn", f"  评论分页 page={page} _get_fast也失败, code={raw.get('code') if raw else 'N/A'}")
                     break
 
                 data = raw.get("data", {})
@@ -611,13 +622,20 @@ class AicuFetcher:
         }
 
     def _get_fast(self, url: str, params: dict) -> Optional[dict]:
-        """快速探测请求：短超时、不重试，用于检查端点是否可用"""
-        try:
-            resp = self._get_session().get(url, params=params, timeout=5, verify=False)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
+        """探测请求：12s超时 + 1次重试，用于检查端点是否可用"""
+        for attempt in range(2):
+            try:
+                resp = self._get_session().get(url, params=params, timeout=12, verify=False)
+                if resp.status_code == 200:
+                    return resp.json()
+                if resp.status_code in (502, 503, 429) and attempt == 0:
+                    time.sleep(1.5)
+                    continue
+                return None
+            except Exception:
+                if attempt == 0:
+                    time.sleep(1.5)
+                    continue
         return None
 
     # ============================================================
@@ -669,7 +687,11 @@ class AicuFetcher:
             danmu_data = {"danmus": [], "count": 0, "stats": {}}
 
             if comment_total > 0:
-                comment_data = self.fetch_user_comments(mid)
+                if self._log:
+                    self._log("info", f"  AICU API: 开始分页获取评论 mid={mid}, 共{comment_total}条")
+                comment_data = self.fetch_user_comments(mid, known_count=comment_total)
+                if self._log:
+                    self._log("info", f"  评论抓取结果 mid={mid}: 获得{comment_data.get('count', 0)}条")
             if danmu_total > 0:
                 danmu_data = self.fetch_user_danmu(mid)
 

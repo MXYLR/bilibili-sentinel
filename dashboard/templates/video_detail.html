@@ -258,7 +258,8 @@
                         </thead>
                         <tbody>
                             {% for user in report.top_suspects %}
-                            <tr class="{% if user.risk_level == 'high' %}table-danger{% elif user.risk_level == 'medium' %}table-warning{% endif %}">
+                            <tr class="{% if user.risk_level == 'high' %}table-danger{% elif user.risk_level == 'medium' %}table-warning{% endif %}"
+                                data-mid="{{ user.mid }}" data-idx="{{ loop.index0 }}">
                                 <td>
                                     {% if user.rank == 1 %}<span class="badge bg-danger">TOP</span>
                                     {% elif user.rank <= 3 %}<span class="badge bg-warning text-dark">{{ user.rank }}</span>
@@ -1468,60 +1469,108 @@ async function runAICUAnalyzeInModal(mid) {
     try {
         const resp = await fetch('/api/video/{{ bvid }}/user/' + mid + '/deep-analyze', { method: 'POST' });
         const data = await resp.json();
-        console.log('[AICU] deep-analyze response:', data);
-        if (data.success) {
-            // 输出后端收集的详细日志
-            if (data.logs && data.logs.length > 0) {
-                data.logs.forEach(l => consoleLog(l.msg, l.level || 'info'));
-            } else {
-                consoleLog('[单用户] 后端未返回详细日志 (logs字段为空或缺失)', 'warn');
-            }
-            const parts = [];
-            if (data.deep_analyzed) {
-                parts.push(`类型: ${data.deep_type_name || '正常用户'}`);
-                consoleLog(`[单用户] 深度判定: ${data.deep_type_name || '正常用户'} (置信度${data.deep_confidence || 0}%)`, data.deep_type_id > 0 ? 'warn' : 'success');
-            }
-            if (data.aicu_comment_count != null) {
-                parts.push(`历史评论: ${data.aicu_comment_count}条`);
-                consoleLog(`[单用户] AICU采集: 评论${data.aicu_comment_count}条, 设备${data.aicu_device || '未知'}`, 'info');
-            }
-            if (data.aicu_device) parts.push(`设备: ${data.aicu_device}`);
-            if (data.aicu_waf_blocked) { parts.push('⚠️ AICU WAF 拦截'); consoleLog('[单用户] AICU API 被 WAF 拦截', 'warn'); }
-            consoleLog(`[单用户] MID=${mid} 分析完成 — ${parts.join(' | ') || '未获取到数据'}`, 'success');
-            consoleLog(`[单用户] 报告已更新，共${scoredUsers.length}个用户数据`, 'info');
-            showToast('AICU 分析完成: ' + (parts.join(', ') || '完成'), 'success');
-            // 原地刷新弹窗
-            const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
-            console.log('[AICU] findIndex for mid=' + mid + ' → idx=' + idx);
-            if (idx >= 0) {
-                const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
-                console.log('[AICU] detail API status:', r.status);
-                if (r.ok) {
-                    const d = await r.json();
-                    console.log('[AICU] detail data keys:', Object.keys(d.data || {}));
-                    console.log('[AICU] deep_analyzed before merge:', scoredUsers[idx].deep_analyzed);
-                    if (d.success) {
-                        scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
-                        console.log('[AICU] deep_analyzed after merge:', scoredUsers[idx].deep_analyzed);
-                        console.log('[AICU] deep_type_id after merge:', scoredUsers[idx].deep_type_id);
-                    }
-                }
-                showUserDetail(idx);
-            } else {
-                console.log('[AICU] mid not in scoredUsers, force reload');
-                location.reload();
-            }
-        } else {
-            consoleLog(`[单用户] MID=${mid} 分析失败: ${data.error || '未知错误'}`, 'error');
-            showToast('AICU 分析失败: ' + (data.error || '未知错误'), 'error');
+        if (!data.success) {
+            consoleLog('启动失败: ' + (data.error || '未知错误'), 'error');
+            showToast('启动失败: ' + (data.error || '未知错误'), 'error');
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-search"></i> 重试深度分析';
+            return;
         }
+
+        const taskKey = data.task_key;
+        consoleLog(`任务已启动 key=${taskKey}`, 'info');
+
+        // 2. 轮询进度（流式输出日志，每0.5秒）
+        let logOffset = 0;
+        const pollResult = await new Promise((resolve, reject) => {
+            const timer = setInterval(async () => {
+                try {
+                    const sr = await fetch(`/api/video/{{ bvid }}/deep-analyze-status?key=${taskKey}&since=${logOffset}`);
+                    const sd = await sr.json();
+                    if (!sd.success) return;
+                    const s = sd.data;
+                    if (s.logs && s.logs.length > 0) {
+                        s.logs.forEach(l => consoleLog(l.msg, l.level || 'info'));
+                        logOffset += s.logs.length;
+                    }
+                    if (s.status === 'done') { clearInterval(timer); resolve(s.result || {}); }
+                    else if (s.status === 'error') { clearInterval(timer); reject(new Error(s.error || '后台异常')); }
+                } catch (pollErr) {}
+            }, 500);
+            setTimeout(() => { clearInterval(timer); reject(new Error('超时(2分钟)')); }, 120000);
+        });
+
+        // 3. 分析完成
+        const parts = [];
+        if (pollResult.deep_analyzed) {
+            parts.push(`类型: ${pollResult.deep_type_name || '正常用户'}`);
+            consoleLog(`[单用户] 深度判定: ${pollResult.deep_type_name || '正常用户'} (置信度${pollResult.deep_confidence || 0}%)`, 'success');
+        }
+        if (pollResult.aicu_comment_count != null) {
+            parts.push(`历史评论: ${pollResult.aicu_comment_count}条`);
+            consoleLog(`[单用户] AICU采集: 评论${pollResult.aicu_comment_count}条, 设备${pollResult.aicu_device || '未知'}`, 'info');
+        }
+        if (pollResult.aicu_device) parts.push(`设备: ${pollResult.aicu_device}`);
+        consoleLog(`[单用户] MID=${mid} 分析完成 — ${parts.join(' | ') || '完成'}`, 'success');
+        showToast('AICU 分析完成: ' + (parts.join(', ') || '完成'), 'success');
+
+        // 刷新弹窗
+        const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+        if (idx >= 0) {
+            const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
+            if (r.ok) {
+                const d = await r.json();
+                if (d.success) scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
+            }
+            showUserDetail(idx);
+            // 同时刷新列表行
+            refreshUserRow(mid);
+        } else { location.reload(); }
     } catch (err) {
-        consoleLog(`[单用户] MID=${mid} 网络错误: ${err.message}`, 'error');
-        showToast('网络错误: ' + err.message, 'error');
+        consoleLog(`[单用户] MID=${mid} 分析失败: ${err.message}`, 'error');
+        showToast('分析失败: ' + err.message, 'error');
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-search"></i> 重试深度分析';
+    }
+}
+
+// ---- 刷新用户行（不刷新整页） ----
+function refreshUserRow(mid) {
+    const user = scoredUsers.find(u => String(u.mid) === String(mid));
+    if (!user) return;
+    const row = document.querySelector(`tr[data-mid="${mid}"]`);
+    if (!row) return;
+
+    // 更新行样式
+    row.className = '';
+    if (user.risk_level === 'high') row.classList.add('table-danger');
+    else if (user.risk_level === 'medium') row.classList.add('table-warning');
+
+    // 更新分数 (第3个td, 0-indexed)
+    const tds = row.querySelectorAll('td');
+    if (tds.length >= 4) {
+        const scoreCell = tds[2];
+        const score = user.score || 0;
+        let colorClass = score >= 70 ? 'text-danger' : (score >= 40 ? 'text-warning' : 'text-success');
+        scoreCell.innerHTML = `<span class="fw-bold ${colorClass}">${score}</span>`;
+
+        // 更新风险等级
+        let riskBadge = '';
+        if (user.risk_level === 'high') riskBadge = '<span class="badge bg-danger">高风险</span>';
+        else if (user.risk_level === 'medium') riskBadge = '<span class="badge bg-warning text-dark">中风险</span>';
+        else riskBadge = '<span class="badge bg-success">低风险</span>';
+        tds[3].innerHTML = riskBadge;
+
+        // 更新 LLM 类型
+        const llmCell = tds[4];
+        if (user.llm_type_id && user.llm_type_id > 0) {
+            const typeColors = {1:'#e74c3c',2:'#e67e22',3:'#f39c12',4:'#3498db',5:'#9b59b6',6:'#1abc9c',7:'#2ecc71',8:'#34495e'};
+            const color = typeColors[user.llm_type_id] || '#666';
+            llmCell.innerHTML = `<span class="llm-badge llm-type-${user.llm_type_id} user-detail-trigger"
+                onclick="showUserDetail(${scoredUsers.indexOf(user)})" style="cursor:pointer;background:${color};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.85em"
+                title="点击查看 LLM + AICU 详细分析">🔍 ${user.llm_type_name}</span>
+                <small class="text-muted d-block">${(user.llm_confidence || 0)}%</small>`;
+        }
     }
 }
 

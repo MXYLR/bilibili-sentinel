@@ -1520,10 +1520,24 @@ async function runAICUAnalyzeInModal(mid) {
             const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
             if (r.ok) {
                 const d = await r.json();
-                if (d.success) scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
+                if (d.success) {
+                    scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
+                    // 防御：如果合并后仍无评论，强制从报告读取
+                    if ((!scoredUsers[idx].sample_comments || scoredUsers[idx].sample_comments.length === 0) && scoredUsers[idx].comment_count > 0) {
+                        consoleLog('[单用户] 评论合并后仍为空，强制刷新...', 'warn');
+                        // 直接再次请求 detail
+                        const r2 = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
+                        if (r2.ok) {
+                            const d2 = await r2.json();
+                            if (d2.success) {
+                                scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d2.data);
+                                consoleLog(`[单用户] 重试后: sample_comments=${(scoredUsers[idx].sample_comments||[]).length}条`, 'info');
+                            }
+                        }
+                    }
+                }
             }
             showUserDetail(idx);
-            // 同时刷新列表行
             refreshUserRow(mid);
         } else { location.reload(); }
     } catch (err) {

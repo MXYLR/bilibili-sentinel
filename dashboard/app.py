@@ -2338,7 +2338,7 @@ def api_user_detail(bvid: str, mid: int):
 
     # 附加样本评论
     comments = _load_comments(bvid)
-    sample = [c for c in comments if c.get("mid") == mid][:5]
+    sample = [c for c in comments if str(c.get("mid")) == str(mid)][:5]
     user["sample_comments"] = sample
 
     return jsonify({"success": True, "data": user})

@@ -1969,18 +1969,22 @@ def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer,
 
         # ★ 重新注入样本评论（防止保存后丢失）
         try:
-            comments = _load_comments(bvid)
-            comments_by_mid = {}
-            for c in comments:
-                cmid = c.get("mid", 0)
-                if cmid not in comments_by_mid:
-                    comments_by_mid[cmid] = []
-                if len(comments_by_mid[cmid]) < 5:
-                    comments_by_mid[cmid].append(c.get("content", c.get("message", ""))[:200])
+            comments_raw = _load_comments(bvid)
+            _log("info", f"重新注入: 评论文件有{len(comments_raw)}条记录")
+            by_mid = {}
+            for c in comments_raw:
+                cmid = str(c.get("mid", 0))
+                if cmid not in by_mid: by_mid[cmid] = []
+                if len(by_mid[cmid]) < 5:
+                    by_mid[cmid].append(c.get("content", c.get("message", ""))[:200])
+            _log("info", f"重新注入: {len(by_mid)} 个不同的 mid")
+            injected = 0
             for u in report["top_suspects"]:
-                umid = u.get("mid", 0)
-                if umid in comments_by_mid:
-                    u["sample_comments"] = comments_by_mid[umid]
+                umid = str(u.get("mid", 0))
+                if umid in by_mid:
+                    u["sample_comments"] = by_mid[umid]
+                    injected += 1
+            _log("info", f"重新注入完成: {injected}/{len(report['top_suspects'])} 用户获得样本评论")
         except Exception as e:
             _log("warn", f"重新注入评论失败: {e}")
 

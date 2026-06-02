@@ -1424,6 +1424,8 @@ def _save_report(bvid: str, report: dict) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def _load_video_info(bvid: str) -> dict:
@@ -1878,6 +1880,8 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
             json.dump(report, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+            f.flush()
+            os.fsync(f.fileno())
     except Exception as save_err:
         logger.exception(f"[AICU-bg] 保存报告失败: {save_err}")
         _track_log("error", f"报告保存失败: {save_err}")
@@ -1992,6 +1996,8 @@ def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer,
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
         _log("success", f"单用户深度分析完成: deep_analyzed={enhanced.get('deep_analyzed')}, "
              f"type={enhanced.get('deep_type_name','?')}, "
@@ -2120,6 +2126,8 @@ def api_user_llm_analyze(bvid: str, mid: int):
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
         return jsonify({
             "success": True,

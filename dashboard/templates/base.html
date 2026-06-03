@@ -179,6 +179,7 @@
                 const method = (opts && opts.method) || 'GET';
                 const start = Date.now();
                 return _origFetch.apply(this, args).then(resp => {
+                    if (!_debugPanelOpen || _debugMode !== 'http') return resp;  // ★ 面板关闭或非HTTP模式跳过
                     const ms = Date.now() - start;
                     const entry = {
                         t: new Date().toLocaleTimeString(),
@@ -187,7 +188,7 @@
                     };
                     _debugLogs.unshift(entry);
                     if (_debugLogs.length > 200) _debugLogs.pop();
-                    if (_debugMode === 'http') renderDebugLog();
+                    renderDebugLog();
                     return resp;
                 }).catch(err => {
                     const entry = {

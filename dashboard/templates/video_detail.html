@@ -1630,7 +1630,8 @@ function showUserDetail(index) {
     const modalTitle = document.getElementById('userDetailTitle');
     const modalBody = document.getElementById('userDetailBody');
 
-    modalTitle.innerHTML = `<i class="bi bi-person-badge"></i> ${user.uname || '未知用户'} <small class="text-white-50">MID: ${user.mid}</small>`;
+    modalTitle.innerHTML = `<i class="bi bi-person-badge"></i> ${user.uname || '未知用户'} <small class="text-white-50">MID: ${user.mid}</small>` +
+        (user._user_data_available ? '' : ' <span class="badge bg-warning text-dark ms-2">⚠️ 用户数据未采集</span>');
 
     // --- Risk & Score row ---
     const riskColor = user.score >= 70 ? 'danger' : (user.score >= 40 ? 'warning' : 'success');

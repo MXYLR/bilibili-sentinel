@@ -25,8 +25,22 @@ PLATFORM = "bilibili"
 ENABLE_IP_PROXY = False              # 是否启用IP代理池 (proxy/ 模块使用)
 
 # Clash Verge 代理 (用于 requests 库直连 B站 API)
+# 运行时配置可覆盖此默认值 (通过 Dashboard 设置页面修改)
 CLASH_PROXY_ENABLED = True                  # 是否启用 Clash 代理
 CLASH_PROXY_URL = "socks5://192.168.1.104:7897"  # Clash Verge SOCKS5 代理地址
+
+# ★ 从运行时配置文件覆盖默认值 (Dashboard 设置页面写入)
+import json, os as _os
+_RUNTIME_CFG = _os.path.join(_os.path.dirname(__file__), "runtime_config.json")
+if _os.path.exists(_RUNTIME_CFG):
+    try:
+        with open(_RUNTIME_CFG, "r", encoding="utf-8") as _f:
+            _overrides = json.load(_f)
+        for _k, _v in _overrides.items():
+            if _k in ("CLASH_PROXY_URL", "CLASH_PROXY_ENABLED") and _v is not None:
+                globals()[_k] = _v
+    except Exception:
+        pass  # 配置文件损坏时静默忽略
 
 # CDP 浏览器反检测
 ENABLE_CDP_MODE = True              # 是否启用CDP浏览器模式

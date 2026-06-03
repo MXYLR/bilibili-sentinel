@@ -2984,7 +2984,7 @@ def api_config_view():
 
 @app.route("/api/config/update", methods=["POST"])
 def api_config_update():
-    """更新运行时配置（内存级，重启后失效）"""
+    """更新运行时配置（内存 + 持久化到 runtime_config.json，爬虫新进程也可读取）"""
     body = request.get_json(silent=True) or {}
     key = body.get("key", "")
     value = body.get("value")
@@ -2992,14 +2992,32 @@ def api_config_update():
         return jsonify({"success": False, "message": "缺少配置键"}), 400
     try:
         import config.base_config
+        # 1. 更新内存
         if hasattr(config.base_config, key):
             old = getattr(config.base_config, key)
             setattr(config.base_config, key, value)
-            return jsonify({
-                "success": True,
-                "message": f"{key}: {old} → {value} (运行时，重启后恢复默认)",
-            })
-        return jsonify({"success": False, "message": f"未知配置键: {key}"}), 400
+        else:
+            return jsonify({"success": False, "message": f"未知配置键: {key}"}), 400
+
+        # 2. 持久化到运行时配置文件
+        runtime_path = os.path.join(PROJECT_ROOT, "config", "runtime_config.json")
+        runtime = {}
+        if os.path.exists(runtime_path):
+            try:
+                with open(runtime_path, "r", encoding="utf-8") as f:
+                    runtime = json.load(f)
+            except Exception:
+                pass
+        runtime[key] = value
+        with open(runtime_path, "w", encoding="utf-8") as f:
+            json.dump(runtime, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        return jsonify({
+            "success": True,
+            "message": f"{key}: {old} → {value} (已持久化)",
+        })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

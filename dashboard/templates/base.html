@@ -128,11 +128,13 @@
         </div>
         <div id="debug-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh;display:none"></div>
         <div id="aicu-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh;display:none"><div class="text-muted small p-2">暂无 AICU 分析日志。<br>在视频详情页执行深度分析后，日志将显示在这里。</div></div>
+        <div id="llm-log" class="p-2 overflow-auto flex-grow-1" style="font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.5;max-height:60vh;display:none"><div class="text-muted small p-2">暂无 LLM 初筛日志。<br>在视频详情页执行「一键 LLM 初筛」后，日志将显示在这里。</div></div>
         <div class="px-2 py-1 border-top border-secondary bg-black bg-opacity-10 d-flex gap-1 flex-wrap align-items-center">
             <span class="text-muted small me-1">模式:</span>
             <button class="btn btn-sm btn-outline-secondary py-0 px-2 active" id="btn-mode-http" onclick="switchDebugMode('http')">HTTP</button>
             <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-crawler" onclick="switchDebugMode('crawler')">爬虫</button>
             <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-aicu" onclick="switchDebugMode('aicu')">AICU</button>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="btn-mode-llm" onclick="switchDebugMode('llm')">LLM</button>
             <span class="text-muted small mx-1">|</span>
             <span id="crawler-log-controls" style="display:none" class="d-flex align-items-center gap-1">
                 <select id="crawler-log-spider" class="form-select form-select-sm py-0" style="width:auto;font-size:11px" onchange="switchCrawlerLog()">
@@ -156,8 +158,9 @@
     // ---- 全局调试日志 ----
     var _debugLogs = [];
     var _aicuLogLines = [];             // AICU 日志缓冲区（最多 300 行）
+    var _llmLogLines = [];              // LLM 初筛日志缓冲区（最多 300 行）
     var _debugPanelOpen = false;
-    var _debugMode = 'http';           // 'http' | 'crawler' | 'aicu'
+    var _debugMode = 'http';           // 'http' | 'crawler' | 'aicu' | 'llm'
     var _crawlerEventSource = null;
     var _crawlerLogLines = [];         // 爬虫日志缓冲区（最多 500 行）
 
@@ -215,13 +218,16 @@
         const btnHttp = document.getElementById('btn-mode-http');
         const btnCrawler = document.getElementById('btn-mode-crawler');
         const btnAicu = document.getElementById('btn-mode-aicu');
+        const btnLlm = document.getElementById('btn-mode-llm');
         const debugLog = document.getElementById('debug-log');
         const aicuLog = document.getElementById('aicu-log');
+        const llmLog = document.getElementById('llm-log');
         const controls = document.getElementById('crawler-log-controls');
 
-        [btnHttp, btnCrawler, btnAicu].forEach(b => b && b.classList.remove('active'));
+        [btnHttp, btnCrawler, btnAicu, btnLlm].forEach(b => b && b.classList.remove('active'));
         if (debugLog) debugLog.style.display = 'none';
         if (aicuLog) aicuLog.style.display = 'none';
+        if (llmLog) llmLog.style.display = 'none';
 
         if (mode === 'crawler') {
             badge.textContent = '爬虫日志'; badge.className = 'badge bg-info small';
@@ -234,6 +240,12 @@
             if (btnAicu) btnAicu.classList.add('active');
             if (controls) controls.style.display = 'none';
             if (aicuLog) aicuLog.style.display = 'block';
+            stopCrawlerStream();
+        } else if (mode === 'llm') {
+            badge.textContent = 'LLM初筛'; badge.className = 'badge bg-info small';
+            if (btnLlm) btnLlm.classList.add('active');
+            if (controls) controls.style.display = 'none';
+            if (llmLog) llmLog.style.display = 'block';
             stopCrawlerStream();
         } else {
             badge.textContent = 'HTTP'; badge.className = 'badge bg-secondary small';
@@ -322,6 +334,15 @@
                     `<div class="${l.cls || ''}" style="border-bottom:1px solid #1e293b;padding:1px 0;white-space:pre-wrap;word-break:break-all">${l.text}</div>`
                   ).join('');
             el.scrollTop = el.scrollHeight;
+        } else if (_debugMode === 'llm') {
+            const el = document.getElementById('llm-log');
+            if (!el) return;
+            el.innerHTML = _llmLogLines.length === 0
+                ? '<div class="text-muted small p-2">暂无 LLM 初筛日志。<br>在视频详情页执行「一键 LLM 初筛」后，日志将显示在这里。</div>'
+                : _llmLogLines.map(l =>
+                    `<div class="${l.cls || ''}" style="border-bottom:1px solid #1e293b;padding:1px 0;white-space:pre-wrap;word-break:break-all">${l.text}</div>`
+                  ).join('');
+            el.scrollTop = el.scrollHeight;
         } else {
             const el = document.getElementById('debug-log');
             if (!el) return;
@@ -347,6 +368,8 @@
             _crawlerLogLines = [];
         } else if (_debugMode === 'aicu') {
             _aicuLogLines = [];
+        } else if (_debugMode === 'llm') {
+            _llmLogLines = [];
         } else {
             _debugLogs.length = 0;
         }
@@ -365,12 +388,13 @@
         }
     }
 
-    // ---- AICU 日志输出 ----
-    window.consoleLog = function(msg, level) {
+    // ---- AICU / LLM 日志输出 ----
+    window.consoleLog = function(msg, level, mode) {
+        mode = mode || 'aicu';
         level = level || 'info';
-        // 自动打开面板并切换到 AICU 模式
+        // 自动打开面板并切换到对应模式
         if (!_debugPanelOpen) toggleDebugPanel();
-        if (_debugMode !== 'aicu') switchDebugMode('aicu');
+        if (_debugMode !== mode) switchDebugMode(mode);
         var cls = '';
         if (level === 'success') cls = 'text-success';
         else if (level === 'warn') cls = 'text-warning';
@@ -378,9 +402,13 @@
         else cls = 'text-info';
         var now = new Date();
         var ts = now.toTimeString().slice(0, 8);
-        _aicuLogLines.push({ text: '[' + ts + '] ' + msg, cls: cls });
-        if (_aicuLogLines.length > 300) _aicuLogLines = _aicuLogLines.slice(-300);
+        var dest = (mode === 'llm') ? _llmLogLines : _aicuLogLines;
+        dest.push({ text: '[' + ts + '] ' + msg, cls: cls });
+        if (dest.length > 300) dest.splice(0, dest.length - 300);
         renderDebugLog();
+    };
+    window.llmConsoleLog = function(msg, level) {
+        window.consoleLog(msg, level, 'llm');
     };
 
     // ---- 浮动按钮拖动 ----

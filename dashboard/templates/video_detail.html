@@ -1206,7 +1206,7 @@ async function startLlmScreen() {
             return;
         }
 
-        consoleLog(`LLM 初筛启动: ${data.total} 个候选用户, 阈值≥${threshold}`, 'info');
+        llmConsoleLog(`LLM 初筛启动: ${data.total} 个候选用户, 阈值≥${threshold}`, 'info');
 
         // 轮询进度 + 日志
         const PROGRESS_TEXT = document.getElementById('llm-progress-text');
@@ -1228,7 +1228,7 @@ async function startLlmScreen() {
 
                 // 流式输出日志
                 if (st.logs && st.logs.length > 0) {
-                    st.logs.forEach(l => consoleLog(l.msg, l.level || 'info'));
+                    st.logs.forEach(l => llmConsoleLog(l.msg, l.level || 'info'));
                     llmLogOffset += st.logs.length;
                 }
 

@@ -277,6 +277,7 @@ class BilibiliUserSpider(scrapy.Spider):
                             "vip": {"status": up.get("vip", {}).get("status", 0)},
                             "official": up.get("official", {}),
                             "post_count": 0,
+                            "upload_count": int(up.get("archive_count") or 0),
                         }
                         logger.info(f"[mid={mid}] Playwright success: name={data['name']} Lv{data['level']} face={'yes' if data.get('face') else 'no'}")
                     except Exception as e:

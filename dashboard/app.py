@@ -3800,15 +3800,16 @@ def api_login_poll(qrcode_key):
             raw_cookies = resp.headers.get("set-cookie", "")
             logger.info(f"[Login] Raw Set-Cookie (first 200 chars): {raw_cookies[:200]}")
 
+            # URL解码 cookie 值（B站 Set-Cookie 值是 URL 编码的，需解码后才能用）
+            from urllib.parse import unquote
             for k, v in resp.cookies.items():
-                cookies[k] = v
-            # 如果 poll_data 中包含 cookie 信息，也合并
+                cookies[k] = unquote(v)
             if isinstance(data, dict):
                 refresh_token = data.get("refresh_token", "")
                 if refresh_token:
                     cookies["bili_refresh_token"] = refresh_token
 
-            logger.info(f"[Login] 提取到 Cookie keys: {list(cookies.keys())}")
+            logger.info(f"[Login] Cookie keys: {list(cookies.keys())}, SESSDATA前20: {cookies.get('SESSDATA','')[:20]}")
             if not cookies or "SESSDATA" not in cookies:
                 logger.error(f"[Login] Cookie 提取失败! resp.cookies 为空或缺少 SESSDATA")
                 return jsonify({"success": False, "message": "Cookie 提取失败，请重试"}), 500

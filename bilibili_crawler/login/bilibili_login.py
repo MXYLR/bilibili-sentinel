@@ -263,8 +263,9 @@ class BilibiliLogin:
 
     @staticmethod
     def _extract_cookies_from_response(response) -> Dict[str, str]:
-        """从 requests.Response 提取 Set-Cookie"""
+        """从 requests.Response 提取 Set-Cookie（值已 URL 解码）"""
+        from urllib.parse import unquote
         cookies = {}
         for cookie in response.cookies:
-            cookies[cookie.name] = cookie.value
+            cookies[cookie.name] = unquote(cookie.value)
         return cookies

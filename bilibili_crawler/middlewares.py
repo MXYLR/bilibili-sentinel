@@ -236,7 +236,10 @@ class BilibiliCookieMiddleware:
         try:
             if os.path.exists(self._cookie_file):
                 with open(self._cookie_file, "r", encoding="utf-8") as f:
-                    self._cookies = json.load(f)
+                    raw = json.load(f)
+                # ★ URL解码 cookie 值
+                from urllib.parse import unquote
+                self._cookies = {k: unquote(v) if '%' in str(v) else v for k, v in raw.items()}
                 if self._cookies:
                     logger.info(
                         f"[Cookie] 已加载 {len(self._cookies)} 个 Cookie 键, "

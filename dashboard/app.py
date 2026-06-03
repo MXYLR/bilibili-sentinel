@@ -3795,9 +3795,11 @@ def api_login_poll(qrcode_key):
         data = poll_data.get("data", {})
         inner_code = data.get("code", -1)
         if inner_code == 0:
-            # ★ 同时从 response headers 和 response.cookies 提取
+            # ★ 从 response headers 直接提取所有 cookie
             cookies = {}
-            # 先从 Set-Cookie headers 提取全部 cookie
+            raw_cookies = resp.headers.get("set-cookie", "")
+            logger.info(f"[Login] Raw Set-Cookie (first 200 chars): {raw_cookies[:200]}")
+
             for k, v in resp.cookies.items():
                 cookies[k] = v
             # 如果 poll_data 中包含 cookie 信息，也合并
@@ -3805,7 +3807,12 @@ def api_login_poll(qrcode_key):
                 refresh_token = data.get("refresh_token", "")
                 if refresh_token:
                     cookies["bili_refresh_token"] = refresh_token
+
             logger.info(f"[Login] 提取到 Cookie keys: {list(cookies.keys())}")
+            if not cookies or "SESSDATA" not in cookies:
+                logger.error(f"[Login] Cookie 提取失败! resp.cookies 为空或缺少 SESSDATA")
+                return jsonify({"success": False, "message": "Cookie 提取失败，请重试"}), 500
+
             login._cookies = cookies
             login.save_login_state_sync()
 

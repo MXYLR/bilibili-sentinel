@@ -88,15 +88,27 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
 
 ### 用户 {user_data.get('uname', 'unknown')} (MID: {mid})
 
+**账号属性:**
+- 等级: Lv{user_data.get('level', 0)}
+- 签名: {user_data.get('sign', '无')[:80] if user_data.get('sign') else '无'}
+
 **当前视频行为:**
 - 在此视频中发表了 {user_data.get('comment_count', 0)} 条评论
 - 14特征引擎评分: {user_data.get('suspicious_score', 0):.1f}/100
 - LLM 初筛结果: 类型 {user_data.get('llm_type_id', 0)} ({user_data.get('llm_type_name', '未分析')}), 置信度 {user_data.get('llm_confidence', 0)}%
 """
 
-    # 初筛推理
-    if user_data.get("llm_reasoning"):
-        prompt += f"- 初筛推理: {user_data['llm_reasoning'][:200]}\n"
+    prompt += user_data.get('raw_profile', '') + "\n"
+
+    # ★ 关键特征显式列出
+    prompt += f"""
+**关键特征分数 (0-1, 越高越可疑):**
+  * 头像/认证(F4): {features.get('f4_avatar_verify', 0):.2f}
+  * 账号骨架(F12): {features.get('f12_account_skeleton', 0):.2f} (无头像+ID乱码+无动态+无投稿+默认签名)
+  * 内容相似度(F5): {features.get('f5_content_similarity', 0):.2f}
+  * 时间爆发(F6): {features.get('f6_time_burst', 0):.2f}
+  * 情感极端(F7): {features.get('f7_sentiment_extreme', 0):.2f}
+"""
 
     # Top 3 高贡献特征
     top_features = sorted(features.items(), key=lambda x: x[1], reverse=True)[:3]

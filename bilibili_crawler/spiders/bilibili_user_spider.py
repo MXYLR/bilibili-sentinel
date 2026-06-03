@@ -64,8 +64,8 @@ class BilibiliUserSpider(scrapy.Spider):
     name = "bilibili_user"
 
     custom_settings = {
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 2,
-        "DOWNLOAD_DELAY": 0.5,
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,   # ★ 单线程，避免 352
+        "DOWNLOAD_DELAY": 3.0,                  # ★ 3秒间隔，避免风控 (参考2.5s经验值)
         "DOWNLOAD_TIMEOUT": 30,
         "COOKIES_ENABLED": True,
     }

@@ -2055,7 +2055,7 @@ def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer,
 
 @app.route("/api/video/<bvid>/user/<int:mid>/llm-analyze", methods=["POST"])
 def api_user_llm_analyze(bvid: str, mid: int):
-    """对单个用户执行 LLM 语义分析，结果写回报告。"""
+    """对单个用户执行 LLM 语义分析（异步，前端轮询获取日志和结果）。"""
     report = _load_report(bvid)
     if not report:
         return jsonify({"success": False, "error": "报告不存在，请先运行分析"}), 404
@@ -2065,130 +2065,97 @@ def api_user_llm_analyze(bvid: str, mid: int):
     if not user:
         return jsonify({"success": False, "error": f"未找到 MID={mid} 的用户"}), 404
 
-    comments = _load_comments(bvid)
-    if not comments:
-        return jsonify({"success": False, "error": "评论数据不存在"}), 404
+    from analyzer.llm_analyzer import create_llm_analyzer
+    analyzer = create_llm_analyzer()
+    if not analyzer or not analyzer.is_available:
+        return jsonify({"success": False, "error": "LLM 不可用"}), 503
 
-    video_info = report.get("video_info", {}) or _load_video_info(bvid) or {}
+    task_key = f"{bvid}_user_llm_{mid}"
+    if LlmScreenTracker._tasks.get(task_key, {}).get("status") == "running":
+        return jsonify({"success": True, "status": "running", "message": "LLM 分析已在运行中"})
 
-    # 获取该用户在此视频下的评论（供 LLM 上下文）
-    user_comments = [c for c in comments if str(c.get("mid")) == str(mid)]
-    if not user_comments:
-        return jsonify({"success": False, "error": "该用户在此视频下无评论"}), 400
+    LlmScreenTracker.start(task_key, total=1)
+    LlmScreenTracker.update(task_key, done_batches=0, progress=f"分析中...")
 
-    # 构造单用户 scored_users 列表 — 包含实时 F4/F12 刷新
-    raw_features = user.get("features", {}) or {}
-    # ★ 加载用户数据并刷新特征
-    fresh_user = _load_fresh_users({str(mid)}).get(str(mid), {})
-    if fresh_user:
-        raw_features = _refresh_features(raw_features, fresh_user, user.get("uname", ""))
-        logger.info(f"[LLM单用户] 已刷新 F4={raw_features.get('f4_avatar_verify',0):.0f} F12={raw_features.get('f12_account_skeleton',0):.0f}")
+    threading.Thread(
+        target=_run_single_llm_bg,
+        args=(bvid, mid, report, user, analyzer, task_key),
+        daemon=True,
+    ).start()
 
-    single_user = {
-        "mid": mid,
-        "uname": user.get("uname", ""),
-        "level": user.get("level", 0),
-        "suspicious_score": user.get("score", 0),
-        "engine_score_raw": user.get("engine_score_raw", user.get("score", 0)),
-        "llm_confidence": user.get("llm_confidence", 0),
-        "llm_type_id": user.get("llm_type_id", 0),
-        "llm_type_name": user.get("llm_type_name", ""),
-        "comment_count": user.get("comment_count", len(user_comments)),
-        "sample_comments": user_comments[:5],
-        "features": raw_features,
-        "sign": user.get("sign", ""),
-        "raw_profile": _build_raw_profile_line(fresh_user),  # ★ 原始用户数据
-    }
+    return jsonify({"success": True, "task_key": task_key, "message": "单用户 LLM 分析已启动"})
 
-    # ---- 3. 构建 deep_analyze 所需的 scored_users ----
-    # 注意：deep_analyze 期望完整的 scored_users 列表用于排序/统计，
-    # 但只会对 candidates（>= threshold）做深度分析。
-    # 单用户模式：构造一个元素的列表，并确保其 suspicious_score 足够高以通过阈值
-    scored_users = []
-    single_user_for_deep = dict(single_user)
-    # 确保能通过 deep_analyze 内部的阈值筛选（threshold_override=0 时 all pass）
-    scored_users.append(single_user_for_deep)
+
+def _run_single_llm_bg(bvid, mid, report, user, analyzer, task_key):
+    """后台执行单用户 LLM 分析，逐步更新 LlmScreenTracker。"""
+    def _log(level, msg):
+        LlmScreenTracker.log(task_key, msg, level)
+        logger.info(f"[LLM单用户] {msg}")
 
     try:
-        from analyzer.llm_analyzer import create_llm_analyzer
-        analyzer = create_llm_analyzer()
-        if not analyzer or not analyzer.is_available:
-            return jsonify({"success": False, "error": "LLM 不可用，请检查 API Key 配置"}), 503
+        comments = _load_comments(bvid)
+        user_comments = [c for c in comments if str(c.get("mid")) == str(mid)]
+        if not user_comments:
+            _log("error", "该用户在此视频下无评论")
+            LlmScreenTracker.update(task_key, status="error", error="无评论")
+            return
 
-        # 详细日志
-        logger.info(f"[AICU单用户] 开始: mid={mid}, uname={user.get('uname','?')}")
-        logger.info(f"[AICU单用户] 传入 scored_users[0]: score={single_user_for_deep.get('suspicious_score',0)}, engine_raw={single_user_for_deep.get('engine_score_raw',0)}")
+        _log("info", f"开始单用户 LLM 分析: mid={mid} score={user.get('score',0)}")
 
-        result = analyzer.deep_analyze(scored_users, comments_data=comments, video_info=video_info, threshold_override=0)
-        
-        # 详细日志：打印 deep_analyze 返回内容
-        logger.info(f"[AICU单用户] deep_analyze 返回: keys={list(result.keys())}")
-        logger.info(f"[AICU单用户] enhanced_users 数量: {len(result.get('enhanced_users', []))}")
-        logger.info(f"[AICU单用户] stats: {result.get('stats', {})}")
+        # 特征刷新
+        raw_features = user.get("features", {}) or {}
+        fresh_user = _load_fresh_users({str(mid)}).get(str(mid), {})
+        if fresh_user:
+            raw_features = _refresh_features(raw_features, fresh_user, user.get("uname", ""))
+            _log("info", _build_raw_profile_line(fresh_user))
+
+        single_user = {
+            "mid": mid, "uname": user.get("uname", ""), "level": user.get("level", 0),
+            "suspicious_score": user.get("score", 0),
+            "comment_count": user.get("comment_count", len(user_comments)),
+            "sample_comments": user_comments[:5],
+            "features": raw_features, "sign": user.get("sign", ""),
+            "raw_profile": _build_raw_profile_line(fresh_user),
+        }
+
+        video_info = report.get("video_info", {}) or _load_video_info(bvid) or {}
+        _log("info", "调用 LLM API...")
+        result = analyzer.deep_analyze([single_user], comments_data=comments, video_info=video_info, threshold_override=0)
 
         enhanced_users = result.get("enhanced_users", [])
-        if not enhanced_users:
-            logger.warning(f"[AICU单用户] enhanced_users 为空！mid={mid}")
-            return jsonify({"success": False, "error": "LLM 深度分析返回空结果，请检查 LLM API 是否正常"}), 500
-
         enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}
-        logger.info(f"[AICU单用户] enhanced_by_mid keys: {list(enhanced_by_mid.keys())}")
-        
-        enhanced = enhanced_by_mid.get(mid)
-        if not enhanced:
-            logger.warning(f"[AICU单用户] mid={mid} 不在 enhanced_by_mid 中！available keys: {list(enhanced_by_mid.keys())}")
-            # 退回使用第一个结果
-            if enhanced_users:
-                enhanced = enhanced_users[0]
-            else:
-                return jsonify({"success": False, "error": "深度分析结果中未找到该用户"}), 500
+        enhanced = enhanced_by_mid.get(mid, single_user)
 
-        # 写回报告 — LLM 初筛只写 llm_* 字段，不污染 deep_* / aicu_* 字段
-        llm_conf = enhanced.get("llm_confidence", enhanced.get("deep_confidence", 0))
-        llm_type_id = enhanced.get("llm_type_id", enhanced.get("deep_type_id", 0))
-        llm_type_name = enhanced.get("llm_type_name", "") or enhanced.get("deep_type_name", "") or ("正常用户" if llm_type_id == 0 else "")
+        llm_type_id = enhanced.get("llm_type_id", 0)
+        llm_type_name = enhanced.get("llm_type_name", "") or ("正常用户" if llm_type_id == 0 else "")
+        llm_conf = enhanced.get("llm_confidence", 0)
 
+        _log("success" if llm_type_id > 0 else "info",
+             f"分析完成: type={llm_type_name} confidence={llm_conf}%")
+
+        # 写回报告
         user["llm_analyzed"] = True
         user["llm_confidence"] = llm_conf
         user["llm_type_id"] = llm_type_id
         user["llm_type_name"] = llm_type_name
         user["score"] = enhanced.get("suspicious_score", user.get("score", 0))
-        # 注意：不写 deep_* / aicu_* 字段，避免 LLM 初筛误触发 AICU 深度分析展示
 
-        # ★ 重新注入样本评论
-        try:
-            comments_all = _load_comments(bvid)
-            by_mid = {}
-            for c in comments_all:
-                cmid = c.get("mid", 0)
-                if cmid not in by_mid: by_mid[cmid] = []
-                if len(by_mid[cmid]) < 5:
-                    by_mid[cmid].append(c.get("content", c.get("message", ""))[:200])
-            for u in report["top_suspects"]:
-                umid = u.get("mid", 0)
-                if umid in by_mid: u["sample_comments"] = by_mid[umid]
-        except Exception: pass
-
-        # 保存报告
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
 
-        return jsonify({
-            "success": True,
-            "mid": mid,
-            "llm_analyzed": True,
-            "llm_type_name": llm_type_name,
-            "llm_confidence": llm_conf,
-            "score": enhanced.get("suspicious_score", 0),
+        LlmScreenTracker.finish(task_key, result={
+            "success": True, "mid": mid, "deep_analyzed": True,
+            "deep_type_name": llm_type_name, "deep_confidence": llm_conf,
+            "llm_type_name": llm_type_name, "llm_confidence": llm_conf,
+            "score": enhanced.get("suspicious_score", user.get("score", 0)),
         })
     except Exception as e:
         logger.error(f"单用户 LLM 分析失败 (mid={mid}): {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
+        _log("error", f"分析失败: {e}")
+        LlmScreenTracker.update(task_key, status="error", error=str(e))
 
 @app.route("/api/video/<bvid>/llm-screen", methods=["POST"])
 def api_video_llm_screen(bvid: str):
@@ -2375,9 +2342,10 @@ def _run_llm_screen_bg(bvid: str, report: dict, candidates: list, threshold: int
 
 @app.route("/api/llm-screen-status/<bvid>")
 def api_llm_screen_status(bvid: str):
-    """轮询 LLM 初筛进度。支持 ?since=N 增量获取日志。"""
+    """轮询 LLM 初筛进度。支持 ?since=N 增量获取日志, ?key= 指定任务 key。"""
     since = request.args.get("since", 0, type=int)
-    return jsonify({"success": True, "data": LlmScreenTracker.get_status(bvid, since_log=since)})
+    key = request.args.get("key", bvid)
+    return jsonify({"success": True, "data": LlmScreenTracker.get_status(key, since_log=since)})
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/deep-analyze", methods=["POST"])

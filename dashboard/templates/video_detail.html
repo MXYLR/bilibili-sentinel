@@ -1431,41 +1431,60 @@ async function startDeepAnalyze() {
     }
 }
 
-// ---- 单用户 LLM 分析 ----
-
-// ---- 单用户 LLM 分析（弹窗内原地刷新） ----
+// ---- 单用户 LLM 分析（弹窗内原地刷新 + 流式日志） ----
 async function runLLMAnalyzeInModal(mid) {
     const btn = document.getElementById('llm-analyze-btn');
     if (!btn) return;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> LLM 分析中...';
+    llmConsoleLog(`[单用户] 开始 LLM 分析 MID=${mid}`, 'info');
 
     try {
+        // 1. 发起启动请求
         const resp = await fetch('/api/video/{{ bvid }}/user/' + mid + '/llm-analyze', { method: 'POST' });
         const data = await resp.json();
-        if (data.success) {
-            showToast(`LLM 分析完成: ${data.llm_type_name || '未知'} (${data.llm_confidence}%)`, 'success');
-            // 原地刷新：重新渲染弹窗
-            const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
-            if (idx >= 0) {
-                const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
-                if (r.ok) {
-                    const d = await r.json();
-                    if (d.success) {
-                        scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
-                    }
-                }
-                showUserDetail(idx);
-            } else {
-                location.reload();
-            }
-        } else {
-            showToast('LLM 分析失败: ' + (data.error || '未知错误'), 'error');
+        if (!data.success) {
+            llmConsoleLog(`[单用户] 启动失败: ${data.error || '未知'}`, 'error');
+            showToast('启动失败: ' + (data.error || '未知错误'), 'error');
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-cpu"></i> 重试 LLM 分析';
+            return;
         }
+
+        // 2. 轮询进度
+        let logOffset = 0;
+        const taskKey = data.task_key;
+        await new Promise((resolve, reject) => {
+            const timer = setInterval(async () => {
+                try {
+                    const sr = await fetch(`/api/llm-screen-status/{{ bvid }}?key=${taskKey}&since=${logOffset}`);
+                    const sd = await sr.json();
+                    const st = sd.data || {};
+                    if (st.logs && st.logs.length > 0) {
+                        st.logs.forEach(l => llmConsoleLog(l.msg, l.level || 'info'));
+                        logOffset += st.logs.length;
+                    }
+                    if (st.status === 'done') { clearInterval(timer); resolve(st.result || {}); }
+                    else if (st.status === 'error') { clearInterval(timer); reject(new Error(st.error || 'LLM异常')); }
+                } catch (pollErr) {}
+            }, 500);
+            setTimeout(() => { clearInterval(timer); reject(new Error('超时(1分钟)')); }, 60000);
+        });
+
+        // 3. 刷新弹窗
+        const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+        if (idx >= 0) {
+            const r = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
+            if (r.ok) {
+                const d = await r.json();
+                if (d.success) scoredUsers[idx] = Object.assign({}, scoredUsers[idx], d.data);
+            }
+            showUserDetail(idx);
+            refreshUserRow(mid);
+        } else { location.reload(); }
     } catch (err) {
-        showToast('网络错误: ' + err.message, 'error');
+        llmConsoleLog(`[单用户] 分析失败: ${err.message}`, 'error');
+        showToast('分析失败: ' + err.message, 'error');
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-cpu"></i> 重试 LLM 分析';
     }

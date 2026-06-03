@@ -3325,7 +3325,9 @@ def api_aicu_test():
 
 @app.route("/api/crawler/status")
 def api_crawler_status():
-    return jsonify({"success": True, "data": spider_mgr.get_status()})
+    data = spider_mgr.get_status()
+    data["_user_auto_queued"] = _comment_finished_trigger_user  # ★ 附加标记
+    return jsonify({"success": True, "data": data})
 
 
 VALID_SPIDERS = ("bilibili_video", "bilibili_comment", "bilibili_user")
@@ -3548,22 +3550,44 @@ def _build_raw_profile_line(user_data: dict) -> str:
 
 
 def _auto_start_user_spider() -> dict:
-    """如果用户爬虫未运行，自动注入种子并启动。"""
+    """注入用户种子（不启动，由评论爬虫完成后自动触发）。"""
     try:
-        state = spider_mgr._read_state()
-        user_state = state.get("bilibili_user", {})
-        if user_state.get("status") == "running":
-            return {"success": True, "message": "用户爬虫已在运行", "auto": True}
-
-        # 尝试从已有评论数据补充用户种子
-        spider_mgr.inject_seeds("rescan_users")
-
-        # 启动用户爬虫
-        result = spider_mgr.start_spider("bilibili_user")
-        result["auto"] = True
-        return result
+        result = spider_mgr.inject_seeds("rescan_users")
+        injected = result.get("injected", 0)
+        # ★ 标记：评论爬虫完成后应启动用户爬虫
+        _comment_finished_trigger_user = True
+        return {"success": True, "injected": injected, "auto": True,
+                "message": f"已注入 {injected} 个用户种子，评论爬虫完成后自动启动"}
     except Exception as e:
-        return {"success": False, "message": f"自动启动用户爬虫失败: {e}", "auto": True}
+        return {"success": False, "message": f"注入失败: {e}", "auto": True}
+
+
+# ★ 后台监控：评论爬虫完成后自动启动用户爬虫
+_comment_finished_trigger_user = False
+_last_comment_running = False
+
+def _check_comment_to_user() -> None:
+    """每秒检查一次：如果评论爬虫从运行→停止，自动启动用户爬虫。"""
+    global _comment_finished_trigger_user, _last_comment_running
+    import time as _time
+    while True:
+        try:
+            state = spider_mgr._read_state()
+            comment_running = state.get("bilibili_comment", {}).get("status") == "running"
+            user_running = state.get("bilibili_user", {}).get("status") == "running"
+
+            if _last_comment_running and not comment_running and _comment_finished_trigger_user and not user_running:
+                logger.info("评论爬虫已完成，自动启动用户爬虫...")
+                spider_mgr.inject_seeds("rescan_users")  # 再补充一次种子
+                result = spider_mgr.start_spider("bilibili_user")
+                if result.get("success"):
+                    logger.info(f"用户爬虫已自动启动 (PID={result.get('pid')})")
+                _comment_finished_trigger_user = False
+
+            _last_comment_running = comment_running
+        except Exception:
+            pass
+        _time.sleep(2)  # 每2秒检查一次
 
 
 @app.route("/api/crawler/stop-all", methods=["POST"])
@@ -3838,4 +3862,10 @@ if __name__ == "__main__":
     print(f"  系统设置: http://127.0.0.1:5001/settings")
     print(f"  调试模式: {'开启' if debug_mode else '关闭（生产模式，无 reloader）'}")
     print("=" * 60)
+    # ★ 启动后台监控线程（评论爬虫→用户爬虫自动联动）
+    import os as _oss
+    if not _oss.environ.get("WERKZEUG_RUN_MAIN"):  # 避免 Flask reloader 重复启动
+        _check_thread = threading.Thread(target=_check_comment_to_user, daemon=True)
+        _check_thread.start()
+        logger.info("后台监控已启动: 评论爬虫完成后自动启动用户爬虫")
     app.run(host="0.0.0.0", port=5001, debug=debug_mode, use_reloader=debug_mode)

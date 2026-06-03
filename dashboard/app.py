@@ -1211,6 +1211,18 @@ class LlmScreenTracker:
             "logs": logs[since_log:] if since_log < len(logs) else [],
         }
 
+    @classmethod
+    def finish(cls, bvid: str, result: dict = None, error: str = None):
+        with cls._lock:
+            if bvid in cls._tasks:
+                if error:
+                    cls._tasks[bvid]["status"] = "error"
+                    cls._tasks[bvid]["error"] = error
+                else:
+                    cls._tasks[bvid]["status"] = "done"
+                if result:
+                    cls._tasks[bvid]["result"] = result
+
 
 class DeleteTaskTracker:
     """跟踪分类删除进度，支持前端轮询。"""

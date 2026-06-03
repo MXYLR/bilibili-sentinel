@@ -680,6 +680,18 @@ class BilibiliResponseMiddleware:
                 f"B站请求校验失败 (-352): {data.get('message', '')} — "
                 "Cookie 缺失或 WBI 签名无效，请检查登录态"
             )
+            # ★ v2.20: -352 连续触发时也启用 Playwright 兜底
+            try:
+                from config.accounts import PLAYWRIGHT_TRIGGER_412_COUNT
+                trigger_count = PLAYWRIGHT_TRIGGER_412_COUNT
+            except ImportError:
+                trigger_count = 5
+            self._consecutive_412 += 1
+            spider._412_count = self._consecutive_412
+            if self._consecutive_412 >= trigger_count:
+                spider._use_playwright = True
+                spider.logger.warning(
+                    f"[PlaywrightFallback] -352 连续 {self._consecutive_412} 次，启用 Playwright")
             return response
 
         # 成功响应，重置风控计数 (v2.4: 同时清零全局连续 412 计数)

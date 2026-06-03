@@ -21,6 +21,7 @@ B站用户数据采集 Spider — F12-F14 特征数据源
 
 import json
 import logging
+import os
 import time
 
 import redis
@@ -51,6 +52,9 @@ _REDIS_PORT = 6379
 _REDIS_DB = 1
 _REDIS_KEY = "bilibili_crawler:user_seeds"
 
+# ---- 本地路径 ----
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
+
 
 class BilibiliUserSpider(scrapy.Spider):
     """
@@ -64,8 +68,9 @@ class BilibiliUserSpider(scrapy.Spider):
     name = "bilibili_user"
 
     custom_settings = {
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,   # ★ 单线程，避免 352
-        "DOWNLOAD_DELAY": 3.0,                  # ★ 3秒间隔，避免风控 (参考2.5s经验值)
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 2,   # 双线程，折中速度与风控
+        "DOWNLOAD_DELAY": 2.5,                  # 2.5秒间隔 (经验值，无352)
+        "RANDOMIZE_DOWNLOAD_DELAY": True,       # ★ 随机化延迟，防模式识别
         "DOWNLOAD_TIMEOUT": 30,
         "COOKIES_ENABLED": True,
     }
@@ -155,7 +160,14 @@ class BilibiliUserSpider(scrapy.Spider):
     # ================================================================
 
     def _request_user_info(self, mid: int):
-        """请求用户空间基本信息。"""
+        """请求用户空间基本信息（跳过已采集的）。"""
+        # ★ 跳过已有有效数据的用户
+        user_file = os.path.join(DATA_DIR, "users", f"{mid}.json")
+        if os.path.exists(user_file) and os.path.getsize(user_file) > 100:
+            logger.debug(f"[mid={mid}] Already collected, skipping")
+            self._fetch_next_user()
+            return
+
         url = get_user_info_url(mid)
         return scrapy.Request(
             url,

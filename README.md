@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.19。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.20。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -61,10 +61,11 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 
 ### Dashboard 控制台
 - **系统总览** `/`: 健康卡片 + 热门榜独立分类（按时间/播放量/评论数排序）+ UP主分组折叠面板 + 播放量/评论数分桶 + 桶内独立翻页 + 页码跳转 + 分类删除按钮
-- **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM初筛（异步轮询进度）/AICU Modal 弹窗分析 + 特征触发图表 + 用户详情弹窗 + UP主收录按钮
-- **爬虫控制** `/crawler`: 3 爬虫管理 (视频/评论/用户) + 进程存活日志回退检测 + 种子注入 + 代理池状态 + 登录面板
+- **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM初筛/AICU Modal 弹窗分析 + 特征触发图表 + 全屏用户详情弹窗（账号分析/评论/AICU数据）+ UP主收录按钮
+- **爬虫控制** `/crawler`: 5 爬虫管理 (视频/评论/用户/弹幕/UP主视频) + 进程存活日志回退检测 + 种子注入 + 代理池状态 + 登录面板
 - **水军账号管理** `/water-army`: 收录水军库管理 + 搜索/筛选/排序 + 备注编辑 + CSV/JSON 导出 + B站主页直达链接
-- **系统设置** `/settings`: 功能开关 + LLM 多 Provider 配置 + AICU 深度分析 + 代理参数
+- **系统设置** `/settings`: 功能开关 + LLM 多 Provider 配置 + AICU 深度分析 + 代理参数（持久化到 runtime_config.json）
+- **调试控制台** (所有页面): 右下角可拖动浮动按钮 `>_` → 三选项卡面板 (AICU日志 / HTTP请求 / 爬虫日志SSE) + 可拖动 + 可调整大小 + 最小化
 
 ---
 
@@ -112,12 +113,13 @@ playwright install chromium
 }
 ```
 
-3. **代理**: 如需代理访问 B 站 API，修改 `config/base_config.py`:
+3. **代理**: 在 Dashboard 设置页面修改 Clash 代理地址（自动持久化到 `config/runtime_config.json`），爬虫启动时自动读取。也可直接编辑 `config/base_config.py`:
 
 ```python
 CLASH_PROXY_ENABLED = True
 CLASH_PROXY_URL = "socks5://192.168.1.104:7897"
 ```
+> 注：通过设置页面修改的代理地址会写入 `runtime_config.json`，优先级高于 `base_config.py` 的默认值。Dashboard 重启后也不会丢失。
 
 ### 一键启动
 
@@ -260,8 +262,9 @@ bilibili-sentinel/
 | | `GET /api/report/<bvid>` | 水军分析报告 |
 | 分析 | `POST /api/run-analysis/<bvid>` | 执行全量分析 |
 | | `GET /api/analysis-status/<bvid>` | 分析进度轮询 |
-| | `POST /api/video/<bvid>/llm-screen` | 批量 LLM 初筛（异步+轮询进度） |
-| | `GET /api/llm-screen-status/<bvid>` | LLM 初筛进度轮询 |
+| | `GET /api/deep-analyze-status/<bvid>` | 批量深度分析进度轮询 |
+| | `POST /api/video/<bvid>/llm-screen` | 批量 LLM 初筛（异步+轮询进度+流式日志） |
+| | `GET /api/llm-screen-status/<bvid>` | LLM 初筛进度轮询（支持 ?since= 增量日志） |
 | | `POST /api/video/<bvid>/user/<mid>/llm-analyze` | 单用户 LLM 分析 |
 | | `POST /api/video/<bvid>/user/<mid>/deep-analyze` | 单用户 AICU 深度分析 |
 | | `POST /api/video/<bvid>/deep-analyze` | 批量深度分析（支持阈值参数） |
@@ -316,6 +319,31 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 系统已内置三层对抗。可尝试：降低并发（`crawler_config.py` 中调大 `DOWNLOAD_DELAY`）、增加 Cookie 池账号、启用 Playwright 兜底。
 
 ---
+
+## v2.20 更新 (2026-06-03)
+
+### 调试控制台 (跨页面)
+- **浮动按钮 + 三选项卡面板**: 右下角 `>_` 按钮可拖动，点击打开控制台
+  - **AICU 日志**: AICU 深度分析 / LLM 初筛实时流式输出（后台线程 + 前端轮询）
+  - **HTTP 请求**: 拦截全局 fetch 请求，显示 URL/状态码/耗时
+  - **爬虫日志**: SSE 实时爬虫日志流，支持 5 爬虫选择
+- **按钮 + 面板可拖动**: 按钮拖到任意位置，面板标题栏拖动 + 右下角调整大小 + 双击最小化
+
+### AICU 深度分析增强
+- **单用户异步流式**: 改为后台线程 + 500ms 轮询，日志逐条实时输出到控制台
+- **AicuFetcher 日志回调**: 设备标记 / 评论弹幕探测 / 分页进度 / LLM 批次全部输出到前端
+- **评论抓取稳健性**: 探测超时 5s→12s+重试; 分页裸 HTTP 20s 超时绕过限速; 跳过重复 count check
+- **报告保存**: 所有路径添加 `fsync` 强制落盘; 保存前从评论文件重新注入 `sample_comments`
+
+### LLM 初筛增强
+- **流式控制台日志**: 每批次水军类型统计实时输出到 AICU 控制台
+
+### 账号详情
+- **全屏 Modal**: 从 modal-xl 升级为 modal-fullscreen，评论列表无高度限制
+- **列表实时更新**: AICU/LLM 分析完成后表格行评分/风险等级/LLM 类型自动刷新，无需整页重载
+
+### 代理设置
+- **持久化**: 设置页面修改 Clash 代理地址后写入 `runtime_config.json`，爬虫新进程自动读取
 
 ## v2.19 更新 (2026-06-01)
 

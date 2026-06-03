@@ -2076,10 +2076,46 @@ def api_user_llm_analyze(bvid: str, mid: int):
     if not user_comments:
         return jsonify({"success": False, "error": "该用户在此视频下无评论"}), 400
 
-    # 构造单用户 scored_users 列表
+    # 构造单用户 scored_users 列表 — 包含实时 F4/F12 刷新
+    raw_features = user.get("features", {}) or {}
+    # ★ 如果用户 JSON 文件存在，实时刷新 F4/F12
+    user_file = Path(DATA_DIR) / "users" / f"{mid}.json"
+    if user_file.exists():
+        try:
+            with open(user_file, "r", encoding="utf-8") as uf:
+                ud = json.load(uf)
+            if ud:
+                raw_features = dict(raw_features)
+                # F4: 头像/认证
+                f4 = 0.0
+                face = ud.get("face", "")
+                if not face or "noface" in face: f4 += 0.50
+                official = ud.get("official_verify", {})
+                if isinstance(official, str):
+                    try: official = json.loads(official)
+                    except Exception: official = {}
+                if not official or official.get("type", -1) == -1: f4 += 0.50
+                raw_features["f4_avatar_verify"] = round(min(1.0, f4) * 100, 1)
+                # F12: 账号骨架
+                f12 = 0.0
+                if not face or "noface" in face: f12 += 0.20
+                uname = user.get("uname", "")
+                if not uname or (uname.startswith("bili_") and len(uname) > 8): f12 += 0.20
+                post_count = ud.get("post_count")
+                if post_count == 0: f12 += 0.20
+                uploads = ud.get("upload_count", -1)
+                if uploads == 0: f12 += 0.20
+                sign = ud.get("sign", "")
+                if sign == "这个人没有填简介啊~~~": f12 += 0.20
+                raw_features["f12_account_skeleton"] = round(f12 * 100, 1)
+                logger.info(f"[LLM单用户] 已从用户文件刷新 F4={raw_features['f4_avatar_verify']:.0f} F12={raw_features['f12_account_skeleton']:.0f}")
+        except Exception as e:
+            logger.warning(f"[LLM单用户] 读取用户文件失败: {e}")
+
     single_user = {
         "mid": mid,
         "uname": user.get("uname", ""),
+        "level": user.get("level", 0),
         "suspicious_score": user.get("score", 0),
         "engine_score_raw": user.get("engine_score_raw", user.get("score", 0)),
         "llm_confidence": user.get("llm_confidence", 0),
@@ -2087,6 +2123,8 @@ def api_user_llm_analyze(bvid: str, mid: int):
         "llm_type_name": user.get("llm_type_name", ""),
         "comment_count": user.get("comment_count", len(user_comments)),
         "sample_comments": user_comments[:5],
+        "features": raw_features,   # ★ 传递特征给 LLM
+        "sign": user.get("sign", ""),
     }
 
     # ---- 3. 构建 deep_analyze 所需的 scored_users ----

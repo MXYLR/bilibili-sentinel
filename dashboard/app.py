@@ -2191,17 +2191,73 @@ def api_video_llm_screen(bvid: str):
     if status["status"] == "running":
         return jsonify({"success": True, "status": "running", "message": "LLM 初筛已在运行中"})
 
+    # ★ 从 data/users/ 预加载所有用户数据，用于实时计算 F4/F12
+    _fresh_users = {}
+    users_dir = Path(DATA_DIR) / "users"
+    if users_dir.exists():
+        for fname in os.listdir(str(users_dir)):
+            if fname.endswith(".json") and not fname.endswith("_posts.json") and fname != "unique_mids.json":
+                try:
+                    with open(users_dir / fname, "r", encoding="utf-8") as uf:
+                        ud = json.load(uf)
+                        if ud.get("mid"):
+                            _fresh_users[str(ud["mid"])] = ud
+                except Exception:
+                    pass
+
+    def _is_garbled_name(name: str) -> bool:
+        if not name: return True
+        if name.startswith("bili_") and len(name) > 8: return True
+        return False
+
+    def _calc_f4(ud: dict) -> float:
+        if not ud: return 0.3
+        score = 0.0
+        face = ud.get("face", "")
+        if not face or "noface" in face: score += 0.50
+        official = ud.get("official_verify", {})
+        if isinstance(official, str):
+            try: official = json.loads(official)
+            except Exception: official = {}
+        if not official or official.get("type", -1) == -1: score += 0.50
+        return min(1.0, score)
+
+    def _calc_f12(ud: dict, uname: str) -> float:
+        if not ud: return 0.0
+        score = 0.0
+        face = ud.get("face", "")
+        if not face or "noface" in face: score += 0.20
+        if _is_garbled_name(uname): score += 0.20
+        post_count = ud.get("post_count")
+        if post_count == 0: score += 0.20
+        uploads = ud.get("upload_count", -1)
+        if uploads == 0: score += 0.20
+        sign = ud.get("sign", "")
+        if sign == "这个人没有填简介啊~~~": score += 0.20
+        return score
+
     # 先收集候选人（验证参数和报告有效性）
     _src = (report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or [])
     _top_map = {u.get("mid"): u for u in (report.get("top_suspects") or []) if u.get("mid")}
 
     candidates = []
+    updated_features = 0
     for u in _src:
         score = u.get("suspicious_score", u.get("score", 0))
         if score < threshold:
             continue
         info = _top_map.get(u.get("mid"), {})
+        mid_str = str(u.get("mid", 0))
         raw_features = info.get("features", {}) or {}
+
+        # ★ 如果用户 JSON 文件存在，用实时数据覆盖 F4/F12
+        fresh_ud = _fresh_users.get(mid_str, {})
+        if fresh_ud:
+            raw_features = dict(raw_features)
+            raw_features["f4_avatar_verify"] = round(_calc_f4(fresh_ud) * 100, 1)
+            raw_features["f12_account_skeleton"] = round(_calc_f12(fresh_ud, info.get("uname", "")) * 100, 1)
+            updated_features += 1
+
         first_val = next(iter(raw_features.values()), 0) if raw_features else 0
         features_01 = {k: round(v / 100, 4) for k, v in raw_features.items()} if first_val > 1.0 else raw_features
         candidates.append({
@@ -2212,6 +2268,9 @@ def api_video_llm_screen(bvid: str):
             "features": features_01,
             "sign": info.get("sign", u.get("sign", "")),
         })
+
+    if updated_features > 0:
+        logger.info(f"[LLM初筛] 已从 {len(_fresh_users)} 个用户文件中刷新了 {updated_features} 个候选人的 F4/F12 特征")
 
     if not candidates:
         return jsonify({"success": True, "total": 0, "success_count": 0, "message": "没有需要初筛的用户"})

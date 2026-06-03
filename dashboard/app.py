@@ -906,6 +906,26 @@ class SpiderManager:
                 return {"success": False, "message": "请输入有效的 UP主 UID"}
             r.lpush("bilibili_crawler:up_video_seeds", json.dumps({"mid": mid}))
             return {"success": True, "message": f"已注入 UP主种子: UID={mid} (爬取其所有投稿视频)"}
+        elif seed_type == "rescan_users":
+            # ★ 从评论数据重新扫描并注入用户种子 (用于自动联动)
+            comment_dir = Path(DATA_DIR) / "comments"
+            all_mids = set()
+            if comment_dir.exists():
+                for cf in comment_dir.glob("*_comments.json"):
+                    try:
+                        with open(cf, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        comments = data if isinstance(data, list) else data.get("comments", [])
+                        for c in comments:
+                            if isinstance(c, dict) and c.get("mid"):
+                                all_mids.add(int(c["mid"]))
+                    except Exception:
+                        continue
+            injected = 0
+            for m in all_mids:
+                r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": m}))
+                injected += 1
+            return {"success": True, "message": f"已从评论数据注入 {injected} 个用户种子", "injected": injected}
         else:
             return {"success": False, "message": f"未知种子类型: {seed_type}"}
 
@@ -1672,6 +1692,8 @@ def api_score_distribution(bvid: str):
 
 @app.route("/api/run-analysis/<bvid>", methods=["POST"])
 def api_run_analysis(bvid: str):
+    # ★ 自动联动：分析前确保用户爬虫在运行（补充用户空间数据）
+    _auto_start_user_spider()
     result = analysis_mgr.start_analysis(bvid)
     if result.get("success"):
         return jsonify(result)
@@ -3292,7 +3314,13 @@ VALID_SPIDERS = ("bilibili_video", "bilibili_comment", "bilibili_user")
 def api_crawler_start(spider_name: str):
     if spider_name not in VALID_SPIDERS:
         return jsonify({"success": False, "message": f"未知爬虫: {spider_name}"}), 400
-    return jsonify(spider_mgr.start_spider(spider_name))
+    result = spider_mgr.start_spider(spider_name)
+
+    # ★ 自动联动：启动视频/评论爬虫时顺便启动用户爬虫（确保用户空间数据被采集）
+    if spider_name in ("bilibili_video", "bilibili_comment"):
+        _auto_start_user_spider()
+
+    return jsonify(result)
 
 
 @app.route("/api/crawler/stop/<spider_name>", methods=["POST"])
@@ -3416,7 +3444,28 @@ def api_crawler_start_both():
     for name in ("bilibili_video", "bilibili_comment"):
         results[name] = spider_mgr.start_spider(name)
         time.sleep(0.3)
+    # ★ 自动联动用户爬虫
+    results["bilibili_user"] = _auto_start_user_spider()
     return jsonify({"success": True, "results": results})
+
+
+def _auto_start_user_spider() -> dict:
+    """如果用户爬虫未运行，自动注入种子并启动。"""
+    try:
+        state = spider_mgr._read_state()
+        user_state = state.get("bilibili_user", {})
+        if user_state.get("status") == "running":
+            return {"success": True, "message": "用户爬虫已在运行", "auto": True}
+
+        # 尝试从已有评论数据补充用户种子
+        spider_mgr.inject_seeds("rescan_users")
+
+        # 启动用户爬虫
+        result = spider_mgr.start_spider("bilibili_user")
+        result["auto"] = True
+        return result
+    except Exception as e:
+        return {"success": False, "message": f"自动启动用户爬虫失败: {e}", "auto": True}
 
 
 @app.route("/api/crawler/stop-all", methods=["POST"])

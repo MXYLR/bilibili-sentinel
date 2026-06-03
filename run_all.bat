@@ -187,7 +187,7 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.20: LLM/AICU流式控制台 + 用户数据实时加载 + F4/F12自动刷新 + 代理持久化
+echo   v2.20: Playwright兜底+串行爬虫+LlmScreenTracker+F4/F12刷新+调试控制台
 echo   5爬虫联动: video/comment → auto user spider, 全自动种子联动
 echo.
 echo ============================================================

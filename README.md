@@ -322,28 +322,35 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 ## v2.20 更新 (2026-06-03)
 
-### 调试控制台 (跨页面)
-- **浮动按钮 + 三选项卡面板**: 右下角 `>_` 按钮可拖动，点击打开控制台
-  - **AICU 日志**: AICU 深度分析 / LLM 初筛实时流式输出（后台线程 + 前端轮询）
-  - **HTTP 请求**: 拦截全局 fetch 请求，显示 URL/状态码/耗时
-  - **爬虫日志**: SSE 实时爬虫日志流，支持 5 爬虫选择
-- **按钮 + 面板可拖动**: 按钮拖到任意位置，面板标题栏拖动 + 右下角调整大小 + 双击最小化
+### 调试控制台
+- **四选项卡面板**: AICU | LLM | HTTP | 爬虫，`>_` 按钮拖动+面板调整大小+最小化
 
-### AICU 深度分析增强
-- **单用户异步流式**: 改为后台线程 + 500ms 轮询，日志逐条实时输出到控制台
-- **AicuFetcher 日志回调**: 设备标记 / 评论弹幕探测 / 分页进度 / LLM 批次全部输出到前端
-- **评论抓取稳健性**: 探测超时 5s→12s+重试; 分页裸 HTTP 20s 超时绕过限速; 跳过重复 count check
-- **报告保存**: 所有路径添加 `fsync` 强制落盘; 保存前从评论文件重新注入 `sample_comments`
+### 爬虫联动
+- **评论→用户串行**: 后台线程监控，评论爬虫完成后自动启动用户爬虫
+- **5 爬虫**: video/comment/user/danmaku/up_videos
 
-### LLM 初筛增强
-- **流式控制台日志**: 每批次水军类型统计实时输出到 AICU 控制台
+### 用户爬虫
+- **Playwright 兜底**: API -352 时自动抓取 `space.bilibili.com/{mid}` 页面提取 `__INITIAL_STATE__`
+- **Cookie URL 解码**: SESSDATA 值自动 `unquote`，解决 -352
+- **-352 → Playwright**: 连续 5 次 -352 后启用真实浏览器
+
+### LLM 分析
+- **统一数据加载**: `_load_fresh_users` / `_refresh_features` / `_build_raw_profile_line`
+- **Prompt 原始数据行**: 批量+单用户均显示「头像:无 | 动态:0条 | 投稿:0个 | 签名:默认」
+- **F4/F12 实时刷新**: 从 `data/users/` 重算，不依赖报告缓存
+- **LlmScreenTracker**: log/ + finish()，前端 `llmConsoleLog()` 独立标签页
+- **单用户 LLM 异步**: 后台线程 + 500ms 轮询日志
 
 ### 账号详情
-- **全屏 Modal**: 从 modal-xl 升级为 modal-fullscreen，评论列表无高度限制
-- **列表实时更新**: AICU/LLM 分析完成后表格行评分/风险等级/LLM 类型自动刷新，无需整页重载
+- **全屏 Modal + 列表实时更新**
+- **⚠️ 数据未采集 badge**: 无用户 JSON 时标题黄色提示
+- **报告 fsync + 评论重注入**
 
-### 代理设置
-- **持久化**: 设置页面修改 Clash 代理地址后写入 `runtime_config.json`，爬虫新进程自动读取
+### 其他
+- **代理持久化** `runtime_config.json`
+- **QR 登录修复**: `data.code` 内层判断 + 代理 + Referer
+- **HTTP 拦截器**: 面板关闭时跳过，消除卡顿
+- **用户爬虫日志**: fallback 专属日志
 
 ## v2.19 更新 (2026-06-01)
 

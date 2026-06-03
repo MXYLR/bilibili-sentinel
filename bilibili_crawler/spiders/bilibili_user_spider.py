@@ -460,10 +460,17 @@ class BilibiliUserSpider(scrapy.Spider):
         return None
 
     def _handle_error(self, failure):
-        """用户画像 / 视频列表请求失败时的通用处理。"""
+        """请求失败时的通用处理，API 失败则 Playwright 兜底。"""
         request = failure.request
         mid = request.meta.get("mid", "?")
+        callback_name = request.callback.__name__ if request.callback else ""
         logger.warning(f"[mid={mid}] Request failed: {failure.value}")
+
+        # ★ 用户画像 API 失败 → Playwright 兜底
+        if "parse_user_info" in callback_name:
+            yield from self._fetch_user_info_playwright(mid, request.meta)
+            return
+
         self._fetch_next_user()
 
     def _posts_error(self, failure):

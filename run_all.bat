@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.19
+title Bilibili Sentinel v2.20
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -15,7 +15,7 @@ set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.19
+echo   Bilibili Sentinel v2.20
 echo ============================================================
 echo.
 
@@ -140,6 +140,8 @@ powershell -Command ^
   "  $_.MainWindowTitle -like 'Bilibili Video Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili Comment Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili User Spider*' -or" ^
+  "  $_.MainWindowTitle -like 'Bilibili Danmaku Spider*' -or" ^
+  "  $_.MainWindowTitle -like 'Bilibili UPVideos Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili Sentinel Dashboard*'" ^
   "} | ForEach-Object { $pids += $_.Id };" ^
   "if ($pids.Count -gt 0) {" ^
@@ -164,7 +166,7 @@ echo ============================================================
 echo.
 echo   Dashboard pages:
 echo     Home:     http://localhost:5001\
-echo     Crawler:  http://localhost:5001\crawler   ^(3 spiders: video/comment/user^)
+echo     Crawler:  http://localhost:5001\crawler   ^(5 spiders: video/comment/user/danmaku/up_videos^)
 echo     Video:    http://localhost:5001\video\[bvid]
 echo     Settings: http://localhost:5001\settings   ^(LLM多Provider + AICU深度分析 + 代理^)
 echo     WaterArmy: http://localhost:5001\water-army  ^(水军账号管理^)
@@ -185,8 +187,8 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.19: PID精准杀进程 + 删除Modal backdrop清理 + 分组懒加载修复
-echo   3爬虫: video/comment/user, 全自动种子联动 + 用户动态采集
+echo   v2.20: 调试控制台(AICU/LLM/HTTP/爬虫) + 用户爬虫自动联动 + 评论持久化修复
+echo   5爬虫: video/comment/user/danmaku/up_videos, 自动种子联动
 echo.
 echo ============================================================
 echo.
@@ -222,6 +224,8 @@ if exist "%ROOT%\data\spider_pids.txt" (
 taskkill /FI "WINDOWTITLE eq Bilibili Video Spider*"    /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Comment Spider*"  /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili User Spider*"     /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq Bilibili Danmaku Spider*"  /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq Bilibili UPVideos Spider*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Sentinel Dashboard*" /F >nul 2>&1
 echo   [Title] Window-title cleanup done
 

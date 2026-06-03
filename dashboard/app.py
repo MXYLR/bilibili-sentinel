@@ -3495,31 +3495,45 @@ def _refresh_features(raw_features: dict, user_data: dict, uname: str = "") -> d
     """根据最新用户数据刷新 F4/F12，返回新的 features dict。"""
     f = dict(raw_features or {})
     ud = user_data or {}
-    face = ud.get("face", "")
-    # F4: 头像/认证
-    f4 = 0.0
-    if not face or "noface" in face: f4 += 0.50
-    official = ud.get("official_verify", {})
-    if isinstance(official, str):
-        try: official = json.loads(official)
-        except Exception: official = {}
-    if not official or official.get("type", -1) == -1: f4 += 0.50
-    f["f4_avatar_verify"] = round(min(1.0, f4) * 100, 1)
-    # F12: 账号骨架
-    f12 = 0.0
-    if not face or "noface" in face: f12 += 0.20
-    if not uname or (uname.startswith("bili_") and len(uname) > 8): f12 += 0.20
-    if ud.get("post_count") == 0: f12 += 0.20
-    if ud.get("upload_count", -1) == 0: f12 += 0.20
-    if ud.get("sign", "") == "这个人没有填简介啊~~~": f12 += 0.20
-    f["f12_account_skeleton"] = round(f12 * 100, 1)
+    has_data = bool(ud)
+
+    # F4: 头像/认证 (0-1)
+    if has_data:
+        f4 = 0.0
+        face = ud.get("face", "")
+        if not face or "noface" in face: f4 += 0.50
+        official = ud.get("official_verify", {})
+        if isinstance(official, str):
+            try: official = json.loads(official)
+            except Exception: official = {}
+        if not official or official.get("type", -1) == -1: f4 += 0.50
+        f["f4_avatar_verify"] = round(min(1.0, f4) * 100, 1)
+    elif f.get("f4_avatar_verify", 0) <= 30:  # 无数据 + 原分数偏低 → 提升到50
+        f["f4_avatar_verify"] = 50.0
+
+    # F12: 账号骨架 (0-1)
+    if has_data:
+        f12 = 0.0
+        if not face or "noface" in face: f12 += 0.20
+        if not uname or (uname.startswith("bili_") and len(uname) > 8): f12 += 0.20
+        if ud.get("post_count") == 0: f12 += 0.20
+        if ud.get("upload_count", -1) == 0: f12 += 0.20
+        if ud.get("sign", "") == "这个人没有填简介啊~~~": f12 += 0.20
+        f["f12_account_skeleton"] = round(f12 * 100, 1)
+    else:
+        # 无用户数据: 只检查用户名乱码
+        backup_f12 = 0.0
+        if not uname or (uname.startswith("bili_") and len(uname) > 8):
+            backup_f12 = 0.40
+        f["f12_account_skeleton"] = max(f.get("f12_account_skeleton", 0), round(backup_f12 * 100, 1))
+
     return f
 
 
 def _build_raw_profile_line(user_data: dict) -> str:
     """构建用户原始数据摘要行，供 LLM prompt 使用。"""
     if not user_data:
-        return "- 用户数据: 未采集"
+        return "- ⚠️ 用户数据: 未采集 (用户爬虫未运行, 无空间JSON, 头像/动态/投稿未知)"
     parts = []
     face = user_data.get("face", "")
     parts.append("头像:" + ("无" if not face or "noface" in face else "有"))

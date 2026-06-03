@@ -3746,10 +3746,24 @@ def api_login_poll(qrcode_key):
         from bilibili_crawler.login.bilibili_login import BilibiliLogin
         import requests as req
         login = BilibiliLogin()
+
+        # ★ 使用代理（如果需要）
+        proxies = None
+        try:
+            from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
+            if CLASH_PROXY_ENABLED and CLASH_PROXY_URL:
+                proxies = {"http": CLASH_PROXY_URL, "https": CLASH_PROXY_URL}
+        except Exception:
+            pass
+
         resp = req.get(
             BilibiliLogin.QRCODE_POLL_API,
             params={"qrcode_key": qrcode_key},
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
+                "Referer": "https://passport.bilibili.com/login",
+            },
+            proxies=proxies,
             timeout=10,
         )
         poll_data = resp.json()
@@ -3757,7 +3771,17 @@ def api_login_poll(qrcode_key):
         data = poll_data.get("data", {})
         inner_code = data.get("code", -1)
         if inner_code == 0:
-            cookies = login._extract_cookies_from_response(resp)
+            # ★ 同时从 response headers 和 response.cookies 提取
+            cookies = {}
+            # 先从 Set-Cookie headers 提取全部 cookie
+            for k, v in resp.cookies.items():
+                cookies[k] = v
+            # 如果 poll_data 中包含 cookie 信息，也合并
+            if isinstance(data, dict):
+                refresh_token = data.get("refresh_token", "")
+                if refresh_token:
+                    cookies["bili_refresh_token"] = refresh_token
+            logger.info(f"[Login] 提取到 Cookie keys: {list(cookies.keys())}")
             login._cookies = cookies
             login.save_login_state_sync()
 

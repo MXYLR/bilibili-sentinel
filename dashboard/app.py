@@ -2194,7 +2194,9 @@ def api_video_llm_screen(bvid: str):
     # ★ 从 data/users/ 预加载所有用户数据，用于实时计算 F4/F12
     _fresh_users = {}
     users_dir = Path(DATA_DIR) / "users"
+    logger.info(f"[LLM初筛] 扫描用户目录: {users_dir} exists={users_dir.exists()}")
     if users_dir.exists():
+        loaded = 0
         for fname in os.listdir(str(users_dir)):
             if fname.endswith(".json") and not fname.endswith("_posts.json") and fname != "unique_mids.json":
                 try:
@@ -2202,8 +2204,10 @@ def api_video_llm_screen(bvid: str):
                         ud = json.load(uf)
                         if ud.get("mid"):
                             _fresh_users[str(ud["mid"])] = ud
+                            loaded += 1
                 except Exception:
                     pass
+        logger.info(f"[LLM初筛] 从 {users_dir} 加载了 {loaded} 个用户数据")
 
     def _is_garbled_name(name: str) -> bool:
         if not name: return True
@@ -2270,7 +2274,9 @@ def api_video_llm_screen(bvid: str):
         })
 
     if updated_features > 0:
-        logger.info(f"[LLM初筛] 已从 {len(_fresh_users)} 个用户文件中刷新了 {updated_features} 个候选人的 F4/F12 特征")
+        logger.info(f"[LLM初筛] 预加载 {len(_fresh_users)} 个用户文件, 刷新了 {updated_features} 个候选人的 F4/F12")
+    else:
+        logger.info(f"[LLM初筛] 预加载 {len(_fresh_users)} 个用户文件, 但无候选人匹配")
 
     if not candidates:
         return jsonify({"success": True, "total": 0, "success_count": 0, "message": "没有需要初筛的用户"})
@@ -2306,6 +2312,10 @@ def _run_llm_screen_bg(bvid: str, report: dict, candidates: list, threshold: int
     def _log(level, msg):
         LlmScreenTracker.log(bvid, msg, level)
         logger.info(f"[LLM初筛] {msg}")
+        # 双保险：写一条固定日志验证 tracker 可用
+        if not hasattr(LlmScreenTracker, '_dbg'):
+            LlmScreenTracker._dbg = True
+            logger.info(f"[LLM初筛] Tracker log 测试: bvid={bvid} tasks={list(LlmScreenTracker._tasks.keys())}")
 
     _log("info", f"LLM 初筛启动: {len(candidates)} 个候选用户, {total_batches} 批")
     LlmScreenTracker.update(bvid, total_batches=total_batches, total=len(candidates),

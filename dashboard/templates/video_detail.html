@@ -1207,6 +1207,7 @@ async function startLlmScreen() {
         }
 
         llmConsoleLog(`LLM 初筛启动: ${data.total} 个候选用户, 阈值≥${threshold}`, 'info');
+        console.log('[LLM启动]', data.total, '个候选, 阈值', threshold);  // F12兜底
 
         // 轮询进度 + 日志
         const PROGRESS_TEXT = document.getElementById('llm-progress-text');
@@ -1228,9 +1229,14 @@ async function startLlmScreen() {
 
                 // 流式输出日志
                 if (st.logs && st.logs.length > 0) {
-                    st.logs.forEach(l => llmConsoleLog(l.msg, l.level || 'info'));
+                    st.logs.forEach(l => {
+                        llmConsoleLog(l.msg, l.level || 'info');
+                        console.log('[LLM日志]', l.msg);  // F12控制台兜底
+                    });
                     llmLogOffset += st.logs.length;
                 }
+                // ★ 调试：每轮轮询都输出状态
+                console.log('[LLM轮询] status=' + st.status + ' logs=' + (st.logs||[]).length + ' done=' + (st.done_batches||0) + '/' + (st.total_batches||0));
 
                 const done = st.done_batches || 0;
                 const total = st.total_batches || 0;

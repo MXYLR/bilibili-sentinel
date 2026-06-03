@@ -1206,7 +1206,9 @@ async function startLlmScreen() {
             return;
         }
 
-        // 轮询进度
+        consoleLog(`LLM 初筛启动: ${data.total} 个候选用户, 阈值≥${threshold}`, 'info');
+
+        // 轮询进度 + 日志
         const PROGRESS_TEXT = document.getElementById('llm-progress-text');
         const PROGRESS_BATCH = document.getElementById('llm-progress-batch');
 
@@ -1217,11 +1219,18 @@ async function startLlmScreen() {
 
         updateProgress('正在初始化...', 0, 0);
 
+        let llmLogOffset = 0;
         llmScreenPollTimer = setInterval(async () => {
             try {
-                const sResp = await fetch(LLM_SCREEN_STATUS_URL);
+                const sResp = await fetch(LLM_SCREEN_STATUS_URL + '?since=' + llmLogOffset);
                 const sData = await sResp.json();
                 const st = sData.data || {};
+
+                // 流式输出日志
+                if (st.logs && st.logs.length > 0) {
+                    st.logs.forEach(l => consoleLog(l.msg, l.level || 'info'));
+                    llmLogOffset += st.logs.length;
+                }
 
                 const done = st.done_batches || 0;
                 const total = st.total_batches || 0;

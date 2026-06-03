@@ -1133,9 +1133,10 @@ class AnalysisManager:
 # ============================================================
 
 class LlmScreenTracker:
-    """跟踪 LLM 初筛进度，支持前端轮询。"""
+    """跟踪 LLM 初筛进度，支持前端轮询 + 流式日志。"""
 
-    _tasks: dict = {}  # bvid -> {status, progress, total, total_batches, done_batches, ...}
+    _tasks: dict = {}  # bvid -> {status, progress, ..., logs: [{level, msg}, ...]}
+
     _lock = threading.Lock()
 
     @classmethod
@@ -1152,6 +1153,7 @@ class LlmScreenTracker:
                 "total": 0,
                 "error": None,
                 "identified_types": {},
+                "logs": [],  # ★ 流式日志
                 **initial,
             }
             return True
@@ -1163,9 +1165,17 @@ class LlmScreenTracker:
                 cls._tasks[bvid].update(kwargs)
 
     @classmethod
-    def get_status(cls, bvid: str) -> dict:
+    def log(cls, bvid: str, msg: str, level: str = "info"):
+        """记录流式日志（前端轮询获取）"""
+        with cls._lock:
+            if bvid in cls._tasks:
+                cls._tasks[bvid].setdefault("logs", []).append({"level": level, "msg": msg})
+
+    @classmethod
+    def get_status(cls, bvid: str, since_log: int = 0) -> dict:
         with cls._lock:
             t = cls._tasks.get(bvid, {})
+        logs = t.get("logs", [])
         return {
             "status": t.get("status", "idle"),
             "progress": t.get("progress", ""),
@@ -1175,6 +1185,7 @@ class LlmScreenTracker:
             "total": t.get("total", 0),
             "error": t.get("error"),
             "identified_types": t.get("identified_types", {}),
+            "logs": logs[since_log:] if since_log < len(logs) else [],
         }
 
 
@@ -2205,33 +2216,57 @@ def api_video_llm_screen(bvid: str):
 def _run_llm_screen_bg(bvid: str, report: dict, candidates: list, threshold: int):
     """后台执行 LLM 初筛的完整流程。"""
     import math
+    from collections import Counter
     batch_size = 5
     total_batches = math.ceil(len(candidates) / batch_size)
     enhanced_by_mid = {}
     comments_data = _load_comments(bvid)
 
-    LlmScreenTracker.update(bvid, total_batches=total_batches, progress=f"开始分析 (0/{total_batches})")
+    def _log(level, msg):
+        LlmScreenTracker.log(bvid, msg, level)
+        logger.info(f"[LLM初筛] {msg}")
+
+    _log("info", f"LLM 初筛启动: {len(candidates)} 个候选用户, {total_batches} 批")
+    LlmScreenTracker.update(bvid, total_batches=total_batches, total=len(candidates),
+                             progress=f"开始分析 (0/{total_batches})")
 
     try:
         from analyzer.llm_analyzer import create_llm_analyzer
         analyzer = create_llm_analyzer()
 
+        batch_type_counter = Counter()
         for i in range(0, len(candidates), batch_size):
             batch_num = i // batch_size + 1
             batch = candidates[i:i + batch_size]
+            _log("info", f"LLM 批次 {batch_num}/{total_batches} (共{len(batch)}人)")
             LlmScreenTracker.update(bvid, progress=f"分析中 ({batch_num}/{total_batches} 批)",
                                      done_batches=batch_num - 1)
             try:
                 result = analyzer.analyze(batch, comments_data)
                 for u in result.get("enhanced_users", []):
                     enhanced_by_mid[u["mid"]] = u
+                # 统计本批类型
+                batch_types = Counter()
+                for u in result.get("enhanced_users", []):
+                    tid = u.get("llm_type_id", 0)
+                    if tid > 0:
+                        tname = u.get("llm_type_name", "未知")
+                        batch_types[tname] += 1
+                        batch_type_counter[tname] += 1
+                if batch_types:
+                    summary = ", ".join(f"{t}:{c}" for t, c in batch_types.most_common(3))
+                    _log("success", f"  批次{batch_num}完成: {summary}")
+                else:
+                    _log("info", f"  批次{batch_num}完成: 均为正常用户")
                 LlmScreenTracker.update(bvid, done_batches=batch_num)
             except Exception as e:
                 logger.warning(f"LLM 初筛批次 {batch_num} 失败: {e}")
+                _log("error", f"  批次{batch_num}失败: {e}")
                 LlmScreenTracker.update(bvid, progress=f"批次 {batch_num} 失败，继续中...",
                                          done_batches=batch_num)
 
         # 写回报告
+        _log("info", "正在保存 LLM 初筛结果...")
         LlmScreenTracker.update(bvid, progress="正在保存结果...")
         updated = 0
         _writeback_src = report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or []
@@ -2269,17 +2304,22 @@ def _run_llm_screen_bg(bvid: str, report: dict, candidates: list, threshold: int
 
         _save_report(bvid, report)
 
+        summary = ", ".join(f"{t}:{c}" for t, c in sorted(type_counts.items(), key=lambda x: -x[1])[:5]) if type_counts else "正常用户"
+        _log("success", f"LLM初筛完成: {updated} 用户更新, 类型: {summary}")
+
         LlmScreenTracker.update(bvid, status="done", progress="初筛完成",
                                  success_count=updated, identified_types=type_counts)
     except Exception as e:
         logger.error(f"批量 LLM 初筛失败 (bvid={bvid}): {e}", exc_info=True)
+        _log("error", f"LLM初筛失败: {e}")
         LlmScreenTracker.update(bvid, status="error", progress="初筛出错", error=str(e))
 
 
 @app.route("/api/llm-screen-status/<bvid>")
 def api_llm_screen_status(bvid: str):
-    """轮询 LLM 初筛进度。"""
-    return jsonify({"success": True, "data": LlmScreenTracker.get_status(bvid)})
+    """轮询 LLM 初筛进度。支持 ?since=N 增量获取日志。"""
+    since = request.args.get("since", 0, type=int)
+    return jsonify({"success": True, "data": LlmScreenTracker.get_status(bvid, since_log=since)})
 
 
 @app.route("/api/video/<bvid>/user/<int:mid>/deep-analyze", methods=["POST"])

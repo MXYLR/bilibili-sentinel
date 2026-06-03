@@ -157,6 +157,7 @@ def build_user_prompt(users_data: list) -> str:
 - 用户名: {user.get('uname', 'unknown')}
 - 等级: Lv{user.get('level', 0)}
 - 评论数 (此视频): {len(comments)}{sign_line}
+{user.get('raw_profile', '')}
 - 特征分数 (0-1, 越高越可疑):
   * 账号年龄: {features.get('f1_account_age', 0):.2f}
   * 粉丝/关注比: {features.get('f2_follow_ratio', 0):.2f}

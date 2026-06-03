@@ -2078,39 +2078,11 @@ def api_user_llm_analyze(bvid: str, mid: int):
 
     # 构造单用户 scored_users 列表 — 包含实时 F4/F12 刷新
     raw_features = user.get("features", {}) or {}
-    # ★ 如果用户 JSON 文件存在，实时刷新 F4/F12
-    user_file = Path(DATA_DIR) / "users" / f"{mid}.json"
-    if user_file.exists():
-        try:
-            with open(user_file, "r", encoding="utf-8") as uf:
-                ud = json.load(uf)
-            if ud:
-                raw_features = dict(raw_features)
-                # F4: 头像/认证
-                f4 = 0.0
-                face = ud.get("face", "")
-                if not face or "noface" in face: f4 += 0.50
-                official = ud.get("official_verify", {})
-                if isinstance(official, str):
-                    try: official = json.loads(official)
-                    except Exception: official = {}
-                if not official or official.get("type", -1) == -1: f4 += 0.50
-                raw_features["f4_avatar_verify"] = round(min(1.0, f4) * 100, 1)
-                # F12: 账号骨架
-                f12 = 0.0
-                if not face or "noface" in face: f12 += 0.20
-                uname = user.get("uname", "")
-                if not uname or (uname.startswith("bili_") and len(uname) > 8): f12 += 0.20
-                post_count = ud.get("post_count")
-                if post_count == 0: f12 += 0.20
-                uploads = ud.get("upload_count", -1)
-                if uploads == 0: f12 += 0.20
-                sign = ud.get("sign", "")
-                if sign == "这个人没有填简介啊~~~": f12 += 0.20
-                raw_features["f12_account_skeleton"] = round(f12 * 100, 1)
-                logger.info(f"[LLM单用户] 已从用户文件刷新 F4={raw_features['f4_avatar_verify']:.0f} F12={raw_features['f12_account_skeleton']:.0f}")
-        except Exception as e:
-            logger.warning(f"[LLM单用户] 读取用户文件失败: {e}")
+    # ★ 加载用户数据并刷新特征
+    fresh_user = _load_fresh_users({str(mid)}).get(str(mid), {})
+    if fresh_user:
+        raw_features = _refresh_features(raw_features, fresh_user, user.get("uname", ""))
+        logger.info(f"[LLM单用户] 已刷新 F4={raw_features.get('f4_avatar_verify',0):.0f} F12={raw_features.get('f12_account_skeleton',0):.0f}")
 
     single_user = {
         "mid": mid,
@@ -2123,8 +2095,9 @@ def api_user_llm_analyze(bvid: str, mid: int):
         "llm_type_name": user.get("llm_type_name", ""),
         "comment_count": user.get("comment_count", len(user_comments)),
         "sample_comments": user_comments[:5],
-        "features": raw_features,   # ★ 传递特征给 LLM
+        "features": raw_features,
         "sign": user.get("sign", ""),
+        "raw_profile": _build_raw_profile_line(fresh_user),  # ★ 原始用户数据
     }
 
     # ---- 3. 构建 deep_analyze 所需的 scored_users ----
@@ -2232,54 +2205,9 @@ def api_video_llm_screen(bvid: str):
     if status["status"] == "running":
         return jsonify({"success": True, "status": "running", "message": "LLM 初筛已在运行中"})
 
-    # ★ 从 data/users/ 预加载所有用户数据，用于实时计算 F4/F12
-    _fresh_users = {}
-    users_dir = Path(DATA_DIR) / "users"
-    logger.info(f"[LLM初筛] 扫描用户目录: {users_dir} exists={users_dir.exists()}")
-    if users_dir.exists():
-        loaded = 0
-        for fname in os.listdir(str(users_dir)):
-            if fname.endswith(".json") and not fname.endswith("_posts.json") and fname != "unique_mids.json":
-                try:
-                    with open(users_dir / fname, "r", encoding="utf-8") as uf:
-                        ud = json.load(uf)
-                        if ud.get("mid"):
-                            _fresh_users[str(ud["mid"])] = ud
-                            loaded += 1
-                except Exception:
-                    pass
-        logger.info(f"[LLM初筛] 从 {users_dir} 加载了 {loaded} 个用户数据")
-
-    def _is_garbled_name(name: str) -> bool:
-        if not name: return True
-        if name.startswith("bili_") and len(name) > 8: return True
-        return False
-
-    def _calc_f4(ud: dict) -> float:
-        if not ud: return 0.3
-        score = 0.0
-        face = ud.get("face", "")
-        if not face or "noface" in face: score += 0.50
-        official = ud.get("official_verify", {})
-        if isinstance(official, str):
-            try: official = json.loads(official)
-            except Exception: official = {}
-        if not official or official.get("type", -1) == -1: score += 0.50
-        return min(1.0, score)
-
-    def _calc_f12(ud: dict, uname: str) -> float:
-        if not ud: return 0.0
-        score = 0.0
-        face = ud.get("face", "")
-        if not face or "noface" in face: score += 0.20
-        if _is_garbled_name(uname): score += 0.20
-        post_count = ud.get("post_count")
-        if post_count == 0: score += 0.20
-        uploads = ud.get("upload_count", -1)
-        if uploads == 0: score += 0.20
-        sign = ud.get("sign", "")
-        if sign == "这个人没有填简介啊~~~": score += 0.20
-        return score
+    # ★ 从 data/users/ 加载所有用户数据
+    _fresh_users = _load_fresh_users()
+    logger.info(f"[LLM初筛] 加载了 {len(_fresh_users)} 个用户数据")
 
     # 先收集候选人（验证参数和报告有效性）
     _src = (report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or [])
@@ -2294,13 +2222,9 @@ def api_video_llm_screen(bvid: str):
         info = _top_map.get(u.get("mid"), {})
         mid_str = str(u.get("mid", 0))
         raw_features = info.get("features", {}) or {}
-
-        # ★ 如果用户 JSON 文件存在，用实时数据覆盖 F4/F12
         fresh_ud = _fresh_users.get(mid_str, {})
         if fresh_ud:
-            raw_features = dict(raw_features)
-            raw_features["f4_avatar_verify"] = round(_calc_f4(fresh_ud) * 100, 1)
-            raw_features["f12_account_skeleton"] = round(_calc_f12(fresh_ud, info.get("uname", "")) * 100, 1)
+            raw_features = _refresh_features(raw_features, fresh_ud, info.get("uname", ""))
             updated_features += 1
 
         first_val = next(iter(raw_features.values()), 0) if raw_features else 0
@@ -2308,10 +2232,12 @@ def api_video_llm_screen(bvid: str):
         candidates.append({
             "mid": u.get("mid"),
             "uname": info.get("uname", u.get("uname", "")),
+            "level": info.get("level", u.get("level", 0)),
             "suspicious_score": score,
             "comments": info.get("sample_comments", []),
             "features": features_01,
             "sign": info.get("sign", u.get("sign", "")),
+            "raw_profile": _build_raw_profile_line(fresh_ud),  # ★ 原始用户数据
         })
 
     if updated_features > 0:
@@ -3557,6 +3483,77 @@ def api_crawler_start_both():
     # ★ 自动联动用户爬虫
     results["bilibili_user"] = _auto_start_user_spider()
     return jsonify({"success": True, "results": results})
+
+
+# ============================================================
+#  ★ 统一的用户数据加载与特征刷新 (LLM / AICU 共用)
+# ============================================================
+
+def _load_fresh_users(mids: set = None) -> dict:
+    """从 data/users/ 加载用户数据，返回 {str(mid): user_data}。"""
+    users = {}
+    users_dir = Path(DATA_DIR) / "users"
+    if not users_dir.exists():
+        return users
+    for fname in os.listdir(str(users_dir)):
+        if not fname.endswith(".json") or fname.endswith("_posts.json") or fname == "unique_mids.json":
+            continue
+        try:
+            mid_name = fname.replace(".json", "")
+            with open(users_dir / fname, "r", encoding="utf-8") as uf:
+                ud = json.load(uf)
+                mid_key = str(ud.get("mid", mid_name))
+                if mids is not None and mid_key not in mids:
+                    continue
+                users[mid_key] = ud
+        except Exception:
+            pass
+    return users
+
+
+def _refresh_features(raw_features: dict, user_data: dict, uname: str = "") -> dict:
+    """根据最新用户数据刷新 F4/F12，返回新的 features dict。"""
+    f = dict(raw_features or {})
+    ud = user_data or {}
+    face = ud.get("face", "")
+    # F4: 头像/认证
+    f4 = 0.0
+    if not face or "noface" in face: f4 += 0.50
+    official = ud.get("official_verify", {})
+    if isinstance(official, str):
+        try: official = json.loads(official)
+        except Exception: official = {}
+    if not official or official.get("type", -1) == -1: f4 += 0.50
+    f["f4_avatar_verify"] = round(min(1.0, f4) * 100, 1)
+    # F12: 账号骨架
+    f12 = 0.0
+    if not face or "noface" in face: f12 += 0.20
+    if not uname or (uname.startswith("bili_") and len(uname) > 8): f12 += 0.20
+    if ud.get("post_count") == 0: f12 += 0.20
+    if ud.get("upload_count", -1) == 0: f12 += 0.20
+    if ud.get("sign", "") == "这个人没有填简介啊~~~": f12 += 0.20
+    f["f12_account_skeleton"] = round(f12 * 100, 1)
+    return f
+
+
+def _build_raw_profile_line(user_data: dict) -> str:
+    """构建用户原始数据摘要行，供 LLM prompt 使用。"""
+    if not user_data:
+        return "- 用户数据: 未采集"
+    parts = []
+    face = user_data.get("face", "")
+    parts.append("头像:" + ("无" if not face or "noface" in face else "有"))
+    parts.append(f"动态:{user_data.get('post_count', '?')}条")
+    uploads = user_data.get("upload_count", -1)
+    parts.append(f"投稿:{uploads}个" if uploads >= 0 else "投稿:未知")
+    sign = user_data.get("sign", "")
+    if sign == "这个人没有填简介啊~~~":
+        parts.append("签名:默认(未修改)")
+    elif sign:
+        parts.append(f"签名:{sign[:30]}")
+    else:
+        parts.append("签名:空")
+    return "- 原始数据: " + " | ".join(parts)
 
 
 def _auto_start_user_spider() -> dict:

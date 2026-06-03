@@ -171,9 +171,8 @@ class BilibiliUserSpider(scrapy.Spider):
         result = parse_bilibili_response(response)
 
         if result is None:
-            # API 不可用，跳过此用户但继续下一个
-            logger.warning(f"[mid={mid}] User info API unavailable (code may be -412)")
-            self._fetch_next_user()
+            logger.warning(f"[mid={mid}] User info API unavailable, falling back to Playwright")
+            yield from self._fetch_user_info_playwright(mid, response.meta)
             return
 
         data = result.get("data", {})
@@ -182,7 +181,14 @@ class BilibiliUserSpider(scrapy.Spider):
             self._fetch_next_user()
             return
 
-        # ---- 提取用户画像 ----
+        yield from self._build_user_info_item(mid, data, response.meta)
+
+    # ================================================================
+    #  Playwright 兜底: 从 B站空间页 HTML 提取用户数据
+    # ================================================================
+
+    def _build_user_info_item(self, mid, data, meta):
+        """用 API 数据构造 UserInfoItem 并继续后续步骤。"""
         vip = data.get("vip", {}) or {}
         official = data.get("official", {}) or {}
 
@@ -193,35 +199,87 @@ class BilibiliUserSpider(scrapy.Spider):
             face=data.get("face", ""),
             sign=data.get("sign", ""),
             level=data.get("level", 0),
-            birthday=data.get("birthday", ""),  # B站 API 字段名: 实际为注册日期
+            birthday=data.get("birthday", ""),
             vip_status=vip.get("status", 0),
             official_verify=json.dumps(official, ensure_ascii=False) if official.get("type", -1) >= 0 else "",
-            follower=0,    # 待 Step B 补充
-            following=0,   # 待 Step B 补充
-            video_count=0, # 待 Step B 补充
-            post_count=0,  # 待 Step B/C 补充
-            upload_count=0, # 别名, 与 video_count 同源
+            follower=0,
+            following=0,
+            video_count=0,
+            post_count=0,
+            upload_count=0,
             crawl_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
         )
 
-        # 临时存储 item，等 Step B 补充后统一 yield
-        response.meta["user_info_item"] = user_item
-
-        # 检查该用户是否有投稿 (用于跳过无意义的动态请求)
         archive_count = data.get("archive_count", -1)
         if archive_count >= 0:
             user_item["video_count"] = archive_count
             user_item["upload_count"] = archive_count
 
-        # ---- Step B: 获取更多统计 (粉丝/关注/投稿数) ----
-        videos_url = get_user_videos_url(mid, page=1, ps=1)  # 只取1条, 获取page.count
+        meta["user_info_item"] = user_item
+        videos_url = get_user_videos_url(mid, page=1, ps=1)
         yield scrapy.Request(
-            videos_url,
-            callback=self.parse_user_videos,
-            meta=response.meta,
-            errback=self._handle_error,
-            dont_filter=True,
+            videos_url, callback=self.parse_user_videos,
+            meta=meta, errback=self._handle_error, dont_filter=True,
         )
+
+    def _fetch_user_info_playwright(self, mid, meta):
+        """★ Playwright 兜底: 打开 B站空间页获取用户数据。"""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.error(f"[mid={mid}] Playwright not installed, skipping")
+            self._fetch_next_user()
+            return
+
+        page_url = f"https://space.bilibili.com/{mid}"
+        logger.info(f"[mid={mid}] Playwright: opening {page_url}")
+
+        data = {}
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(page_url, wait_until="domcontentloaded", timeout=20000)
+                html = page.content()
+                browser.close()
+
+                # 从页面 HTML 提取 __INITIAL_STATE__ JSON
+                import re
+                match = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});', html, re.DOTALL)
+                if match:
+                    try:
+                        state = json.loads(match.group(1))
+                        up = state.get("up", {})
+                        card = state.get("card", {})
+                        data = {
+                            "mid": mid,
+                            "name": up.get("name", ""),
+                            "face": up.get("face", ""),
+                            "sign": up.get("sign", ""),
+                            "level": up.get("level", 0),
+                            "sex": up.get("sex", ""),
+                            "birthday": up.get("birthday", ""),
+                            "archive_count": int(up.get("archive_count") or 0),
+                            "follower": int(up.get("follower") or 0),
+                            "following": 0,
+                            "vip": {"status": up.get("vip", {}).get("status", 0)},
+                            "official": up.get("official", {}),
+                            "post_count": 0,
+                        }
+                        logger.info(f"[mid={mid}] Playwright success: name={data['name']} Lv{data['level']} face={'yes' if data.get('face') else 'no'}")
+                    except Exception as e:
+                        logger.warning(f"[mid={mid}] Parse INITIAL_STATE failed: {e}")
+                else:
+                    logger.warning(f"[mid={mid}] No __INITIAL_STATE__ found in page")
+
+        except Exception as e:
+            logger.error(f"[mid={mid}] Playwright failed: {e}")
+
+        if data and data.get("name"):
+            yield from self._build_user_info_item(mid, data, meta)
+        else:
+            logger.warning(f"[mid={mid}] Playwright兜底也失败了，跳过")
+            self._fetch_next_user()
 
     # ================================================================
     #  Step B: 投稿列表 → 补充 UserInfoItem

@@ -13,9 +13,12 @@ import subprocess
 import sys
 import time
 import threading
+import logging
 from pathlib import Path
 from datetime import datetime
 
+import logging
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 # ---- 简易 Markdown → HTML（不依赖第三方包）---

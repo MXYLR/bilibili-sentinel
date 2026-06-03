@@ -3753,7 +3753,10 @@ def api_login_poll(qrcode_key):
             timeout=10,
         )
         poll_data = resp.json()
-        if poll_data.get("code") == 0:
+        # B站 QR poll: 外层 code=0 表示API成功, 内层 data.code: 0=已确认, 86090=已扫码未确认, 86101=未扫码
+        data = poll_data.get("data", {})
+        inner_code = data.get("code", -1)
+        if inner_code == 0:
             cookies = login._extract_cookies_from_response(resp)
             login._cookies = cookies
             login.save_login_state_sync()
@@ -3784,14 +3787,14 @@ def api_login_poll(qrcode_key):
             return jsonify({"success": True, "data": {"status": "success", "message": "登录成功"}})
         elif poll_data.get("code") == 86101:
             return jsonify({"success": True, "data": {"status": "waiting", "message": "等待扫码"}})
-        elif poll_data.get("code") == 86090:
+        elif inner_code == 86090:
             return jsonify({"success": True, "data": {"status": "scanned", "message": "已扫码，请确认"}})
-        elif poll_data.get("code") == 86038:
+        elif inner_code == 86038:
             return jsonify({"success": True, "data": {"status": "expired", "message": "二维码已过期"}})
         else:
             return jsonify({
                 "success": True,
-                "data": {"status": "unknown", "code": poll_data.get("code"), "message": poll_data.get("message", "")}
+                "data": {"status": "unknown", "code": inner_code, "message": data.get("message", "")}
             })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

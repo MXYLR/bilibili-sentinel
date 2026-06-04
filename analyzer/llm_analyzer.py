@@ -734,6 +734,7 @@ class LLMAnalyzer:
                     temperature=0.3,
                     max_tokens=1500,  # v2.29 减少输出token加速响应
                     timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
+                    response_format={"type": "json_object"},  # v2.29 强制JSON输出
                 )
 
                 self._total_calls += 1
@@ -861,6 +862,7 @@ class LLMAnalyzer:
                     temperature=0.1 if len(users_data) == 1 else 0.3,
                     max_tokens=600 if len(users_data) == 1 else 2000,  # v2.29 单用户减半输出
                     timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
+                    response_format={"type": "json_object"},  # v2.29 强制JSON输出
                 )
 
                 self._total_calls += 1

@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.20。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.21。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -36,14 +36,21 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 ### 数据采集
 - **视频搜索**: 关键词搜索 + 热门排行 + UP主全部投稿（`bilibili_mid://` 种子），采集视频元信息
 - **评论采集**: 双排序模式（时间排序耗尽自动切换热度），支持楼中楼主评论，单视频上限 10,000 条
-- **用户空间**: 三阶段采集（用户画像 → 投稿列表 → 动态列表），注入 UID 后自动联动视频+评论爬虫
+- **用户空间**: card API 采集用户画像（name/face/level/sign/fans/attention/archives/vip/official），2.5s 间隔防风控
 - **用户动态**: `tools/fetch_user_posts.py` 独立脚本，用 curl_cffi 绕过 412 批量采集用户动态，存为 `data/users/{mid}_posts.json`，供 F13/F14 特征使用
 - **弹幕数据**: 集成在 AICU 深度分析中，通过 AICU API 自动获取用户历史弹幕（已移除独立弹幕爬虫）
 - **种子联动**: 注入用户 UID → 自动推入视频爬虫队列 → 视频爬虫拉取 UP主全部投稿 → 有评论的视频自动推入评论队列
 
+### 一键链式刷新 (v2.21)
+点击视频详情页「刷新数据」按钮，全链路自动执行：
+```
+视频爬虫 + 评论爬虫 → 评论结束自动启动用户爬虫 → 用户爬虫结束自动运行分析(特征+评分) → LLM初筛
+```
+无需手动干预，Flask 终端实时显示 `[Chain]` 进度。
+
 ### 水军检测
 - **18 维特征评分引擎 (F1-F18)**: 覆盖账号身份、行为模式、内容质量、空间画像四大维度
-- **LLM 语义分析**: 多 Provider 支持（DeepSeek V4 / OpenAI GPT-4o / 自定义端点），异步后台执行 + 前端轮询进度，支持 Modal 阈值调节
+- **LLM 语义分析**: 多 Provider 支持（DeepSeek V4 / OpenAI GPT-4o / 自定义端点），异步后台执行 + 前端轮询进度，支持 Modal 阈值调节。Prompt 含明确规则：无头像+ID乱码+无动态+无投稿 → 直接判定黑产养号型 confidence≥90
 - **AICU 深度分析**: 对高风险用户回溯历史评论/弹幕/动态，三次融合评分（引擎 50% + LLM 25% + 深度 25%），同样支持 Modal 阈值调节
 - **8 种水军类型识别**: 模板刷评 / 情绪引导 / AI 生成 / 引流广告 / 批量操控 / 黑产养号 / 对立引战 / 敏感内容
 - **可视化报告**: 雷达图 + 评分分布 + 时间线 + 用户详情弹窗（含特征进度条与 LLM 证据）
@@ -59,10 +66,12 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 
 辅助措施: 浏览器级 HTTP 头伪装 (sec-ch-ua) / Referer 链伪造 / 自适应延迟降速 / 随机 page_size
 
+**用户爬虫例外** (v2.21): 用户爬虫只走 curl_cffi 直连 card API，不启用 Playwright 兜底。每次请求前强制重置 `_use_playwright=False`。
+
 ### Dashboard 控制台
 - **系统总览** `/`: 健康卡片 + 热门榜独立分类（按时间/播放量/评论数排序）+ UP主分组折叠面板 + 播放量/评论数分桶 + 桶内独立翻页 + 页码跳转 + 分类删除按钮
-- **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM初筛/AICU Modal 弹窗分析 + 特征触发图表 + 全屏用户详情弹窗（账号分析/评论/AICU数据）+ UP主收录按钮
-- **爬虫控制** `/crawler`: 5 爬虫管理 (视频/评论/用户/弹幕/UP主视频) + 进程存活日志回退检测 + 种子注入 + 代理池状态 + 登录面板
+- **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM初筛/AICU Modal 弹窗分析 + 特征触发图表 + 全屏用户详情弹窗（账号分析/评论/AICU数据）+ 刷新用户数据按钮（仅采集当前视频用户）+ UP主收录按钮
+- **爬虫控制** `/crawler`: 4 爬虫管理 (视频/评论/用户/UP主视频) + 一键启动全部 + 补充评论/用户种子（扫描全局数据） + 种子注入 (热门/BV/关键词/UID) + 代理池状态 + 登录面板 + 按钮悬停 tooltip 详细说明
 - **水军账号管理** `/water-army`: 收录水军库管理 + 搜索/筛选/排序 + 备注编辑 + CSV/JSON 导出 + B站主页直达链接
 - **系统设置** `/settings`: 功能开关 + LLM 多 Provider 配置 + AICU 深度分析 + 代理参数（持久化到 runtime_config.json）
 - **调试控制台** (所有页面): 右下角可拖动浮动按钮 `>_` → 三选项卡面板 (AICU日志 / HTTP请求 / 爬虫日志SSE) + 可拖动 + 可调整大小 + 最小化
@@ -319,6 +328,47 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 系统已内置三层对抗。可尝试：降低并发（`crawler_config.py` 中调大 `DOWNLOAD_DELAY`）、增加 Cookie 池账号、启用 Playwright 兜底。
 
 ---
+
+## v2.21 更新 (2026-06-04)
+
+### 用户爬虫全面重构
+
+#### 主接口切换
+- **card API 替代 wbi/acc/info**: 无 WBI 签名、无 352 风控，curl_cffi 直通返回 2KB+ 数据
+- **三层兜底链**: card API → 空间页 HTML(提取 `__INITIAL_STATE__`) → 跳过
+
+#### 字段映射修复（双层 Bug）
+- **第一层 `_parse_card_api`**: `birthday` 取实值 (不再硬编码空) / `following=card.attention` (不再硬编码 0) / `official` 容错 null
+- **第二层 `_build_user_info_item`**: `follower/following/video_count/upload_count` 传递真实值 (不再全部覆盖为 0)
+- 完整字段: name/face/sign/level/sex/birthday/fans/attention/archives/vip/official
+
+#### 反检测优化
+- `_use_playwright=False` + `_412_count=0` 每次请求前强制重置（不触发 Playwright 兜底）
+- polymer 动态 API 添加 `platform=web` + `timezone_offset=-480` + WBI 签名
+- 评论爬虫空闲超时 300s → 60s
+
+#### 关键 Bug 修复
+- **`_get_redis()` 缺失**: `_pop_seed` 永远返回 None → 补全方法
+- **`parse_bilibili_response(response)`**: Scrapy TextResponse 当 dict 用 → 改为 `json.loads(response.text)`
+- **`meta["user_meta"]` KeyError**: 回调崩溃 → `.get("user_meta", response.meta)`
+
+### 一键链式刷新
+- 视频详情页「刷新数据」→ 视频+评论爬虫 → 评论结束自动启动用户爬虫 → 用户结束自动运行分析+LLM初筛
+- Flask 终端 `[Chain]` 前缀进度日志，全程无需手动干预
+
+### 视频详情页增强
+- **刷新用户数据按钮**: 仅扫描当前视频评论者 MID，注入种子+启动用户爬虫
+- **账号弹窗刷新按钮** `🔄`: 注入单个 MID + 启动用户爬虫 + 轮询等待 + 自动更新弹窗
+- 用户数据未采集 badge 显示，采集完成后自动消除
+
+### LLM 优化
+- **单用户分析改用 `analyze()`**: 不再用 `deep_analyze()` AICU 路径，使用标准水军识别 Prompt
+- Prompt 含硬规则: "无头像+ID乱码+无动态+无投稿 → 直接判定 type 6 黑产养号型 confidence≥90"
+- `_build_raw_profile_line`: post_count/upload_count<0 显示 `?` 而非 `0`，避免误导 LLM
+
+### 爬虫控制页面
+- 按钮悬停 Bootstrap tooltip 详细说明（流程/数据目录/警告）
+- 补充用户种子: 扫描 `data/comments/*_comments.json` 全部文件，去重注入 Redis
 
 ## v2.20 更新 (2026-06-03)
 

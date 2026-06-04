@@ -386,7 +386,12 @@ class LLMAnalyzer:
                 enhanced["llm_type_id"] = llm_result["type_id"]
                 enhanced["llm_type_name"] = llm_result.get("type_name", "")
                 enhanced["llm_confidence"] = llm_confidence
-                enhanced["llm_reasoning"] = llm_result.get("reasoning", "")
+                enhanced["llm_reasoning"] = llm_result.get("reasoning", "") or _ensure_reasoning(
+                    llm_result.get("reasoning", ""),
+                    llm_result.get("type_id", 0),
+                    llm_result.get("type_name", ""),
+                    llm_confidence,
+                )
 
                 # 重新评估风险等级
                 if fused >= RISK_HIGH:

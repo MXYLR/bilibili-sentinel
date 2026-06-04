@@ -235,63 +235,67 @@ class BilibiliUserSpider(scrapy.Spider):
         )
 
     def _fetch_user_info_playwright(self, mid, meta):
-        """★ Playwright 兜底: 打开 B站空间页获取用户数据。"""
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            logger.error(f"[mid={mid}] Playwright not installed, skipping")
-            self._fetch_next_user()
-            return
-
+        """★ curl_cffi 兜底: GET B站空间页 HTML, 提取 __INITIAL_STATE__ JSON。"""
         page_url = f"https://space.bilibili.com/{mid}"
-        logger.info(f"[mid={mid}] Playwright: opening {page_url}")
+        logger.info(f"[mid={mid}] curl_cffi: fetching {page_url}")
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://www.bilibili.com/",
+        }
 
         data = {}
         try:
-            with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.goto(page_url, wait_until="domcontentloaded", timeout=20000)
-                html = page.content()
-                browser.close()
+            from curl_cffi import requests as cffi_requests
+            resp = cffi_requests.get(
+                page_url, headers=headers, impersonate="chrome124",
+                timeout=15, verify=False,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[mid={mid}] Space page returned {resp.status_code}")
+                self._fetch_next_user()
+                return
 
-                # 从页面 HTML 提取 __INITIAL_STATE__ JSON
-                import re
-                match = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});', html, re.DOTALL)
-                if match:
-                    try:
-                        state = json.loads(match.group(1))
-                        up = state.get("up", {})
-                        card = state.get("card", {})
-                        data = {
-                            "mid": mid,
-                            "name": up.get("name", ""),
-                            "face": up.get("face", ""),
-                            "sign": up.get("sign", ""),
-                            "level": up.get("level", 0),
-                            "sex": up.get("sex", ""),
-                            "birthday": up.get("birthday", ""),
-                            "archive_count": int(up.get("archive_count") or 0),
-                            "follower": int(up.get("follower") or 0),
-                            "following": 0,
-                            "vip": {"status": up.get("vip", {}).get("status", 0)},
-                            "official": up.get("official", {}),
-                            "post_count": 0,
-                            "upload_count": int(up.get("archive_count") or 0),
-                        }
-                        logger.info(f"[mid={mid}] Playwright success: name={data['name']} Lv{data['level']} face={'yes' if data.get('face') else 'no'}")
-                    except Exception as e:
-                        logger.warning(f"[mid={mid}] Parse INITIAL_STATE failed: {e}")
-                else:
-                    logger.warning(f"[mid={mid}] No __INITIAL_STATE__ found in page")
+            html = resp.text
+            import re
+            match = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});', html, re.DOTALL)
+            if match:
+                try:
+                    state = json.loads(match.group(1))
+                    up = state.get("up", {})
+                    data = {
+                        "mid": mid,
+                        "name": up.get("name", ""),
+                        "face": up.get("face", ""),
+                        "sign": up.get("sign", ""),
+                        "level": up.get("level", 0),
+                        "sex": up.get("sex", ""),
+                        "birthday": up.get("birthday", ""),
+                        "archive_count": int(up.get("archive_count") or 0),
+                        "follower": int(up.get("follower") or 0),
+                        "following": 0,
+                        "vip": {"status": up.get("vip", {}).get("status", 0)},
+                        "official": up.get("official", {}),
+                        "post_count": 0,
+                        "upload_count": int(up.get("archive_count") or 0),
+                    }
+                    logger.info(f"[mid={mid}] curl_cffi success: name={data['name']} Lv{data['level']}")
+                except Exception as e:
+                    logger.warning(f"[mid={mid}] Parse INITIAL_STATE failed: {e}")
+            else:
+                logger.warning(f"[mid={mid}] No __INITIAL_STATE__ in page")
 
+        except ImportError:
+            logger.error(f"[mid={mid}] curl_cffi not installed, skipping")
+            self._fetch_next_user()
+            return
         except Exception as e:
-            logger.error(f"[mid={mid}] Playwright failed: {e}")
+            logger.error(f"[mid={mid}] curl_cffi failed: {e}")
 
         if data and data.get("name"):
             yield from self._build_user_info_item(mid, data, meta)
         else:
-            logger.warning(f"[mid={mid}] Playwright兜底也失败了，跳过")
+            logger.warning(f"[mid={mid}] curl_cffi兜底也失败了，跳过")
             self._fetch_next_user()
 
     # ================================================================

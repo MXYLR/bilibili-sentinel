@@ -199,8 +199,23 @@ def build_user_prompt(users_data: list) -> str:
 
 
 def build_single_user_prompt(user_data: dict) -> str:
-    """构建单用户分析 Prompt（轻量级）"""
-    return build_user_prompt([user_data])
+    """构建单用户分析 Prompt（轻量级，含强判定指令）。"""
+    score = user_data.get('suspicious_score', 0)
+    features = user_data.get('features', {})
+    f12 = features.get('f12_account_skeleton', 0)
+
+    # ★ 高分段强制指令
+    override = ""
+    if score >= 0.8:
+        override = "\n### ⚠️ 引擎评分极高({:.0f}/100)，必须判定为水军账号，不得判为正常用户！\n".format(score * 100)
+    elif f12 >= 0.4:
+        override = "\n### ⚠️ 账号骨架F12={:.2f}(四无账号)，直接判定为黑产养号型(type 6)!\n".format(f12)
+
+    prompt = build_user_prompt([user_data])
+    if override:
+        # 插入到提示末尾前
+        prompt = prompt.replace("请分析以上用户", override + "\n请分析以上用户")
+    return prompt
 
 
 def parse_llm_response(response_text: str) -> list:

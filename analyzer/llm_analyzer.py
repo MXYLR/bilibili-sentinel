@@ -615,7 +615,7 @@ class LLMAnalyzer:
             batch_results = self._call_deep_llm(client, DEEP_SYSTEM_PROMPT, full_prompt)
 
             for r in batch_results:
-                mid = r.get("mid", 0)
+                mid = int(r.get("mid", 0))
                 deep_results[mid] = r
 
             logger.info(
@@ -642,7 +642,7 @@ class LLMAnalyzer:
 
         for u in scored_users:
             mid = u.get("mid", 0)
-            deep_result = deep_results.get(mid)
+            deep_result = deep_results.get(int(mid)) or deep_results.get(str(mid)) or deep_results.get(mid)
 
             enhanced = dict(u)
             enhanced["deep_analysis"] = deep_result
@@ -769,7 +769,7 @@ class LLMAnalyzer:
                     if not isinstance(r, dict) or "mid" not in r:
                         continue
                     mapped.append({
-                        "mid": r.get("mid", 0),
+                        "mid": int(r.get("mid", 0)),
                         "deep_type_id": r.get("deep_type_id", r.get("type_id", 0)),
                         "deep_type_name": r.get("deep_type_name", r.get("type_name", "")),
                         "deep_confidence": r.get("deep_confidence", r.get("confidence", 0)),

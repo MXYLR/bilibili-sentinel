@@ -327,10 +327,14 @@ def get_user_posts_url(mid: int, offset: str = "") -> str:
 
     注意: 此 API 不需要 WBI 签名，但需要有效的登录 Cookie。
     """
-    params = {"host_mid": mid}
+    params = {
+        "host_mid": mid,
+        "timezone_offset": -480,
+        "platform": "web",
+    }
     if offset:
         params["offset"] = offset
-    return build_api_url("/x/polymer/web-dynamic/v1/feed/space", params, use_wbi=False)
+    return build_api_url("/x/polymer/web-dynamic/v1/feed/space", params, use_wbi=True)
 
 
 def get_danmaku_url(cid: int, segment_index: int = 1) -> str:

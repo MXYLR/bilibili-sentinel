@@ -4,6 +4,18 @@ B站水军 LLM 分析 — 提示词模板
 定义 7 种水军类型及结构化分析提示词。
 """
 
+
+import sys
+from pathlib import Path
+
+# 导入智能压缩器
+try:
+    from .text_compressor import compress_comments_for_prompt, compress_user_profile
+except ImportError:
+    # 独立运行时的兜底
+    sys.path.insert(0, str(Path(__file__).parent))
+    from text_compressor import compress_comments_for_prompt, compress_user_profile
+
 # ============================================================
 #  7 大水军类型定义
 # ============================================================

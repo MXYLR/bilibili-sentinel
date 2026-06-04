@@ -201,7 +201,7 @@ def detect_templating(comments: list) -> dict:
     
     similarities = []
     for i in range(len(texts)):
-        for j in range(i + 1, min(i + 10, len(texts)):  # 只比较相邻的10条
+        for j in range(i + 1, min(i + 10, len(texts))):  # 只比较相邻的10条
             ratio = SequenceMatcher(None, texts[i], texts[j]).ratio()
             if ratio >= 0.60:  # 60% 以上视为相似
                 similarities.append(ratio)

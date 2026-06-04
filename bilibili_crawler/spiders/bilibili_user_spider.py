@@ -307,13 +307,18 @@ class BilibiliUserSpider(scrapy.Spider):
         )
 
     def _parse_card_api(self, response):
-        """解析 card API 响应。"""
+        """解析 card API 响应。39字节=不存在/已注销, 直接跳过。"""
         mid = response.meta["mid"]
-        meta = response.meta.get("user_meta", response.meta)  # 兼容两种meta结构
+        meta = response.meta.get("user_meta", response.meta)
         import json as _json
         try:
             data = _json.loads(response.text)
             if data.get("code") != 0:
+                size = len(response.text)
+                if size < 100:
+                    logger.info(f"[mid={mid}] skip (card {size}bytes, not found)")
+                    self._fetch_next_user()
+                    return
                 logger.warning(f"[mid={mid}] card API code={data.get('code')}")
                 yield from self._space_page_fallback(mid, meta)
                 return

@@ -226,18 +226,13 @@ class BilibiliUserSpider(scrapy.Spider):
             birthday=data.get("birthday", ""),
             vip_status=vip.get("status", 0),
             official_verify=json.dumps(official, ensure_ascii=False) if official.get("type", -1) >= 0 else "",
-            follower=0,
-            following=0,
-            video_count=0,
-            post_count=0,
-            upload_count=0,
+            follower=data.get("follower", 0),
+            following=data.get("following", 0),
+            video_count=data.get("archive_count", 0),
+            post_count=data.get("post_count", -1),
+            upload_count=data.get("archive_count", 0),
             crawl_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
         )
-
-        archive_count = data.get("archive_count", -1)
-        if archive_count >= 0:
-            user_item["video_count"] = archive_count
-            user_item["upload_count"] = archive_count
 
         meta["user_info_item"] = user_item
         videos_url = get_user_videos_url(mid, page=1, ps=1)

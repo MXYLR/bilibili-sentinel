@@ -95,21 +95,33 @@ class BilibiliUserSpider(scrapy.Spider):
         return spider
 
     def spider_opened(self):
-        """Spider 打开后立即尝试消费种子。"""
-        logger.info("Spider opened, checking for seeds...")
-        mid = self._pop_seed()
-        if mid and mid not in self._seen_mids:
+        """Spider 打开后立即消费种子（批量跳过已采集的）。"""
+        skipped = 0
+        while True:
+            mid = self._pop_seed()
+            if mid is None:
+                break
+            if mid in self._seen_mids:
+                skipped += 1
+                continue
             self._seen_mids.add(mid)
             req = self._request_user_info(mid)
             if req:
                 self.crawler.engine.crawl(req)
-                logger.info(f"Initial seed consumed: mid={mid}")
+                if skipped > 0:
+                    logger.info(f"Started with mid={mid} (skipped {skipped} already-collected)")
+                else:
+                    logger.info(f"Initial seed consumed: mid={mid}")
+                return
             else:
-                logger.info(f"Initial seed skipped (already collected): mid={mid}")
-                self._fetch_next_user()  # ★ 继续尝试下一个
+                skipped += 1
+                logger.debug(f"Initial seed skipped (already collected): mid={mid}")
+
+        if skipped > 0:
+            logger.info(f"All {skipped} seeds already collected, entering idle mode")
         else:
-            self._idle_start_time = time.time()
             logger.info("No seeds at spider open, entering idle mode")
+        self._idle_start_time = time.time()
 
     # ================================================================
     #  Redis 种子读取

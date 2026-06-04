@@ -235,67 +235,59 @@ class BilibiliUserSpider(scrapy.Spider):
         )
 
     def _fetch_user_info_playwright(self, mid, meta):
-        """★ curl_cffi 兜底: GET B站空间页 HTML, 提取 __INITIAL_STATE__ JSON。"""
+        """★ 兜底: 请求 B站空间页 HTML, 从 __INITIAL_STATE__ 提取用户数据。"""
         page_url = f"https://space.bilibili.com/{mid}"
         logger.info(f"[mid={mid}] curl_cffi: fetching {page_url}")
+        # 走 Scrapy Request（异步），避免阻塞事件循环
+        yield scrapy.Request(
+            page_url,
+            callback=self._parse_space_page,
+            meta={"mid": mid, "user_meta": meta},
+            errback=self._handle_error,
+            dont_filter=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36",
+                "Referer": "https://www.bilibili.com/",
+            },
+        )
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://www.bilibili.com/",
-        }
-
+    def _parse_space_page(self, response):
+        """解析 B站空间页 HTML, 提取 __INITIAL_STATE__ JSON。"""
+        mid = response.meta["mid"]
+        meta = response.meta["user_meta"]
+        import re
         data = {}
         try:
-            from curl_cffi import requests as cffi_requests
-            resp = cffi_requests.get(
-                page_url, headers=headers, impersonate="chrome124",
-                timeout=15, verify=False,
-            )
-            if resp.status_code != 200:
-                logger.warning(f"[mid={mid}] Space page returned {resp.status_code}")
-                self._fetch_next_user()
-                return
-
-            html = resp.text
-            import re
-            match = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});', html, re.DOTALL)
+            match = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});', response.text, re.DOTALL)
             if match:
-                try:
-                    state = json.loads(match.group(1))
-                    up = state.get("up", {})
-                    data = {
-                        "mid": mid,
-                        "name": up.get("name", ""),
-                        "face": up.get("face", ""),
-                        "sign": up.get("sign", ""),
-                        "level": up.get("level", 0),
-                        "sex": up.get("sex", ""),
-                        "birthday": up.get("birthday", ""),
-                        "archive_count": int(up.get("archive_count") or 0),
-                        "follower": int(up.get("follower") or 0),
-                        "following": 0,
-                        "vip": {"status": up.get("vip", {}).get("status", 0)},
-                        "official": up.get("official", {}),
-                        "post_count": 0,
-                        "upload_count": int(up.get("archive_count") or 0),
-                    }
-                    logger.info(f"[mid={mid}] curl_cffi success: name={data['name']} Lv{data['level']}")
-                except Exception as e:
-                    logger.warning(f"[mid={mid}] Parse INITIAL_STATE failed: {e}")
+                state = json.loads(match.group(1))
+                up = state.get("up", {})
+                data = {
+                    "mid": mid,
+                    "name": up.get("name", ""),
+                    "face": up.get("face", ""),
+                    "sign": up.get("sign", ""),
+                    "level": up.get("level", 0),
+                    "sex": up.get("sex", ""),
+                    "birthday": up.get("birthday", ""),
+                    "archive_count": int(up.get("archive_count") or 0),
+                    "follower": int(up.get("follower") or 0),
+                    "following": 0,
+                    "vip": {"status": up.get("vip", {}).get("status", 0)},
+                    "official": up.get("official", {}),
+                    "post_count": 0,
+                    "upload_count": int(up.get("archive_count") or 0),
+                }
+                logger.info(f"[mid={mid}] space page success: name={data['name']} Lv{data['level']}")
             else:
-                logger.warning(f"[mid={mid}] No __INITIAL_STATE__ in page")
-
-        except ImportError:
-            logger.error(f"[mid={mid}] curl_cffi not installed, skipping")
-            self._fetch_next_user()
-            return
+                logger.warning(f"[mid={mid}] No __INITIAL_STATE__ in space page")
         except Exception as e:
-            logger.error(f"[mid={mid}] curl_cffi failed: {e}")
+            logger.warning(f"[mid={mid}] Parse space page failed: {e}")
 
         if data and data.get("name"):
             yield from self._build_user_info_item(mid, data, meta)
         else:
-            logger.warning(f"[mid={mid}] curl_cffi兜底也失败了，跳过")
+            logger.warning(f"[mid={mid}] Space page兜底失败, 跳过")
             self._fetch_next_user()
 
     # ================================================================

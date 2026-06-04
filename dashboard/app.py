@@ -1984,12 +1984,16 @@ def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer,
         single_user = {
             "mid": mid,
             "uname": user.get("uname", ""),
+            "level": user.get("level", 0),
+            "sign": user.get("sign", ""),
             "suspicious_score": user.get("score", 0),
             "engine_score_raw": user.get("engine_score_raw", user.get("score", 0)),
             "llm_confidence": user.get("llm_confidence", 0),
             "llm_type_id": user.get("llm_type_id", 0),
             "llm_type_name": user.get("llm_type_name", ""),
             "comment_count": user.get("comment_count", 1),
+            "features": user.get("features", {}),
+            "raw_profile": user.get("raw_profile", ""),
         }
 
         _log("info", f"开始单用户深度分析: mid={mid} score={single_user['suspicious_score']}")

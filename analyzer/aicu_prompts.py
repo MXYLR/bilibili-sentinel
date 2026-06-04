@@ -141,7 +141,11 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
 - LLM 初筛结果: 类型{user_data.get('llm_type_id', 0)} ({user_data.get('llm_type_name', '未分析')}), 置信度{user_data.get('llm_confidence', 0)}%
 """
 
-    prompt += user_data.get('raw_profile', '') + "\n"
+    # v2.29: 限制 raw_profile 长度，避免 prompt 过大
+    _raw_profile = user_data.get('raw_profile', '')
+    if _raw_profile:
+        _raw_profile = _raw_profile[:300] + ("...(截断)" if len(_raw_profile) > 300 else "")
+    prompt += _raw_profile + "\n"
 
     # ★ 特征评分（按权重排列13维）
     prompt += f"""
@@ -176,16 +180,16 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
             if f12_val >= 0.60:
                 prompt += "直接判定水军 confidence≥85。AICU无历史数据恰恰印证新号。\n"
 
-    # 当前视频的样本评论
+    # 当前视频的样本评论（最多 3 条，v2.29 减少 token 消耗）
     user_comments = user_data.get("comments", [])
     if user_comments:
         sample_texts = []
-        for c in user_comments[:5]:
+        for c in user_comments[:3]:
             if isinstance(c, str):
-                sample_texts.append(c[:200])
+                sample_texts.append(c[:100])
             elif isinstance(c, dict):
                 sample_texts.append(
-                    c.get("content", c.get("message", str(c)))[:200]
+                    c.get("content", c.get("message", str(c)))[:100]
                 )
         if sample_texts:
             prompt += "- 当前视频评论样本:\n"
@@ -213,11 +217,11 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
                 prompt += f"- 个人签名: {p['sign'][:80]}\n"
             prompt += f"- 粉丝: {p.get('fans', 0)}, 关注: {p.get('following', 0)}\n"
 
-        # 历史评论列表（最多 30 条，避免 token 过大）
+        # 历史评论列表（最多 10 条，v2.29 避免 token 过大）
         if aicu_data.comments:
-            prompt += "\n### 历史评论列表 (最近30条)\n"
-            for j, c in enumerate(aicu_data.comments[:30], 1):
-                msg = c.get("message", "")[:150]
+            prompt += "\n### 历史评论列表 (最近10条)\n"
+            for j, c in enumerate(aicu_data.comments[:10], 1):
+                msg = c.get("message", "")[:100]
                 t = c.get("readable_time", "?")
                 rank_mark = f" ★{c['rank']}" if c.get("rank", 0) > 0 else ""
                 prompt += f"[#{j}] {t}{rank_mark} | {msg}\n"

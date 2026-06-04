@@ -198,12 +198,10 @@ class BilibiliUserSpider(scrapy.Spider):
     # ================================================================
 
     def _request_user_info(self, mid: int):
-        """请求用户信息 (优先 card API，无352风控)。"""
+        """请求用户信息 (优先 card API)。已采集的返回 None, 由调用方跳过。"""
         user_file = os.path.join(DATA_DIR, "users", f"{mid}.json")
         if os.path.exists(user_file) and os.path.getsize(user_file) > 100:
-            logger.debug(f"[mid={mid}] Already collected, skipping")
-            self._fetch_next_user()
-            return
+            return None  # 已采集, 不递归, 由 while 循环处理
 
         # ★ 主接口: card API | 每次请求前强制关闭 Playwright 兜底
         self._use_playwright = False
@@ -531,17 +529,30 @@ class BilibiliUserSpider(scrapy.Spider):
     # ================================================================
 
     def _fetch_next_user(self):
-        """从 Redis 取下一个 MID，继续爬取。"""
+        """从 Redis 取下一个 MID，批量跳过已采集。"""
         if self._user_count >= MAX_USERS_PER_RUN:
             logger.info(f"Reached MAX_USERS_PER_RUN ({MAX_USERS_PER_RUN}), stopping")
             return
 
-        mid = self._pop_seed()
-        if mid and mid not in self._seen_mids:
+        skipped = 0
+        while True:
+            mid = self._pop_seed()
+            if mid is None:
+                break
+            if mid in self._seen_mids:
+                skipped += 1
+                continue
             self._seen_mids.add(mid)
-            return self._request_user_info(mid)
+            req = self._request_user_info(mid)
+            if req:
+                if skipped > 0:
+                    logger.info(f"Next seed consumed: mid={mid} (skipped {skipped})")
+                return req
+            skipped += 1
 
-        # 无新种子，进入空闲等待
+        # 队列耗尽
+        if skipped > 0:
+            logger.info(f"Queue exhausted, {skipped} seeds checked (all collected)")
         if self._idle_start_time is None:
             self._idle_start_time = time.time()
             logger.info("Queue empty. Waiting for new seeds...")

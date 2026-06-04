@@ -456,6 +456,14 @@ class AicuFetcher:
         """
         global _playwright_browser, _playwright_context
 
+        # v2.29: 线程安全检查 — Playwright 不能在后台线程中使用
+        import threading
+        if threading.current_thread() != threading.main_thread():
+            logger.warning(f"[AICU:Web] 后台线程中禁用 Playwright (mid={mid})")
+            if self._log:
+                self._log("warn", f"  后台线程中跳过 Playwright 浏览器抓取 (mid={mid})")
+            return None
+
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -626,6 +634,12 @@ class AicuFetcher:
     def _get_via_playwright(self, url: str, params: dict) -> Optional[dict]:
         """通过 Playwright 真实浏览器请求 AICU API，绕过 CloudFlare WAF。"""
         global _playwright_browser, _playwright_context
+
+        # v2.29: 线程安全检查 — Playwright 不能在后台线程中使用
+        import threading
+        if threading.current_thread() != threading.main_thread():
+            logger.warning(f"[AICU:Playwright] 后台线程中禁用 Playwright: {url[:60]}")
+            return None
 
         try:
             from playwright.sync_api import sync_playwright

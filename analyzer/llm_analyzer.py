@@ -374,11 +374,11 @@ class LLMAnalyzer:
 
             enhanced = dict(u)  # copy
             enhanced["llm_analysis"] = llm_result  # 可能为 None
+            engine_score = u.get("suspicious_score", 0)
 
             if llm_result and llm_result.get("type_id", 0) > 0:
                 # 融合评分
                 llm_confidence = llm_result.get("confidence", 0)
-                engine_score = u.get("suspicious_score", 0)
                 fused = engine_score * ENGINE_WEIGHT + llm_confidence * LLM_WEIGHT
 
                 enhanced["engine_score_raw"] = engine_score

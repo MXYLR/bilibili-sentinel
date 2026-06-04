@@ -3335,7 +3335,7 @@ def api_aicu_test():
         fetcher = AicuFetcher(cookie=cookie, timeout=15)
 
         t0 = _time.monotonic()
-        data = fetcher.fetch_user_comments(2, page_size=20)
+        data = fetcher.fetch_user_comments(2)
         latency = round((_time.monotonic() - t0) * 1000)
 
         return jsonify({

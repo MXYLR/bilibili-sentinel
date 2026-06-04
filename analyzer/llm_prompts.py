@@ -195,7 +195,7 @@ def build_user_prompt(users_data: list) -> str:
 
 """
 
-    prompt += """请分析以上用户，输出 JSON 格式结果。reasoning 字段必须 ≥200 字且详细引用特征值与评论原文，禁止仅输出"正常用户"等短句。即使判定为正常用户，也必须逐条说明各特征为何不触发。只输出 JSON。"""
+    prompt += """请分析以上用户，输出 JSON。reasoning 必须 200 字左右，对每个高特征值逐条解释判定依据，禁止输出空串或少于一行的短句。只输出 JSON。"""
     return prompt
 
 

@@ -49,54 +49,6 @@ PROVIDER_DEFAULTS = {
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_MODEL = "deepseek-v4-pro"
 
-def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: int,
-                      features: dict = None, engine_score: float = 0.0) -> str:
-    """LLM 未提供推理时生成详细默认推理（≥200字）。"""
-    if reasoning and len(reasoning.strip()) >= 50:
-        return reasoning
-
-    features = features or {}
-    # ★ 归一化到 0-1（报告路径可能传 0-100 量纲）
-    def _n(v): return v / 100.0 if v > 1.0 else v
-    f12 = _n(features.get("f12_account_skeleton", 0))
-    f3 = _n(features.get("f3_level_score", 0))
-    f5 = _n(features.get("f5_content_similarity", 0))
-    f6 = _n(features.get("f6_time_burst", 0))
-    f15 = _n(features.get("f15_commercial_spam", 0))
-    f14 = _n(features.get("f14_sensitive_content", 0))
-    f18 = _n(features.get("f18_signature_troll", 0))
-
-    detail_parts = []
-    if f12 >= 0.4:
-        detail_parts.append(f"账号骨架F12={f12:.2f}（{int(f12*5)}/5项命中：无头像/ID乱码/无动态/无投稿/默认签名），为批量注册养号的典型特征")
-    if f3 >= 0.3:
-        detail_parts.append(f"用户等级异常F3={f3:.2f}，低等级+高活跃度符合水军养号模式")
-    if f5 >= 0.3:
-        detail_parts.append(f"内容相似度F5={f5:.2f}，评论与他人高度雷同，模板化刷评迹象明显")
-    if f6 >= 0.3:
-        detail_parts.append(f"时间爆发度F6={f6:.2f}，评论集中爆发，疑似批量操控")
-    if f15 >= 0.2:
-        detail_parts.append(f"商业引流F15={f15:.2f}，评论含推广/联系方式")
-    if f14 >= 0.2:
-        detail_parts.append(f"敏感内容F14={f14:.2f}，历史动态含政治/女拳敏感词")
-    if f18 >= 0.2:
-        detail_parts.append(f"签名引战F18={f18:.2f}，个性签名含挑衅/对立话术")
-
-    if not detail_parts:
-        detail_parts.append(f"引擎综合评分{engine_score:.0%}，特征检测未发现强信号，建议结合人工审核")
-
-    type_desc = {
-        0: "未检测到水军特征，该用户评论行为与正常B站用户无明显差异",
-    }
-    desc = type_desc.get(type_id)
-    if desc is None:
-        desc = f"被引擎判定为{type_name}，综合评分{engine_score:.0%}，置信度{confidence}%"
-
-    # ★ type_id=0 但引擎高分 → 加注矛盾提示
-    if type_id == 0 and engine_score >= 0.50 and detail_parts:
-        desc = f"LLM判定为正常用户（type 0），但引擎综合评分{engine_score:.0%}显示多个可疑信号，请结合详细证据判断"
-    detail_str = "；".join(detail_parts)
-    return f"{desc}。详细证据：{detail_str}。LLM置信度{confidence}%，引擎评分{engine_score:.0%}。"
 
 # API Key 加载优先级:
 #   1. 环境变量 (DEEPSEEK_API_KEY 或 OPENAI_API_KEY)
@@ -418,21 +370,9 @@ class LLMAnalyzer:
                 enhanced["llm_type_id"] = llm_result["type_id"]
                 enhanced["llm_type_name"] = llm_result.get("type_name", "")
                 enhanced["llm_confidence"] = llm_confidence
-                enhanced["llm_reasoning"] = llm_result.get("reasoning", "") or _ensure_reasoning(
-                    llm_result.get("reasoning", ""),
-                    llm_result.get("type_id", 0),
-                    llm_result.get("type_name", ""),
-                    llm_confidence,
-                    features=u.get("features", {}),
-                    engine_score=engine_score,
-                )
+                enhanced["llm_reasoning"] = llm_result.get("reasoning", "")
             else:
-                # LLM 认为正常或失败 → 生成引擎推理但不强制改类型
-                enhanced["llm_reasoning"] = _ensure_reasoning(
-                    "", 0, "正常用户", 0,
-                    features=u.get("features", {}),
-                    engine_score=engine_score,
-                )
+                enhanced["llm_reasoning"] = ""
                 # 引擎高分用户仍保留评分和风险等级提示
                 if engine_score >= RISK_HIGH:
                     enhanced["risk_level"] = "high"
@@ -786,7 +726,7 @@ class LLMAnalyzer:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0.3,
-                    max_tokens=3000,
+                    max_tokens=4000,
                 )
 
                 self._total_calls += 1

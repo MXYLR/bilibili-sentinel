@@ -68,11 +68,13 @@ class BilibiliUserSpider(scrapy.Spider):
     name = "bilibili_user"
 
     custom_settings = {
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 2,   # 双线程，折中速度与风控
-        "DOWNLOAD_DELAY": 2.5,                  # 2.5秒间隔 (经验值，无352)
-        "RANDOMIZE_DOWNLOAD_DELAY": True,       # ★ 随机化延迟，防模式识别
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 2,
+        "DOWNLOAD_DELAY": 2.5,
+        "RANDOMIZE_DOWNLOAD_DELAY": True,
         "DOWNLOAD_TIMEOUT": 30,
         "COOKIES_ENABLED": True,
+        "SCHEDULER": "scrapy.core.scheduler.Scheduler",       # ★ 禁用scrapy_redis调度器, 用自己的start_requests
+        "DUPEFILTER_CLASS": "scrapy.dupefilter.RFPDupeFilter", # ★ 不用Redis去重
     }
 
     def __init__(self, *args, **kwargs):
@@ -140,6 +142,7 @@ class BilibiliUserSpider(scrapy.Spider):
 
     def start_requests(self):
         """启动: 从 Redis 读取种子并开始爬取。"""
+        print("=== start_requests CALLED ===", flush=True)
         prewarm_wbi_cache()
 
         seeds = []
@@ -152,9 +155,11 @@ class BilibiliUserSpider(scrapy.Spider):
 
         if not seeds:
             self._idle_start_time = time.time()
+            print("=== No seeds, entering idle ===", flush=True)
             logger.info("No user seeds in Redis. Entering idle mode, waiting for seeds...")
             return
 
+        print(f"=== Starting with {len(seeds)} seed(s): {seeds} ===", flush=True)
         logger.info(f"Starting with {len(seeds)} user seed(s): {seeds}")
         for mid in seeds:
             self._seen_mids.add(mid)

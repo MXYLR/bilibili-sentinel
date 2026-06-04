@@ -132,7 +132,8 @@ def build_user_prompt(users_data: list) -> str:
 
     for i, user in enumerate(users_data, 1):
         features = user.get("features", {})
-        comments = user.get("comments", [])
+        # 兼容两种字段名: sample_comments (app.py单用户分析) 和 comments (批量分析)
+        comments = user.get("sample_comments") or user.get("comments", [])
 
         # v2.29: 智能压缩评论
         comments_summary = compress_comments_for_prompt(comments, max_examples=3)

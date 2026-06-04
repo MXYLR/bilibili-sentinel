@@ -120,7 +120,8 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
         prompt += f"\n⚠️ F12骨架={f12_val:.2f}({int(f12_val*5)}/5命中)"
 
     # v2.29: 当前视频评论（智能压缩）
-    user_comments = user_data.get("comments", [])
+    # 兼容两种字段名: sample_comments (app.py单用户分析) 和 comments (批量分析)
+    user_comments = user_data.get("sample_comments") or user_data.get("comments", [])
     if user_comments:
         comments_summary = compress_fn(user_comments, max_examples=2)
         prompt += f"\n当前评论: {comments_summary}"

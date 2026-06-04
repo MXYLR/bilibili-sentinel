@@ -3463,6 +3463,29 @@ def api_video_refresh_users(bvid: str):
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+# ★ 注入单个用户种子
+@app.route("/api/user/<int:mid>/refresh", methods=["POST"])
+def api_user_refresh(mid: int):
+    """注入单个用户 MID 到种子队列并启动用户爬虫。"""
+    try:
+        r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+        r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))
+
+        state = spider_mgr._read_state()
+        user_running = state.get("bilibili_user", {}).get("status") == "running"
+        pid = None
+        if not user_running:
+            start_result = spider_mgr.start_spider("bilibili_user")
+            if start_result.get("success"):
+                pid = start_result.get("pid")
+
+        msg = f"MID {mid} 已注入，用户爬虫{'正在运行' if user_running else '已启动'}"
+        logger.info(f"[RefreshUser] {msg}")
+        return jsonify({"success": True, "mid": mid, "pid": pid, "message": msg})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @app.route("/api/crawler/rescan-user-seeds", methods=["POST"])
 def api_crawler_rescan_user_seeds():
     """扫描已有评论数据，提取所有评论者 MID，注入用户爬虫种子队列。

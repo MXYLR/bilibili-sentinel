@@ -1642,7 +1642,8 @@ function showUserDetail(index) {
     const modalBody = document.getElementById('userDetailBody');
 
     modalTitle.innerHTML = `<i class="bi bi-person-badge"></i> ${user.uname || '未知用户'} <small class="text-white-50">MID: ${user.mid}</small>` +
-        (user._user_data_available ? '' : ' <span class="badge bg-warning text-dark ms-2">⚠️ 用户数据未采集</span>');
+        (user._user_data_available ? '' : ' <span class="badge bg-warning text-dark ms-2">⚠️ 用户数据未采集</span>') +
+        ` <button class="btn btn-sm btn-outline-light ms-2" onclick="refreshSingleUser(${user.mid})" title="仅采集此用户的空间数据"><i class="bi bi-arrow-repeat"></i></button>`;
 
     // --- Risk & Score row ---
     const riskColor = user.score >= 70 ? 'danger' : (user.score >= 40 ? 'warning' : 'success');
@@ -1949,6 +1950,17 @@ async function refreshVideoData() {
         showToast('刷新请求失败: ' + err.message, 'error');
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 刷新数据';
+    }
+}
+
+// ★ 刷新单个用户数据
+async function refreshSingleUser(mid) {
+    try {
+        const resp = await fetch('/api/user/' + mid + '/refresh', { method: 'POST' });
+        const data = await resp.json();
+        showToast(data.message, data.success ? 'success' : 'error');
+    } catch (err) {
+        showToast('请求失败: ' + err.message, 'error');
     }
 }
 

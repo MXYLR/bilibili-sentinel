@@ -994,6 +994,11 @@ async function runAnalysis() {
             return;
         }
 
+        // ★ 显示用户爬虫状态
+        if (result.user_spider) {
+            showToast(result.user_spider.message, result.user_spider.success ? 'info' : 'warning');
+        }
+
         let dots = 0;
         let pct = 0;
         const pollInterval = setInterval(async () => {

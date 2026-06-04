@@ -1706,9 +1706,10 @@ def api_score_distribution(bvid: str):
 
 @app.route("/api/run-analysis/<bvid>", methods=["POST"])
 def api_run_analysis(bvid: str):
-    # ★ 自动联动：分析前确保用户爬虫在运行（补充用户空间数据）
-    _auto_start_user_spider()
+    # ★ 自动联动：注入用户种子 + 启动用户爬虫
+    user_info = _auto_start_user_spider()
     result = analysis_mgr.start_analysis(bvid)
+    result["user_spider"] = user_info  # 返回给前端显示
     if result.get("success"):
         return jsonify(result)
     return jsonify(result), 409
@@ -3548,16 +3549,27 @@ def _build_raw_profile_line(user_data: dict) -> str:
 
 
 def _auto_start_user_spider() -> dict:
-    """注入用户种子（不启动，由评论爬虫完成后自动触发）。"""
+    """注入用户种子 + 如果未运行则启动用户爬虫。"""
     try:
-        result = spider_mgr.inject_seeds("rescan_users")
-        injected = result.get("injected", 0)
-        # ★ 标记：评论爬虫完成后应启动用户爬虫
-        _comment_finished_trigger_user = True
-        return {"success": True, "injected": injected, "auto": True,
-                "message": f"已注入 {injected} 个用户种子，评论爬虫完成后自动启动"}
+        # 注入种子
+        inject_result = spider_mgr.inject_seeds("rescan_users")
+        injected = inject_result.get("injected", 0)
+
+        # 启动用户爬虫（如果未运行）
+        state = spider_mgr._read_state()
+        user_running = state.get("bilibili_user", {}).get("status") == "running"
+
+        if user_running:
+            return {"success": True, "injected": injected, "started": False,
+                    "message": f"用户爬虫已在运行，已注入 {injected} 个种子"}
+
+        start_result = spider_mgr.start_spider("bilibili_user")
+        started = start_result.get("success", False)
+        return {"success": True, "injected": injected, "started": started,
+                "pid": start_result.get("pid"),
+                "message": f"已注入 {injected} 个种子，" + ("用户爬虫已启动" if started else "用户爬虫启动失败")}
     except Exception as e:
-        return {"success": False, "message": f"注入失败: {e}", "auto": True}
+        return {"success": False, "message": f"自动联动失败: {e}"}
 
 
 # ★ 后台监控：评论爬虫完成后自动启动用户爬虫

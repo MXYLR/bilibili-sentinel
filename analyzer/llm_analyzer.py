@@ -386,12 +386,7 @@ class LLMAnalyzer:
                 enhanced["llm_type_id"] = llm_result["type_id"]
                 enhanced["llm_type_name"] = llm_result.get("type_name", "")
                 enhanced["llm_confidence"] = llm_confidence
-                enhanced["llm_reasoning"] = _ensure_reasoning(
-                    llm_result.get("reasoning", ""),
-                    llm_result["type_id"],
-                    llm_result.get("type_name", ""),
-                    llm_confidence,
-                )
+                enhanced["llm_reasoning"] = llm_result.get("reasoning", "")
 
                 # 重新评估风险等级
                 if fused >= RISK_HIGH:
@@ -884,6 +879,7 @@ class LLMAnalyzer:
                     self._total_tokens += response.usage.total_tokens
 
                 content = response.choices[0].message.content
+                logger.debug(f"[LLM Raw] {content[:300]}")  # ★ 调试 LLM 原始响应
 
                 # 解析 JSON
                 from analyzer.llm_prompts import parse_llm_response
@@ -894,6 +890,10 @@ class LLMAnalyzer:
                     r for r in results
                     if isinstance(r, dict) and "mid" in r
                 ]
+                # ★ 调试: 检查 reasoning 字段
+                for r in valid:
+                    if not r.get("reasoning") or len(str(r.get("reasoning", "")).strip()) < 5:
+                        logger.warning(f"[LLM] mid={r.get('mid')} has empty/short reasoning: {r.get('reasoning','<NONE>')}")
 
                 if valid:
                     return valid

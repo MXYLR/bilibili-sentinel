@@ -3,9 +3,9 @@ B站用户数据采集 Spider — F12-F14 特征数据源
 
 核心流程:
   1. 从 Redis (db=1) 读取用户 MID 种子
-  2. Step A: GET /x/space/wbi/acc/info → 用户画像 → yield UserInfoItem
-  3. Step B: GET /x/space/wbi/arc/search → 投稿列表 → 补充 video_count/post_count
-  4. Step C: GET /x/polymer/web-dynamic/v1/feed/space → 动态列表 → yield UserPostItem
+  2. Step A: card API → 用户画像 → yield UserInfoItem
+  3. Step B: 视频 API → 补充 video_count → yield UserInfoItem
+  4. Step C: polymer 动态 API → 动态列表 → yield UserPostItem
   5. Spider idle 时检查 Redis 新种子，超时后自动退出
 
 数据用途:
@@ -132,14 +132,6 @@ class BilibiliUserSpider(scrapy.Spider):
     # ================================================================
 
     def _get_redis(self):
-        if self._redis is None:
-            self._redis = redis.Redis(
-                host=_REDIS_HOST, port=_REDIS_PORT, db=_REDIS_DB,
-                decode_responses=True,
-            )
-        return self._redis
-
-    def _get_redis(self):
         if not hasattr(self, '_redis') or self._redis is None:
             self._redis = redis.Redis(host=_REDIS_HOST, port=_REDIS_PORT, db=_REDIS_DB, decode_responses=True)
         return self._redis
@@ -170,32 +162,6 @@ class BilibiliUserSpider(scrapy.Spider):
             logger.info(f"Injected {len(mids)} MIDs into {_REDIS_KEY}")
         except Exception as e:
             logger.error(f"Redis write error: {e}")
-
-    # ================================================================
-    #  爬虫入口
-    # ================================================================
-
-    def start_requests(self):
-        """启动: 从 Redis 读取种子并开始爬取。"""
-        prewarm_wbi_cache()
-
-        seeds = []
-        for _ in range(50):
-            mid = self._pop_seed()
-            if mid is None:
-                break
-            if mid not in self._seen_mids:
-                seeds.append(mid)
-
-        if not seeds:
-            self._idle_start_time = time.time()
-            logger.info("No user seeds in Redis. Entering idle mode, waiting for seeds...")
-            return
-
-        logger.info(f"Starting with {len(seeds)} user seed(s): {seeds}")
-        for mid in seeds:
-            self._seen_mids.add(mid)
-            yield self._request_user_info(mid)
 
     # ================================================================
     #  Step A: 用户画像 → UserInfoItem

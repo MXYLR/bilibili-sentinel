@@ -3606,9 +3606,10 @@ def _build_raw_profile_line(user_data: dict) -> str:
     parts = []
     face = user_data.get("face", "")
     parts.append("头像:" + ("无" if not face or "noface" in face else "有"))
-    parts.append(f"动态:{user_data.get('post_count', '?')}条")
+    pc = user_data.get("post_count", -1)
+    parts.append(f"动态:{pc}条" if isinstance(pc, (int, float)) and pc >= 0 else "动态:?")
     uploads = user_data.get("upload_count", -1)
-    parts.append(f"投稿:{uploads}个" if uploads >= 0 else "投稿:未知")
+    parts.append(f"投稿:{int(uploads)}个" if isinstance(uploads, (int, float)) and uploads >= 0 else "投稿:?")
     sign = user_data.get("sign", "")
     if sign == "这个人没有填简介啊~~~":
         parts.append("签名:默认(未修改)")

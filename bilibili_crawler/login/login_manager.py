@@ -66,11 +66,17 @@ class LoginManager:
 
     @classmethod
     def get_sessdata(cls) -> Optional[str]:
-        """获取SESSDATA Cookie值（最重要的B站认证Cookie）"""
-        if cls._login is None:
+        """获取SESSDATA Cookie值（最关键的B站认证Cookie）。"""
+        try:
+            import os, json
+            from bilibili_crawler.login.bilibili_login import BilibiliLogin
+            login = BilibiliLogin()
+            if not login._cookies and os.path.exists(login._cookie_file):
+                with open(login._cookie_file, "r", encoding="utf-8") as f:
+                    login._cookies = json.load(f)
+            return login._cookies.get("SESSDATA")
+        except Exception:
             return None
-        cookies = cls._login.get_cookies_dict()
-        return cookies.get("SESSDATA")
 
     @classmethod
     def get_cookies_dict(cls) -> Dict[str, str]:
@@ -81,19 +87,18 @@ class LoginManager:
 
     @classmethod
     def is_logged_in(cls) -> bool:
-        """检查是否已登录（优先检查内存中的登录态，其次尝试从文件加载）"""
-        if cls._login is None:
-            cls._login = BilibiliLogin()
-        # 如果内存中没有Cookie，尝试从文件加载
-        if not cls._login._cookies:
-            try:
-                import asyncio
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                saved = loop.run_until_complete(cls._login.load_login_state())
-                loop.close()
-                if not saved:
-                    return False
-            except Exception:
-                return False
-        return bool(cls._login.get_cookies_dict())
+        """检查是否已登录（同步读取文件，避免asyncio冲突）。"""
+        try:
+            import os, json
+            from bilibili_crawler.login.bilibili_login import BilibiliLogin
+            login = BilibiliLogin()
+            if login._cookies:
+                return True
+            # 直接读文件
+            if os.path.exists(login._cookie_file):
+                with open(login._cookie_file, "r", encoding="utf-8") as f:
+                    login._cookies = json.load(f)
+                return bool(login._cookies)
+        except Exception:
+            pass
+        return False

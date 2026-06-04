@@ -252,21 +252,19 @@ class SystemMonitor:
         return self._cached("store", _fetch)
 
     def get_login_status(self) -> dict:
-        def _fetch():
-            try:
-                from bilibili_crawler.login.login_manager import LoginManager
-                mgr = LoginManager()
-                return {
-                    "is_logged_in": mgr.is_logged_in(),
-                    "has_sessdata": mgr.get_sessdata() is not None,
-                    "message": "已登录" if mgr.is_logged_in() else "未登录",
-                }
-            except ImportError:
-                return {"is_logged_in": False, "has_sessdata": False, "message": "登录模块未安装"}
-            except Exception as e:
-                return {"is_logged_in": False, "has_sessdata": False, "message": str(e)}
-
-        return self._cached("login", _fetch)
+        # ★ 登录状态不缓存，每次实时读取文件
+        try:
+            from bilibili_crawler.login.login_manager import LoginManager
+            mgr = LoginManager()
+            return {
+                "is_logged_in": mgr.is_logged_in(),
+                "has_sessdata": mgr.get_sessdata() is not None,
+                "message": "已登录" if mgr.is_logged_in() else "未登录",
+            }
+        except ImportError:
+            return {"is_logged_in": False, "has_sessdata": False, "message": "登录模块未安装"}
+        except Exception as e:
+            return {"is_logged_in": False, "has_sessdata": False, "message": str(e)}
 
     def get_llm_status(self) -> dict:
         def _fetch():

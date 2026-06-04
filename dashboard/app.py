@@ -2678,7 +2678,7 @@ def api_video_refresh(bvid: str):
 
 
 def _chain_refresh(bvid: str):
-    """后台监控链：评论结束→用户爬虫 用户结束→分析+LLM。"""
+    """后台监控链：评论结束→启动用户爬虫→用户结束→分析+LLM。"""
     import time as _time
     # ---- 等评论爬虫结束 ----
     logger.info(f"[Chain] {bvid}: 等待评论爬虫结束...")
@@ -2690,7 +2690,15 @@ def _chain_refresh(bvid: str):
         _time.sleep(3)
     _time.sleep(2)  # 等文件完全写入
 
-    # ---- 等用户爬虫结束（可能已由后台监控自动启动）----
+    # ---- ★ 直接启动用户爬虫 ----
+    logger.info(f"[Chain] {bvid}: 评论完成，启动用户爬虫...")
+    state = spider_mgr._read_state()
+    user_running = state.get("bilibili_user", {}).get("status") == "running"
+    if not user_running:
+        spider_mgr.start_spider("bilibili_user")
+    _time.sleep(3)  # 等启动完成
+
+    # ---- 等用户爬虫结束 ----
     logger.info(f"[Chain] {bvid}: 等待用户爬虫结束...")
     waited = 0
     while waited < 600:  # 最多等10分钟

@@ -171,17 +171,11 @@
                 <div class="form-text">引擎评分 ≥ 此值的用户才送深度分析</div>
             </div>
             <div class="col-md-5">
-                <label class="form-label fw-bold">AICU Cookie <small class="text-muted">(可选)</small></label>
-                <div class="input-group">
-                    <input type="password" class="form-control" id="aicu-cookie"
-                           placeholder="登录 aicu.cc 后从浏览器复制" style="font-family:monospace">
-                    <button class="btn btn-outline-secondary" type="button" id="aicu-cookie-toggle"
-                            onclick="toggleAicuCookieVisibility()" title="显示/隐藏">
-                        <i class="bi bi-eye"></i>
-                    </button>
-                </div>
+                <label class="form-label fw-bold">AICU Cookie <small class="text-muted">(CloudFlare 反爬令牌)</small></label>
+                <textarea class="form-control" id="aicu-cookie" rows="5"
+                       placeholder="从浏览器插件导出 Netscape 格式 Cookie 粘贴到此处&#10;无需登录 aicu.cc，但需要 cf_clearance 令牌" style="font-family:monospace;font-size:0.75em"></textarea>
                 <div class="form-text">
-                    登录 <a href="https://www.aicu.cc/" target="_blank">aicu.cc</a> 后获取，可提升数据质量。不填也可以使用。
+                    不需要登录 aicu.cc 帐号。用 EditThisCookie 等插件导出 aicu.cc 的 Cookie 粘贴即可。关键字段：<code>cf_clearance</code>、<code>ASession</code>
                 </div>
             </div>
         </div>

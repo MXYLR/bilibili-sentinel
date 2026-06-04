@@ -240,10 +240,16 @@ class BilibiliUserSpider(scrapy.Spider):
             logger.error(f"BUG: following={data.get('following')} lost! item={user_item['following']}")
 
         meta["user_info_item"] = user_item
-        videos_url = get_user_videos_url(mid, page=1, ps=1)
+        # ★ card API 已有 archive_count，直接产出 + 抓取动态
+        yield user_item
+        self._user_count += 1
+        posts_url = get_user_posts_url(mid)
         yield scrapy.Request(
-            videos_url, callback=self.parse_user_videos,
-            meta=meta, errback=self._handle_error, dont_filter=True,
+            posts_url,
+            callback=self.parse_user_posts,
+            meta={"mid": mid, "posts_collected": 0, "pages": 1},
+            errback=self._posts_error,
+            dont_filter=True,
         )
 
     def _fetch_user_info_playwright(self, mid, meta):

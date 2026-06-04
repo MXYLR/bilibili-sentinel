@@ -285,10 +285,10 @@ class LLMAnalyzer:
             }
 
         # ---- 2. 准备用户分析数据 ----
-        # 按 mid 组织评论
+        # 按 mid 组织评论（key 统一为 str，避免 JSON 反序列化后的类型不匹配）
         comments_by_mid = {}
         for c in comments_data:
-            mid = c.get("mid", 0)
+            mid = str(c.get("mid", 0))
             if mid not in comments_by_mid:
                 comments_by_mid[mid] = []
             comments_by_mid[mid].append(c)
@@ -316,7 +316,9 @@ class LLMAnalyzer:
             users_payload = []
             for u in batch_users:
                 mid = u.get("mid", 0)
-                user_comments = comments_by_mid.get(mid, [])
+                # v2.29: 优先使用传入的 sample_comments（如 app.py 单用户分析），否则从 comments_data 提取
+                # 同时修复 mid 类型不匹配问题（JSON 中的 mid 可能是 str，u["mid"] 是 int）
+                user_comments = u.get("sample_comments") or comments_by_mid.get(mid, []) or comments_by_mid.get(str(mid), [])
                 users_payload.append({
                     "mid": mid,
                     "uname": u.get("uname", ""),
@@ -546,9 +548,10 @@ class LLMAnalyzer:
         # ---- 3. 构建深度分析用户数据 ----
         # 即使 AICU 失败，也允许纯 LLM 深度分析
         # 注意：aicu_data_map 可能不完整
+        # v2.29: key 统一为 str，避免 JSON 反序列化后的类型不匹配
         comments_by_mid = {}
         for c in comments_data:
-            mid = c.get("mid", 0)
+            mid = str(c.get("mid", 0))
             if mid not in comments_by_mid:
                 comments_by_mid[mid] = []
             comments_by_mid[mid].append(c)
@@ -557,7 +560,8 @@ class LLMAnalyzer:
         for u in limited:
             mid = u.get("mid", 0)
             user_info = dict(u)
-            user_info["comments"] = comments_by_mid.get(mid, [])
+            # v2.29: 优先使用传入的 sample_comments，否则按 str(mid) 查找
+            user_info["comments"] = u.get("sample_comments") or comments_by_mid.get(str(mid), [])
             aicu_data = aicu_data_map.get(mid)
             deep_candidates.append((user_info, aicu_data))  # aicu_data 可以是 None
 

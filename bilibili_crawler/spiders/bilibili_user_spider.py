@@ -299,7 +299,6 @@ class BilibiliUserSpider(scrapy.Spider):
             if data.get("code") != 0:
                 size = len(response.text)
                 if size < 100:
-                    # ★ -352 可能是限流，延迟后重试一次
                     if data.get("code") == -352 and not meta.get("_card_retried"):
                         logger.info(f"[mid={mid}] card -352 retry after 3s...")
                         time.sleep(3)
@@ -309,7 +308,9 @@ class BilibiliUserSpider(scrapy.Spider):
                             meta={"mid": mid, "_card_retried": True},
                             dont_filter=True,
                         )
-                    logger.info(f"[mid={mid}] skip (card {size}bytes, not found)")
+                    # 重试后仍失败
+                    reason = "限流" if data.get("code") == -352 else f"code={data.get('code')}"
+                    logger.info(f"[mid={mid}] skip (card {size}bytes, {reason}{' retried' if meta.get('_card_retried') else ''})")
                     self._fetch_next_user()
                     return
                 logger.warning(f"[mid={mid}] card API code={data.get('code')}")

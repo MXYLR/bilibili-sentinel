@@ -32,6 +32,10 @@ from curl_cffi.requests.errors import RequestsError as CR_Error
 
 logger = logging.getLogger(__name__)
 
+# ★ Playwright 浏览器实例（懒加载，全局复用）
+_playwright_browser = None
+_playwright_context = None
+
 # ============================================================
 #  API 端点 (from Initsnow/bilibili-comment-clean-ing)
 # ============================================================
@@ -278,6 +282,61 @@ class AicuFetcher:
 
         return None
 
+    def _get_via_playwright(self, url: str, params: dict) -> Optional[dict]:
+        """通过 Playwright 真实浏览器请求 AICU API，绕过 CloudFlare WAF。"""
+        global _playwright_browser, _playwright_context
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("[AICU] Playwright 未安装，跳过浏览器兜底")
+            return None
+
+        full_url = f"{url}?{urlencode(params)}"
+        logger.info(f"[AICU:Playwright] 请求 {full_url[:100]}...")
+
+        try:
+            if _playwright_browser is None:
+                pw = sync_playwright().start()
+                _playwright_browser = pw.chromium.launch(
+                    headless=True,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+                _playwright_context = _playwright_browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                    locale="zh-CN",
+                )
+
+            page = _playwright_context.new_page()
+            try:
+                resp = page.goto(full_url, wait_until="domcontentloaded", timeout=20000)
+                if resp and resp.status == 200:
+                    body = page.content()
+                    # 提取 JSON（可能在 <pre> 标签或纯文本中）
+                    import re
+                    match = re.search(r'<pre[^>]*>(.*?)</pre>', body, re.DOTALL)
+                    if match:
+                        raw_text = match.group(1)
+                    else:
+                        raw_text = page.inner_text("body")
+
+                    data = json.loads(raw_text)
+                    return data
+                else:
+                    status = resp.status if resp else "N/A"
+                    logger.warning(f"[AICU:Playwright] HTTP {status}: {full_url[:80]}")
+                    return None
+            finally:
+                page.close()
+
+        except Exception as e:
+            logger.error(f"[AICU:Playwright] 异常: {e}")
+            return None
+
     # ============================================================
     #  单项抓取
     # ============================================================
@@ -410,6 +469,7 @@ class AicuFetcher:
         hour_counter = Counter()
         page = 1
         page_size = 500  # AICU API 最大每页 500 条
+        use_playwright = False  # ★ curl_cffi 失败后切换 Playwright
 
         while len(parsed) < all_count:
             params = {
@@ -421,23 +481,35 @@ class AicuFetcher:
             }
 
             try:
-                # 直接发请求，不限速不重试（探测已确认 API 可用）
-                try:
-                    resp = self._get_session().get(
-                        AICU_REPLY_API, params=params, timeout=20, verify=False
-                    )
-                    if resp.status_code == 200:
-                        raw = resp.json()
-                    else:
+                raw = None
+                if use_playwright:
+                    # ★ Playwright 兜底：绕过 CloudFlare WAF
+                    raw = self._get_via_playwright(AICU_REPLY_API, params)
+                else:
+                    # curl_cffi 直连
+                    try:
+                        resp = self._get_session().get(
+                            AICU_REPLY_API, params=params, timeout=20, verify=False
+                        )
+                        if resp.status_code == 200:
+                            raw = resp.json()
+                        else:
+                            raw = None
+                            if self._log:
+                                self._log("warn", f"  评论分页 HTTP {resp.status_code}: page={page}")
+                    except Exception as req_err:
                         raw = None
                         if self._log:
-                            self._log("warn", f"  评论分页 HTTP {resp.status_code}: page={page}")
-                except Exception as req_err:
-                    raw = None
-                    if self._log:
-                        self._log("warn", f"  评论分页请求异常 page={page}: {str(req_err)[:80]}")
+                            self._log("warn", f"  评论分页请求异常 page={page}: {str(req_err)[:80]}")
 
                 if not raw or raw.get("code") != 0:
+                    # ★ curl_cffi 被 WAF 拦截 → 切换到 Playwright
+                    if not use_playwright and page == 1:
+                        logger.warning(f"[AICU] curl_cffi 评论分页被 WAF 拦截，切换到 Playwright")
+                        if self._log:
+                            self._log("warn", "  curl_cffi 被 WAF 拦截，切换 Playwright 浏览器...")
+                        use_playwright = True
+                        continue  # 重试当前页
                     logger.warning(f"[AICU] 评论分页失败: page={page}, code={raw.get('code') if raw else 'N/A'}")
                     break
 

@@ -2770,6 +2770,10 @@ def api_video_reanalyze(bvid: str):
 
 def _regenerate_report(bvid: str):
     """基于当前评论数据重新生成水军分析报告（后台线程）。"""
+    # ★ 强制清除模块缓存，确保加载最新代码
+    for mod in list(sys.modules.keys()):
+        if mod.startswith("analyzer."):
+            del sys.modules[mod]
     try:
         from analyzer.feature_extractor import FeatureExtractor
         from analyzer.scorer import WaterArmyScorer

@@ -49,6 +49,25 @@ PROVIDER_DEFAULTS = {
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_MODEL = "deepseek-v4-pro"
 
+def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: int) -> str:
+    """LLM 未提供推理时生成默认推理。"""
+    if reasoning and len(reasoning.strip()) > 5:
+        return reasoning
+    if type_id == 0:
+        return "未检测到水军特征（无头像、ID正常、有动态/投稿记录等）"
+    type_labels = {
+        1: "评论内容相似度极高，疑似模板化批量刷评",
+        2: "评论情绪极端化，刻意煽动或带节奏",
+        3: "评论内容逻辑怪异，语句不通，疑似AI生成",
+        4: "评论含联系方式或推广信息，疑似引流广告",
+        5: "行为模式与其他账号高度一致，疑似批量操控",
+        6: "无头像+ID乱码+无动态+无投稿，典型黑产养号",
+        7: "评论刻意制造对立，激化矛盾",
+        8: "动态含极端/政治/造谣内容，职业水军",
+    }
+    base = type_labels.get(type_id, f"被判定为{type_name}") if type_name else f"被判定为水军类型{type_id}"
+    return f"{base}，置信度{confidence}%"
+
 # API Key 加载优先级:
 #   1. 环境变量 (DEEPSEEK_API_KEY 或 OPENAI_API_KEY)
 #   2. 持久化配置文件 config/llm_config.json
@@ -367,7 +386,12 @@ class LLMAnalyzer:
                 enhanced["llm_type_id"] = llm_result["type_id"]
                 enhanced["llm_type_name"] = llm_result.get("type_name", "")
                 enhanced["llm_confidence"] = llm_confidence
-                enhanced["llm_reasoning"] = llm_result.get("reasoning", "")
+                enhanced["llm_reasoning"] = _ensure_reasoning(
+                    llm_result.get("reasoning", ""),
+                    llm_result["type_id"],
+                    llm_result.get("type_name", ""),
+                    llm_confidence,
+                )
 
                 # 重新评估风险等级
                 if fused >= RISK_HIGH:

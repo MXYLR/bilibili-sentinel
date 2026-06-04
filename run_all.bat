@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.21
+title Bilibili Sentinel v2.22
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -15,7 +15,7 @@ set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.21
+echo   Bilibili Sentinel v2.22
 echo ============================================================
 echo.
 
@@ -184,7 +184,7 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.21: card API用户采集+一键链式刷新+LLM标准Prompt+Playwright禁用
+echo   v2.22: 13维评分引擎(MID年龄推算)+死特征删除+一键LLM初筛+用户分组采集
 echo   全链路: 视频+评论 → 用户爬虫 → 分析+LLM初筛, 全自动
 echo.
 echo ============================================================

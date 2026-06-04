@@ -1184,8 +1184,9 @@ function openLlmScreenModal() {
         llmScreenModal = new bootstrap.Modal(document.getElementById('llmScreenModal'));
     }
 
-    // 计算统计
-    const total = scoredUsers.length;
+    // ★ 修复：计算候选人数（评分 >= 阈值的用户数）
+    const threshold = parseInt(document.getElementById('llm-threshold-slider').value);
+    const total = scoredUsers.filter(u => (u.score || 0) >= threshold).length;
     const done = scoredUsers.filter(u => u.llm_type_id && u.llm_type_id > 0).length;
     const maxScore = scoredUsers.length > 0
         ? Math.max(...scoredUsers.map(u => u.score || 0)).toFixed(1)
@@ -1209,11 +1210,15 @@ function openLlmScreenModal() {
     llmScreenModal.show();
 }
 
-// 滑块更新阈值显示
+// 滑块更新阈值显示 + 实时计算候选人数
 document.getElementById('llm-threshold-slider').addEventListener('input', function() {
     const v = this.value;
     document.getElementById('llm-threshold-val').textContent = v;
     document.getElementById('llm-threshold-display').textContent = v;
+    
+    // ★ 实时重新计算候选人数（评分 >= 阈值的用户数）
+    const candidateCount = scoredUsers.filter(u => (u.score || 0) >= parseInt(v)).length;
+    document.getElementById('llm-candidate-count').textContent = candidateCount;
 });
 
 async function startLlmScreen() {
@@ -1336,8 +1341,9 @@ function openDeepAnalyzeModal() {
         deepAnalyzeModal = new bootstrap.Modal(document.getElementById('deepAnalyzeModal'));
     }
 
-    // 计算统计
-    const total = scoredUsers.length;
+    // ★ 修复：计算候选人数（评分 >= 阈值的用户数）
+    const threshold = parseInt(document.getElementById('deep-threshold-slider').value);
+    const total = scoredUsers.filter(u => (u.score || 0) >= threshold).length;
     const done = scoredUsers.filter(u => u.deep_analyzed).length;
     const maxScore = scoredUsers.length > 0
         ? Math.max(...scoredUsers.map(u => u.score || 0)).toFixed(1)
@@ -1361,11 +1367,15 @@ function openDeepAnalyzeModal() {
     deepAnalyzeModal.show();
 }
 
-// 滑块更新阈值显示
+// 滑块更新阈值显示 + 实时计算候选人数
 document.getElementById('deep-threshold-slider').addEventListener('input', function() {
     const v = this.value;
     document.getElementById('deep-threshold-val').textContent = v;
     document.getElementById('deep-threshold-display').textContent = v;
+    
+    // ★ 实时重新计算候选人数（评分 >= 阈值的用户数）
+    const candidateCount = scoredUsers.filter(u => (u.score || 0) >= parseInt(v)).length;
+    document.getElementById('deep-candidate-count').textContent = candidateCount;
 });
 
 async function startDeepAnalyze() {

@@ -3557,12 +3557,13 @@ def _auto_start_user_spider() -> dict:
     try:
         result = spider_mgr.inject_seeds("rescan_users")
         injected = result.get("injected", 0)
-        # ★ 标记：评论爬虫完成后应触发用户爬虫
         global _comment_finished_trigger_user
         _comment_finished_trigger_user = True
-        return {"success": True, "injected": injected,
-                "message": f"已注入 {injected} 个用户种子，等待评论爬虫完成后自动启动用户爬虫"}
+        msg = f"已注入 {injected} 个用户种子，等待评论爬虫完成后自动启动用户爬虫"
+        logger.info(f"[AutoUser] {msg}")
+        return {"success": True, "injected": injected, "message": msg}
     except Exception as e:
+        logger.error(f"[AutoUser] 注入失败: {e}")
         return {"success": False, "message": f"注入失败: {e}"}
 
 

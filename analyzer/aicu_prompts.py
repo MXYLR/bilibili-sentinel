@@ -9,47 +9,51 @@ AICU 深度分析 — 提示词模板
 #  深度分析 System Prompt
 # ============================================================
 
-DEEP_SYSTEM_PROMPT = """你是一个B站水军深度分析专家。基于用户在当前视频的评论行为 + 历史评论记录（来自第三方数据），进行跨视频行为模式分析。
+DEEP_SYSTEM_PROMPT = """你是B站水军深度分析专家。基于用户当前视频行为+历史评论记录(来自AICU)，进行跨视频模式分析，给出最终水军判定。
 
 ## 分析维度
 
-1. **跨视频行为一致性**: 用户在不同视频下的评论风格、立场、语言习惯是否一致？
-2. **时间模式**: 评论时间是否集中在特定时段？是否存在"上班式"评论规律？
-3. **内容多样性**: 历史评论是多元化的真实交流，还是套路化的模板输出？
-4. **设备与环境**: 设备型号是否频繁变更？历史昵称是否存在养号特征（如乱码→正常名）？
-5. **异常信号叠加**: 当前视频的高特征分 + 历史数据的异常模式，是否形成证据链？
+1. **跨视频行为一致性**: 不同视频下的评论风格、立场是否统一？是否存在"多视频同一套话术"？
+2. **时间模式**: 历史评论时间是否集中在某时段？间隔是否规律（机器人特征）？
+3. **内容模板化**: 历史评论是多元真实交流，还是套路化输出？
+4. **账号异常**: 设备是否频繁变更？历史昵称是否有养号特征（乱码→正常名更名链）？
+5. **证据链叠加**: 引擎高分特征 + 历史数据异常模式 = 可信证据链
 
-## 判断标准
+## 13 维引擎特征映射
 
-- **确认为水军**: 跨视频行为模式高度一致 + 内容模板化 + 时间集中 = 置信度 >= 80
-- **高度可疑**: 部分维度异常，但缺乏决定性证据 = 置信度 50-79
-- **倾向正常**: 历史评论多元、自然，异常特征可能是巧合 = 置信度 < 50
-- 如果历史数据不足（评论数 < 5），以当前视频分析为准，置信度适度降低
-- **★ 关键**: 当特征引擎已标记 **账号骨架(F12) ≥ 0.40**（无头像/用户名乱码/无动态/无投稿），即使 AICU 无历史数据，也不能降低置信度 — 无历史数据恰恰是批量注册水军号的典型特征，应直接判定为「批量操控型」或「黑产养号型」，置信度 ≥ 70
+- **f12 账号骨架 (0.23)**：无头像+ID乱码+无动态+无投稿+默认签名。≥0.4 = 铁证
+- **f3 等级 (0.13)**：Lv0-2低等级=可疑，水军养号典型等级分布
+- **f5 内容雷同 (0.11)**：与他人评论高度相似→模板化
+- **f6 时间爆发 (0.11)**：短窗口集中刷评→操控
+- **f15 商业引流 (0.04)**：含赌博/色情/联系方式
+- **f14 敏感内容 (0.03)**：女拳/政治/造谣
+
+## 判定规则
+
+- **f12 ≥ 0.4** → 四无账号铁证。**AICU无历史数据恰恰印证批量注册**，不得降级。type 6 或 type 5, confidence ≥ 80
+- **引擎总分 ≥ 50** + 历史评论有模板化迹象 → type 1, confidence ≥ 70
+- **引擎总分 < 30** + 历史评论多元自然 → type 0, confidence 0
+- 历史评论 < 5 条 ≠ 正常——可能是新注册水军号
 
 ## 输出格式
-
-严格按 JSON 格式输出，每个用户一个结果:
 
 ```json
 {
   "results": [
     {
-      "mid": 用户ID,
-      "deep_type_id": 水军类型编号(0-8),
-      "deep_type_name": "类型名称",
-      "deep_confidence": 深度分析置信度(0-100),
-      "deep_reasoning": "深度推理过程(300字内)",
+      "mid": "用户ID",
+      "deep_type_id": 0-8,
+      "deep_type_name": "类型",
+      "deep_confidence": 0-100,
+      "deep_reasoning": "300字推理(引用具体特征值+历史评论证据)",
       "risk_confirmed": true/false,
-      "key_evidence": ["证据1", "证据2"]
+      "key_evidence": ["证据"]
     }
   ]
 }
 ```
 
-类型编号:
-0=正常用户, 1=模板化刷评型, 2=情绪引导型, 3=AI生成型, 4=引流广告型,
-5=批量操控型, 6=黑产养号型, 7=对立引战型, 8=敏感内容型"""
+8种水军类型: 1模板刷评 2情绪引导 3AI生成 4引流广告 5批量操控 6黑产养号 7对立引战 8敏感内容"""
 
 
 # ============================================================
@@ -94,20 +98,18 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
 
 **当前视频行为:**
 - 在此视频中发表了 {user_data.get('comment_count', 0)} 条评论
-- 14特征引擎评分: {user_data.get('suspicious_score', 0):.1f}/100
-- LLM 初筛结果: 类型 {user_data.get('llm_type_id', 0)} ({user_data.get('llm_type_name', '未分析')}), 置信度 {user_data.get('llm_confidence', 0)}%
+- 引擎综合可疑分: {user_data.get('suspicious_score', 0):.1f}/100
+- LLM 初筛结果: 类型{user_data.get('llm_type_id', 0)} ({user_data.get('llm_type_name', '未分析')}), 置信度{user_data.get('llm_confidence', 0)}%
 """
 
     prompt += user_data.get('raw_profile', '') + "\n"
 
-    # ★ 关键特征显式列出
+    # ★ 特征评分（按权重排列13维）
     prompt += f"""
-**关键特征分数 (0-1, 越高越可疑):**
-  * 头像/认证(F4): {features.get('f4_avatar_verify', 0):.2f}
-  * 账号骨架(F12): {features.get('f12_account_skeleton', 0):.2f} (无头像+ID乱码+无动态+无投稿+默认签名)
-  * 内容相似度(F5): {features.get('f5_content_similarity', 0):.2f}
-  * 时间爆发(F6): {features.get('f6_time_burst', 0):.2f}
-  * 情感极端(F7): {features.get('f7_sentiment_extreme', 0):.2f}
+**13维特征评分 (0-1):**
+  ·高权重: f12_骨架={features.get('f12_account_skeleton', 0):.2f} f3_等级={features.get('f3_level_score', 0):.2f} f5_雷同={features.get('f5_content_similarity', 0):.2f} f6_爆发={features.get('f6_time_burst', 0):.2f} f1_年龄={features.get('f1_account_age', 0):.2f} f4_头像={features.get('f4_avatar_verify', 0):.2f}
+  ·中权重: f2_粉关={features.get('f2_follow_ratio', 0):.2f} f8_赞比={features.get('f8_like_ratio', 0):.2f} f15_引流={features.get('f15_commercial_spam', 0):.2f}
+  ·低权重: f14_敏感={features.get('f14_sensitive_content', 0):.2f} f18_签名={features.get('f18_signature_troll', 0):.2f} f7_情感={features.get('f7_sentiment_extreme', 0):.2f} f16_规律={features.get('f16_time_regularity', 0):.2f}
 """
 
     # Top 3 高贡献特征
@@ -127,13 +129,13 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
             label = feature_labels.get(k, k)
             prompt += f"  * {label}: {v:.2f}\n"
 
-        # ★ v2.9: F12 骨架信号显式提醒
+        # ★ F12 骨架信号显式警告
         f12_val = features.get("f12_account_skeleton", 0)
         if f12_val >= 0.40:
             prompt += f"\n⚠️ **账号骨架警告**: F12={f12_val:.2f} ({int(f12_val*5)}/5 项命中)\n"
-            prompt += "该用户无头像/用户名乱码/无动态/无投稿/默认签名 — 这是批量注册号的铁证！\n"
+            prompt += "四无账号(无头像/ID乱码/无动态/无投稿/默认签名) — 批量注册水军号铁证\n"
             if f12_val >= 0.60:
-                prompt += "请直接判定为水军（置信度≥85），即使AICU无历史数据也是正常现象。\n"
+                prompt += "直接判定水军 confidence≥85。AICU无历史数据恰恰印证新号。\n"
 
     # 当前视频的样本评论
     user_comments = user_data.get("comments", [])

@@ -975,7 +975,7 @@ class LLMAnalyzer:
 
         parts.append(
             f"\n> 分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
-            f"引擎: {provider_label} + 14特征引擎 | "
+            f"引擎: {provider_label} + 13维评分 | "
             f"融合权重: 特征{int(ENGINE_WEIGHT*100)}% + LLM{int(LLM_WEIGHT*100)}%"
         )
 

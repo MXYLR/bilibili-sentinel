@@ -2081,7 +2081,7 @@ def api_user_llm_analyze(bvid: str, mid: int):
     user_file = Path(DATA_DIR) / "users" / f"{mid}.json"
     if not user_file.exists():
         logger.info(f"[LLM单用户] mid={mid} 无用户数据，自动注种+启动用户爬虫")
-        info = _auto_start_user_spider()
+        info = _auto_start_user_spider(start_now=True)
         return jsonify({
             "success": False, "error": "need_user_data",
             "message": f"该用户数据未采集，已自动注入 {info.get('injected',0)} 个种子并启动用户爬虫。请等待采集完成后重试。",
@@ -2202,7 +2202,7 @@ def api_video_llm_screen(bvid: str):
     coverage = has_data / len(mids_in_report) if mids_in_report else 1.0
     if coverage < 0.3 and len(mids_in_report) > 5:
         logger.info(f"[LLM初筛] 用户数据覆盖仅 {has_data}/{len(mids_in_report)} ({coverage:.0%})，自动注种+启动用户爬虫")
-        info = _auto_start_user_spider()
+        info = _auto_start_user_spider(start_now=True)
         return jsonify({
             "success": False,
             "error": "need_user_data",
@@ -3583,18 +3583,40 @@ def _build_raw_profile_line(user_data: dict) -> str:
     return "- 原始数据: " + " | ".join(parts)
 
 
-def _auto_start_user_spider() -> dict:
-    """注入用户种子，标记等待评论爬虫完成后自动启动。"""
+def _auto_start_user_spider(start_now: bool = False) -> dict:
+    """注入用户种子。start_now=True 时立即启动用户爬虫（LLM兜底），否则仅标记等待评论完成。
+    始终包含 message 字段供前端展示。"""
     try:
         result = spider_mgr.inject_seeds("rescan_users")
         injected = result.get("injected", 0)
+
+        if start_now:
+            # ★ LLM 兜底：直接启动用户爬虫
+            state = spider_mgr._read_state()
+            if state.get("bilibili_user", {}).get("status") != "running":
+                start_result = spider_mgr.start_spider("bilibili_user")
+                if start_result.get("success"):
+                    msg = f"已注入 {injected} 个种子并启动用户爬虫 (PID={start_result.get('pid')})"
+                    logger.info(f"[AutoUser] {msg}")
+                    return {"success": True, "injected": injected, "started": True,
+                            "pid": start_result.get("pid"), "message": msg}
+                else:
+                    msg = f"已注入 {injected} 个种子，但启动失败: {start_result.get('message','')}"
+                    logger.warning(f"[AutoUser] {msg}")
+                    return {"success": True, "injected": injected, "started": False, "message": msg}
+            else:
+                msg = f"已注入 {injected} 个种子，用户爬虫已在运行"
+                logger.info(f"[AutoUser] {msg}")
+                return {"success": True, "injected": injected, "started": False, "message": msg}
+
+        # 评论联动模式：仅标记
         global _comment_finished_trigger_user
         _comment_finished_trigger_user = True
-        msg = f"已注入 {injected} 个用户种子，等待评论爬虫完成后自动启动用户爬虫"
+        msg = f"已注入 {injected} 个用户种子，等待评论爬虫完成后自动启动"
         logger.info(f"[AutoUser] {msg}")
-        return {"success": True, "injected": injected, "message": msg}
+        return {"success": True, "injected": injected, "started": False, "message": msg}
     except Exception as e:
-        logger.error(f"[AutoUser] 注入失败: {e}")
+        logger.error(f"[AutoUser] 失败: {e}")
         return {"success": False, "message": f"注入失败: {e}"}
 
 

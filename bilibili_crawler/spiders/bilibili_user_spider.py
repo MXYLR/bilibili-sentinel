@@ -73,8 +73,7 @@ class BilibiliUserSpider(scrapy.Spider):
         "RANDOMIZE_DOWNLOAD_DELAY": True,
         "DOWNLOAD_TIMEOUT": 30,
         "COOKIES_ENABLED": True,
-        "SCHEDULER": "scrapy.core.scheduler.Scheduler",       # ★ 禁用scrapy_redis调度器, 用自己的start_requests
-        "DUPEFILTER_CLASS": "scrapy.dupefilters.RFPDupeFilter", # ★ 不用Redis去重
+        "PLAYWRIGHT_ENABLED": False,  # ★ 用户爬虫不需要 Playwright，card API curl 直通即可
     }
 
     def __init__(self, *args, **kwargs):

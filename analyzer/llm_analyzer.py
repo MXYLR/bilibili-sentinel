@@ -381,7 +381,7 @@ class LLMAnalyzer:
                 engine_score = u.get("suspicious_score", 0)
                 fused = engine_score * ENGINE_WEIGHT + llm_confidence * LLM_WEIGHT
 
-                enhanced["engine_score_raw"] = engine_score  # 保留纯引擎分，供 deep_analyze 三次融合使用
+                enhanced["engine_score_raw"] = engine_score
                 enhanced["suspicious_score"] = round(fused, 1)
                 enhanced["llm_type_id"] = llm_result["type_id"]
                 enhanced["llm_type_name"] = llm_result.get("type_name", "")
@@ -392,6 +392,29 @@ class LLMAnalyzer:
                     llm_result.get("type_name", ""),
                     llm_confidence,
                 )
+            elif engine_score >= 0.70:
+                # ★ LLM 误判为正常但引擎高分 → 强制引擎判定
+                features = u.get("features", {})
+                f12 = features.get("f12_account_skeleton", 0)
+                f15 = features.get("f15_commercial_spam", 0)
+
+                if f12 >= 0.4:
+                    type_id, type_name = 6, "黑产养号型"
+                    reasoning = f"引擎评分{engine_score:.0%}，账号骨架F12={f12:.2f}(四无账号)，LLM误判正常已覆盖"
+                elif f15 >= 0.3:
+                    type_id, type_name = 4, "引流广告型"
+                    reasoning = f"引擎评分{engine_score:.0%}，商业引流F15={f15:.2f}，LLM误判正常已覆盖"
+                else:
+                    type_id, type_name = 6, "黑产养号型"
+                    reasoning = f"引擎评分{engine_score:.0%}（极高），LLM误判正常已强制覆盖"
+
+                enhanced["engine_score_raw"] = engine_score
+                enhanced["suspicious_score"] = engine_score  # 直接使用引擎分
+                enhanced["llm_type_id"] = type_id
+                enhanced["llm_type_name"] = type_name
+                enhanced["llm_confidence"] = 90
+                enhanced["llm_reasoning"] = reasoning
+                logger.warning(f"[LLM override] mid={mid} score={engine_score:.0%} LLM said normal → forced {type_name}")
 
                 # 重新评估风险等级
                 if fused >= RISK_HIGH:

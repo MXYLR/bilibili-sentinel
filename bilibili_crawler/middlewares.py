@@ -627,6 +627,10 @@ class BilibiliResponseMiddleware:
             retry_count = self._rate_limit_counts.get(url_key, 0) + 1
             self._rate_limit_counts[url_key] = retry_count
 
+            # ★ spider 主动禁用 Playwright → 不计数，不切换
+            if hasattr(spider, '_never_use_playwright') and spider._never_use_playwright:
+                return response
+
             # 全局连续 412 计数 (v2.4: 统一管理，避免双重计数)
             self._consecutive_412 += 1
             spider._412_count = self._consecutive_412

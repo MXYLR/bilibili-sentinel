@@ -351,7 +351,8 @@ class BilibiliUserSpider(scrapy.Spider):
         """解析 /x/space/wbi/arc/search 响应，补充统计信息。"""
         mid = response.meta["mid"]
         user_item = response.meta.get("user_info_item")
-        result = parse_bilibili_response(response)
+        import json as _json
+        result = parse_bilibili_response(_json.loads(response.text))
 
         if result is not None:
             data = result.get("data", {})

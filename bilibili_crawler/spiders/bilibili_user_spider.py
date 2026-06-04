@@ -73,7 +73,9 @@ class BilibiliUserSpider(scrapy.Spider):
         "RANDOMIZE_DOWNLOAD_DELAY": True,
         "DOWNLOAD_TIMEOUT": 30,
         "COOKIES_ENABLED": True,
-        "PLAYWRIGHT_ENABLED": False,  # ★ 用户爬虫不需要 Playwright，card API curl 直通即可
+        "PLAYWRIGHT_ENABLED": False,
+        "SCHEDULER": "scrapy.core.scheduler.Scheduler",  # ★ 不用scrapy_redis
+        "DUPEFILTER_CLASS": "scrapy.dupefilters.RFPDupeFilter",
     }
 
     def __init__(self, *args, **kwargs):
@@ -83,21 +85,19 @@ class BilibiliUserSpider(scrapy.Spider):
         self._total_posts = 0
         self._idle_start_time = None
         self._seen_mids = set()
-        self._use_playwright = False  # ★ 不触发 Playwright 兜底
+        self._use_playwright = False
         self._412_count = 0
-        logger.info(f"BilibiliUserSpider v2026-06-04-18:52 initialized (Redis db={_REDIS_DB}, key={_REDIS_KEY}, max_idle={MAX_IDLE_TIME}s)")
+        logger.info(f"BilibiliUserSpider v2026-06-04-18:58 (native scheduler) initialized")
 
     @classmethod
-    def     from_crawler(cls, crawler, *args, **kwargs):
+    def from_crawler(cls, crawler, *args, **kwargs):
         spider = super().from_crawler(crawler, *args, **kwargs)
-        crawler.signals.connect(spider.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(spider.spider_idle, signal=signals.spider_idle)
-        logger.info("Signals connected: spider_opened + spider_idle")
         return spider
 
-    def spider_opened(self):
-        """Spider 打开后立即消费种子（批量跳过已采集的）。"""
-        logger.info("=== spider_opened FIRED ===")
+    def start_requests(self):
+        """使用 native scheduler: 直接消费 Redis 种子。"""
+        prewarm_wbi_cache()
         skipped = 0
         while True:
             mid = self._pop_seed()
@@ -109,20 +109,15 @@ class BilibiliUserSpider(scrapy.Spider):
             self._seen_mids.add(mid)
             req = self._request_user_info(mid)
             if req:
-                self.crawler.engine.crawl(req)
                 if skipped > 0:
-                    logger.info(f"Started with mid={mid} (skipped {skipped} already-collected)")
+                    logger.info(f"First seed: mid={mid} (skipped {skipped})")
                 else:
-                    logger.info(f"Initial seed consumed: mid={mid}")
+                    logger.info(f"First seed: mid={mid}")
+                yield req
                 return
-            else:
-                skipped += 1
-                logger.debug(f"Initial seed skipped (already collected): mid={mid}")
-
+            skipped += 1
         if skipped > 0:
-            logger.info(f"All {skipped} seeds already collected, entering idle mode")
-        else:
-            logger.info("No seeds at spider open, entering idle mode")
+            logger.info(f"All {skipped} seeds already collected")
         self._idle_start_time = time.time()
 
     # ================================================================

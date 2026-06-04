@@ -374,7 +374,9 @@ class LLMAnalyzer:
 
             enhanced = dict(u)  # copy
             enhanced["llm_analysis"] = llm_result  # 可能为 None
-            engine_score = u.get("suspicious_score", 0)
+            engine_score_raw = u.get("suspicious_score", 0)
+            # ★ 归一化到 0-1（报告存 0-100，内部计算用 0-1）
+            engine_score = engine_score_raw / 100.0 if engine_score_raw > 1.0 else engine_score_raw
 
             if llm_result and llm_result.get("type_id", 0) > 0:
                 # 融合评分
@@ -396,20 +398,23 @@ class LLMAnalyzer:
                 # ★ LLM 误判为正常但引擎高分 → 强制引擎判定
                 features = u.get("features", {})
                 f12 = features.get("f12_account_skeleton", 0)
+                # 归一化 f12（同 engine_score 处理）
+                f12_val = f12 / 100.0 if f12 > 1.0 else f12
                 f15 = features.get("f15_commercial_spam", 0)
+                f15_val = f15 / 100.0 if f15 > 1.0 else f15
 
-                if f12 >= 0.4:
+                if f12_val >= 0.4:
                     type_id, type_name = 6, "黑产养号型"
-                    reasoning = f"引擎评分{engine_score:.0%}，账号骨架F12={f12:.2f}(四无账号)，LLM误判正常已覆盖"
-                elif f15 >= 0.3:
+                    reasoning = f"引擎评分{engine_score:.0%}，账号骨架F12={f12_val:.2f}(四无账号)，LLM误判正常已覆盖"
+                elif f15_val >= 0.3:
                     type_id, type_name = 4, "引流广告型"
-                    reasoning = f"引擎评分{engine_score:.0%}，商业引流F15={f15:.2f}，LLM误判正常已覆盖"
+                    reasoning = f"引擎评分{engine_score:.0%}，商业引流F15={f15_val:.2f}，LLM误判正常已覆盖"
                 else:
                     type_id, type_name = 6, "黑产养号型"
                     reasoning = f"引擎评分{engine_score:.0%}（极高），LLM误判正常已强制覆盖"
 
                 enhanced["engine_score_raw"] = engine_score
-                enhanced["suspicious_score"] = engine_score  # 直接使用引擎分
+                enhanced["suspicious_score"] = engine_score  # 直接使用引擎分(0-1)
                 enhanced["llm_type_id"] = type_id
                 enhanced["llm_type_name"] = type_name
                 enhanced["llm_confidence"] = 90

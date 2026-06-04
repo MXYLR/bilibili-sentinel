@@ -246,6 +246,21 @@
                     {% endif %}
                 </div>
             </div>
+            <!-- 分组筛选按钮 -->
+            <div class="card-header py-2 d-flex align-items-center gap-2" style="background:#f8f9fa; border-bottom:1px solid #dee2e6">
+                <button class="btn btn-sm btn-outline-secondary active" id="btn-filter-all" onclick="filterUsers('all')">
+                    全部 <span class="badge bg-secondary ms-1">{{ report.top_suspects|length }}</span>
+                </button>
+                <button class="btn btn-sm btn-outline-success" id="btn-filter-hasdata" onclick="filterUsers('hasdata')">
+                    <i class="bi bi-check-circle"></i> 已采集 <span class="badge bg-success ms-1" id="cnt-hasdata">0</span>
+                </button>
+                <button class="btn btn-sm btn-outline-warning" id="btn-filter-nodata" onclick="filterUsers('nodata')">
+                    <i class="bi bi-exclamation-triangle"></i> 未采集 <span class="badge bg-warning text-dark ms-1" id="cnt-nodata">0</span>
+                </button>
+                <button class="btn btn-sm btn-warning ms-auto" id="btn-collect-nodata" onclick="collectAllNoData()" style="display:none">
+                    <i class="bi bi-download"></i> 一键采集全部未采集
+                </button>
+            </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
@@ -267,7 +282,7 @@
                         {% set no_data_users = report.top_suspects | selectattr('_has_data', 'equalto', false) | list %}
                         <!-- 未采集用户: 高亮表头 + 一键采集按钮 -->
                         {% if no_data_users %}
-                        <tbody style="border-top: 3px solid #fd7e14">
+                        <tbody id="tbody-nodata" style="border-top: 3px solid #fd7e14">
                             <tr class="table-warning">
                                 <td colspan="9" class="text-center fw-bold">
                                     ⚠️ 未采集用户数据 ({{ no_data_users|length }}人)
@@ -300,7 +315,7 @@
                         </tbody>
                         {% endif %}
                         <!-- 已采集用户 -->
-                        <tbody>
+                        <tbody id="tbody-hasdata">
                             {% for user in has_data_users %}
                             <tr class="{% if user.risk_level == 'high' %}table-danger{% elif user.risk_level == 'medium' %}table-warning{% endif %}"
                                 data-mid="{{ user.mid }}" data-idx="{{ loop.index0 }}">
@@ -2024,6 +2039,60 @@ async function collectUsersWithoutData(mids) {
     } catch (err) {
         showToast('请求失败: ' + err.message, 'error');
     }
+
+}
+
+// ★ 分组筛选按钮
+function filterUsers(mode) {
+    document.querySelectorAll('#btn-filter-all, #btn-filter-hasdata, #btn-filter-nodata').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-filter-' + mode).classList.add('active');
+    const tbodyNoData = document.getElementById('tbody-nodata');
+    const tbodyHasData = document.getElementById('tbody-hasdata');
+    const btnCollect = document.getElementById('btn-collect-nodata');
+    if (mode === 'all') {
+        if (tbodyNoData) tbodyNoData.style.display = '';
+        if (tbodyHasData) tbodyHasData.style.display = '';
+        if (btnCollect) btnCollect.style.display = '';
+    } else if (mode === 'hasdata') {
+        if (tbodyNoData) tbodyNoData.style.display = 'none';
+        if (tbodyHasData) tbodyHasData.style.display = '';
+        if (btnCollect) btnCollect.style.display = 'none';
+    } else if (mode === 'nodata') {
+        if (tbodyNoData) tbodyNoData.style.display = '';
+        if (tbodyHasData) tbodyHasData.style.display = 'none';
+        if (btnCollect) btnCollect.style.display = '';
+    }
+}
+
+// ★ 一键采集所有未采集用户
+async function collectAllNoData() {
+    const rows = document.querySelectorAll('#tbody-nodata tr[data-mid]');
+    const mids = [];
+    rows.forEach(r => { const m = r.getAttribute('data-mid'); if (m) mids.push(parseInt(m)); });
+    if (mids.length === 0) { showToast('没有需要采集的用户', 'warning'); return; }
+    showToast(`正在注入 ${mids.length} 个用户种子...`, 'info');
+    try {
+        const resp = await fetch('/api/user/batch/refresh', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mids: mids})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            showToast(data.message || '注入失败', 'error');
+        }
+    } catch (err) {
+        showToast('请求失败: ' + err.message, 'error');
+    }
+}
+
+// ★ 按 MID 查找用户并展示详情
+function showUserDetailByMid(mid) {
+    const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+    if (idx >= 0) showUserDetail(idx);
 }
 
 // ★ 刷新单个用户数据（注入种子 + 启动爬虫 + 等待文件生成后自动更新弹窗）
@@ -2179,6 +2248,16 @@ function addUPToWaterArmy(mid, uname) {
         showToast('网络错误', 'error');
     });
 }
+
+// ★ 页面加载后更新分组计数
+document.addEventListener('DOMContentLoaded', () => {
+    const nodataRows = document.querySelectorAll('#tbody-nodata tr[data-mid]');
+    const hasdataRows = document.querySelectorAll('#tbody-hasdata tr[data-mid]');
+    const nodataBadge = document.getElementById('cnt-nodata');
+    const hasdataBadge = document.getElementById('cnt-hasdata');
+    if (nodataBadge) nodataBadge.textContent = nodataRows.length;
+    if (hasdataBadge) hasdataBadge.textContent = hasdataRows.length;
+});
 
 // ============================================================
 

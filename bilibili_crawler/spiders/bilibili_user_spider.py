@@ -74,7 +74,7 @@ class BilibiliUserSpider(scrapy.Spider):
         "DOWNLOAD_TIMEOUT": 30,
         "COOKIES_ENABLED": True,
         "SCHEDULER": "scrapy.core.scheduler.Scheduler",       # ★ 禁用scrapy_redis调度器, 用自己的start_requests
-        "DUPEFILTER_CLASS": "scrapy.dupefilter.RFPDupeFilter", # ★ 不用Redis去重
+        "DUPEFILTER_CLASS": "scrapy.dupefilters.RFPDupeFilter", # ★ 不用Redis去重
     }
 
     def __init__(self, *args, **kwargs):

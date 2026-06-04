@@ -236,21 +236,58 @@ class BilibiliUserSpider(scrapy.Spider):
         )
 
     def _fetch_user_info_playwright(self, mid, meta):
-        """★ 兜底: 请求 B站空间页 HTML, 从 __INITIAL_STATE__ 提取用户数据。"""
-        page_url = f"https://space.bilibili.com/{mid}"
-        logger.info(f"[mid={mid}] curl_cffi: fetching {page_url}")
-        # 走 Scrapy Request（异步），避免阻塞事件循环
+        """★ 兜底: 多层回退 (card API → 空间页 HTML)。"""
+        card_url = f"https://api.bilibili.com/x/web-interface/card?mid={mid}"
+        logger.info(f"[mid={mid}] FallbackA: card API")
         yield scrapy.Request(
-            page_url,
-            callback=self._parse_space_page,
+            card_url,
+            callback=self._parse_card_api,
             meta={"mid": mid, "user_meta": meta},
-            errback=self._handle_error,
+            errback=lambda f: self._space_page_fallback(f.request.meta["mid"], f.request.meta["user_meta"]),
             dont_filter=True,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36",
-                "Referer": "https://www.bilibili.com/",
-            },
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36", "Referer": f"https://space.bilibili.com/{mid}"},
         )
+
+    def _space_page_fallback(self, mid, meta):
+        """card API 失败 → 空间页 HTML。"""
+        page_url = f"https://space.bilibili.com/{mid}"
+        logger.info(f"[mid={mid}] FallbackB: space page")
+        yield scrapy.Request(
+            page_url, callback=self._parse_space_page,
+            meta={"mid": mid, "user_meta": meta}, errback=self._handle_error, dont_filter=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0", "Referer": "https://www.bilibili.com/"},
+        )
+
+    def _parse_card_api(self, response):
+        """解析 card API 响应。"""
+        mid = response.meta["mid"]
+        meta = response.meta["user_meta"]
+        import json as _json
+        try:
+            data = _json.loads(response.text)
+            if data.get("code") != 0:
+                logger.warning(f"[mid={mid}] card API code={data.get('code')}")
+                yield from self._space_page_fallback(mid, meta)
+                return
+            card = data.get("data", {}).get("card", {})
+            if not card or not card.get("name"):
+                logger.warning(f"[mid={mid}] card API empty")
+                self._fetch_next_user()
+                return
+            user_data = {
+                "mid": mid, "name": card.get("name", ""), "face": card.get("face", ""),
+                "sign": card.get("sign", ""), "level": card.get("level_info", {}).get("current_level", 0),
+                "sex": card.get("sex", ""), "birthday": "", "archive_count": int(card.get("archives", 0)),
+                "follower": int(card.get("fans", 0)), "following": 0,
+                "vip": {"status": card.get("vip", {}).get("status", 0)},
+                "official": card.get("official", {}), "post_count": 0,
+                "upload_count": int(card.get("archives", 0)),
+            }
+            logger.info(f"[mid={mid}] card API OK: name={user_data['name']} Lv{user_data['level']}")
+            yield from self._build_user_info_item(mid, user_data, meta)
+        except Exception as e:
+            logger.warning(f"[mid={mid}] card API parse: {e}")
+            self._fetch_next_user()
 
     def _parse_space_page(self, response):
         """解析 B站空间页 HTML, 提取 __INITIAL_STATE__ JSON。"""

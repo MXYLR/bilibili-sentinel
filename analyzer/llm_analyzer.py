@@ -49,24 +49,55 @@ PROVIDER_DEFAULTS = {
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_MODEL = "deepseek-v4-pro"
 
-def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: int) -> str:
-    """LLM 未提供推理时生成默认推理。"""
-    if reasoning and len(reasoning.strip()) > 5:
+def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: int,
+                      features: dict = None, engine_score: float = 0.0) -> str:
+    """LLM 未提供推理时生成详细默认推理（≥200字）。"""
+    if reasoning and len(reasoning.strip()) > 10:
         return reasoning
-    if type_id == 0:
-        return "未检测到水军特征（无头像、ID正常、有动态/投稿记录等）"
-    type_labels = {
-        1: "评论内容相似度极高，疑似模板化批量刷评",
-        2: "评论情绪极端化，刻意煽动或带节奏",
-        3: "评论内容逻辑怪异，语句不通，疑似AI生成",
-        4: "评论含联系方式或推广信息，疑似引流广告",
-        5: "行为模式与其他账号高度一致，疑似批量操控",
-        6: "无头像+ID乱码+无动态+无投稿，典型黑产养号",
-        7: "评论刻意制造对立，激化矛盾",
-        8: "动态含极端/政治/造谣内容，职业水军",
+
+    features = features or {}
+    f12 = features.get("f12_account_skeleton", 0)
+    f3 = features.get("f3_level_score", 0)
+    f5 = features.get("f5_content_similarity", 0)
+    f6 = features.get("f6_time_burst", 0)
+    f15 = features.get("f15_commercial_spam", 0)
+    f14 = features.get("f14_sensitive_content", 0)
+    f18 = features.get("f18_signature_troll", 0)
+
+    detail_parts = []
+    if f12 >= 0.4:
+        detail_parts.append(f"账号骨架F12={f12:.2f}（{int(f12*5)}/5项命中：无头像/ID乱码/无动态/无投稿/默认签名），为批量注册养号的典型特征")
+    if f3 >= 0.3:
+        detail_parts.append(f"用户等级异常F3={f3:.2f}，低等级+高活跃度符合水军养号模式")
+    if f5 >= 0.3:
+        detail_parts.append(f"内容相似度F5={f5:.2f}，评论与他人高度雷同，模板化刷评迹象明显")
+    if f6 >= 0.3:
+        detail_parts.append(f"时间爆发度F6={f6:.2f}，评论集中爆发，疑似批量操控")
+    if f15 >= 0.2:
+        detail_parts.append(f"商业引流F15={f15:.2f}，评论含推广/联系方式")
+    if f14 >= 0.2:
+        detail_parts.append(f"敏感内容F14={f14:.2f}，历史动态含政治/女拳敏感词")
+    if f18 >= 0.2:
+        detail_parts.append(f"签名引战F18={f18:.2f}，个性签名含挑衅/对立话术")
+
+    if not detail_parts:
+        detail_parts.append(f"引擎综合评分{engine_score:.0%}，特征检测未发现强信号，建议结合人工审核")
+
+    type_desc = {
+        0: "未检测到水军特征，该用户评论行为与正常B站用户无明显差异",
+        1: "评论内容相似度极高，疑似使用模板化文案批量刷评",
+        2: "评论情绪极端化，刻意煽动情绪或引导舆论走向",
+        3: "评论逻辑断裂、语句不通，呈现AI生成的典型特征",
+        4: "评论包含明确的联系方式或推广信息，属于引流广告账号",
+        5: "跨账号行为模式高度一致，时间窗口集中，疑似同一人/组织批量操控",
+        6: "账号骨架为空的批量注册黑产养号账号，无头像/默认名/无投稿/默认签名",
+        7: "评论刻意制造二元对立观点，激化评论区矛盾以提升互动量",
+        8: "历史动态含极端政治/女拳/造谣抹黑内容，属于敏感内容型职业水军",
     }
-    base = type_labels.get(type_id, f"被判定为{type_name}") if type_name else f"被判定为水军类型{type_id}"
-    return f"{base}，置信度{confidence}%"
+
+    desc = type_desc.get(type_id, f"被引擎判定为{type_name}，综合评分{engine_score:.0%}，置信度{confidence}%")
+    detail_str = "；".join(detail_parts)
+    return f"{desc}。详细证据：{detail_str}。LLM置信度{confidence}%，引擎评分{engine_score:.0%}。"
 
 # API Key 加载优先级:
 #   1. 环境变量 (DEEPSEEK_API_KEY 或 OPENAI_API_KEY)
@@ -393,6 +424,8 @@ class LLMAnalyzer:
                     llm_result.get("type_id", 0),
                     llm_result.get("type_name", ""),
                     llm_confidence,
+                    features=u.get("features", {}),
+                    engine_score=engine_score,
                 )
             elif engine_score >= 0.70:
                 # ★ LLM 误判为正常但引擎高分 → 强制引擎判定
@@ -405,13 +438,16 @@ class LLMAnalyzer:
 
                 if f12_val >= 0.4:
                     type_id, type_name = 6, "黑产养号型"
-                    reasoning = f"引擎评分{engine_score:.0%}，账号骨架F12={f12_val:.2f}(四无账号)，LLM误判正常已覆盖"
+                    reasoning = _ensure_reasoning("", type_id, type_name, 90,
+                                                   features=features, engine_score=engine_score)
                 elif f15_val >= 0.3:
                     type_id, type_name = 4, "引流广告型"
-                    reasoning = f"引擎评分{engine_score:.0%}，商业引流F15={f15_val:.2f}，LLM误判正常已覆盖"
+                    reasoning = _ensure_reasoning("", type_id, type_name, 90,
+                                                   features=features, engine_score=engine_score)
                 else:
                     type_id, type_name = 6, "黑产养号型"
-                    reasoning = f"引擎评分{engine_score:.0%}（极高），LLM误判正常已强制覆盖"
+                    reasoning = _ensure_reasoning("", type_id, type_name, 90,
+                                                   features=features, engine_score=engine_score)
 
                 enhanced["engine_score_raw"] = engine_score
                 enhanced["suspicious_score"] = engine_score  # 直接使用引擎分(0-1)

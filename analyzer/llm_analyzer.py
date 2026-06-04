@@ -52,7 +52,7 @@ DEFAULT_MODEL = "deepseek-v4-pro"
 def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: int,
                       features: dict = None, engine_score: float = 0.0) -> str:
     """LLM 未提供推理时生成详细默认推理（≥200字）。"""
-    if reasoning and len(reasoning.strip()) > 10:
+    if reasoning and len(reasoning.strip()) >= 50:
         return reasoning
 
     features = features or {}

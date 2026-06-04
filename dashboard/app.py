@@ -2664,15 +2664,47 @@ def api_delete_category_status(task_id: str):
 
 @app.route("/api/video/<bvid>/refresh", methods=["POST"])
 def api_video_refresh(bvid: str):
-    """刷新单个视频数据：清除去重 + 注入种子 + 启动爬虫 + 重新生成报告。
-
-    用于视频详情页的「刷新数据」按钮。
-    重新抓取当前视频的最新信息和评论。
-    """
+    """★ 一键链式刷新：视频+评论爬虫 → 用户爬虫 → 分析 → LLM初筛。"""
+    # Step1: 启动视频+评论爬虫
     result = spider_mgr.refresh_video(bvid)
-    # 后台线程重新生成报告（基于当前磁盘上的评论数据）
-    threading.Thread(target=_regenerate_report, args=(bvid,), daemon=True).start()
+    if not result.get("success"):
+        return jsonify(result)
+    # Step2: 注入用户种子（评论完成后自动启动用户爬虫）
+    user_info = _auto_start_user_spider()
+    result["user_spider"] = user_info
+    # Step3: 后台线程监控全链条
+    threading.Thread(target=_chain_refresh, args=(bvid,), daemon=True).start()
     return jsonify(result)
+
+
+def _chain_refresh(bvid: str):
+    """后台监控链：评论结束→用户爬虫 用户结束→分析+LLM。"""
+    import time as _time
+    # ---- 等评论爬虫结束 ----
+    logger.info(f"[Chain] {bvid}: 等待评论爬虫结束...")
+    while True:
+        state = spider_mgr._read_state()
+        comment_running = state.get("bilibili_comment", {}).get("status") == "running"
+        if not comment_running:
+            break
+        _time.sleep(3)
+    _time.sleep(2)  # 等文件完全写入
+
+    # ---- 等用户爬虫结束（可能已由后台监控自动启动）----
+    logger.info(f"[Chain] {bvid}: 等待用户爬虫结束...")
+    waited = 0
+    while waited < 600:  # 最多等10分钟
+        state = spider_mgr._read_state()
+        user_alive = state.get("bilibili_user", {}).get("status") == "running"
+        if not user_alive:
+            break
+        _time.sleep(5)
+        waited += 5
+    _time.sleep(2)  # 等文件完全写入
+
+    # ---- 重新生成报告（含LLM）----
+    logger.info(f"[Chain] {bvid}: 开始重新分析+LLM...")
+    _regenerate_report(bvid)
 
 
 def _regenerate_report(bvid: str):

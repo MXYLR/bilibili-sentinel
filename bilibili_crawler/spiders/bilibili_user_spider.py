@@ -299,6 +299,16 @@ class BilibiliUserSpider(scrapy.Spider):
             if data.get("code") != 0:
                 size = len(response.text)
                 if size < 100:
+                    # ★ -352 可能是限流，延迟后重试一次
+                    if data.get("code") == -352 and not meta.get("_card_retried"):
+                        logger.info(f"[mid={mid}] card -352 retry after 3s...")
+                        time.sleep(3)
+                        return scrapy.Request(
+                            f"https://api.bilibili.com/x/web-interface/card?mid={mid}",
+                            callback=self._parse_card_api,
+                            meta={"mid": mid, "_card_retried": True},
+                            dont_filter=True,
+                        )
                     logger.info(f"[mid={mid}] skip (card {size}bytes, not found)")
                     self._fetch_next_user()
                     return

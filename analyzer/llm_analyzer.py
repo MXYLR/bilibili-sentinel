@@ -27,6 +27,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+try:
+    from analyzer.llm_prompts import SYSTEM_PROMPT, build_user_prompt, parse_llm_response
+    from analyzer.aicu_prompts import DEEP_SYSTEM_PROMPT, build_deep_prompt
+    _HAS_PROMPT_MODULES = True
+except ImportError:
+    _HAS_PROMPT_MODULES = False
+
 logger = logging.getLogger(__name__)
 
 # ============================================================

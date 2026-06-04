@@ -85,7 +85,7 @@ class BilibiliUserSpider(scrapy.Spider):
         self._seen_mids = set()
         self._use_playwright = False  # ★ 不触发 Playwright 兜底
         self._412_count = 0
-        logger.info(f"BilibiliUserSpider initialized (Redis db={_REDIS_DB}, key={_REDIS_KEY}, max_idle={MAX_IDLE_TIME}s)")
+        logger.info(f"BilibiliUserSpider v2026-06-04-18:52 initialized (Redis db={_REDIS_DB}, key={_REDIS_KEY}, max_idle={MAX_IDLE_TIME}s)")
 
     @classmethod
     def     from_crawler(cls, crawler, *args, **kwargs):

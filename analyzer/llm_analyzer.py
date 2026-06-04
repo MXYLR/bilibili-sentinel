@@ -56,13 +56,15 @@ def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: 
         return reasoning
 
     features = features or {}
-    f12 = features.get("f12_account_skeleton", 0)
-    f3 = features.get("f3_level_score", 0)
-    f5 = features.get("f5_content_similarity", 0)
-    f6 = features.get("f6_time_burst", 0)
-    f15 = features.get("f15_commercial_spam", 0)
-    f14 = features.get("f14_sensitive_content", 0)
-    f18 = features.get("f18_signature_troll", 0)
+    # ★ 归一化到 0-1（报告路径可能传 0-100 量纲）
+    def _n(v): return v / 100.0 if v > 1.0 else v
+    f12 = _n(features.get("f12_account_skeleton", 0))
+    f3 = _n(features.get("f3_level_score", 0))
+    f5 = _n(features.get("f5_content_similarity", 0))
+    f6 = _n(features.get("f6_time_burst", 0))
+    f15 = _n(features.get("f15_commercial_spam", 0))
+    f14 = _n(features.get("f14_sensitive_content", 0))
+    f18 = _n(features.get("f18_signature_troll", 0))
 
     detail_parts = []
     if f12 >= 0.4:
@@ -85,17 +87,14 @@ def _ensure_reasoning(reasoning: str, type_id: int, type_name: str, confidence: 
 
     type_desc = {
         0: "未检测到水军特征，该用户评论行为与正常B站用户无明显差异",
-        1: "评论内容相似度极高，疑似使用模板化文案批量刷评",
-        2: "评论情绪极端化，刻意煽动情绪或引导舆论走向",
-        3: "评论逻辑断裂、语句不通，呈现AI生成的典型特征",
-        4: "评论包含明确的联系方式或推广信息，属于引流广告账号",
-        5: "跨账号行为模式高度一致，时间窗口集中，疑似同一人/组织批量操控",
-        6: "账号骨架为空的批量注册黑产养号账号，无头像/默认名/无投稿/默认签名",
-        7: "评论刻意制造二元对立观点，激化评论区矛盾以提升互动量",
-        8: "历史动态含极端政治/女拳/造谣抹黑内容，属于敏感内容型职业水军",
     }
+    desc = type_desc.get(type_id)
+    if desc is None:
+        desc = f"被引擎判定为{type_name}，综合评分{engine_score:.0%}，置信度{confidence}%"
 
-    desc = type_desc.get(type_id, f"被引擎判定为{type_name}，综合评分{engine_score:.0%}，置信度{confidence}%")
+    # ★ type_id=0 但引擎高分 → 加注矛盾提示
+    if type_id == 0 and engine_score >= 0.50 and detail_parts:
+        desc = f"LLM判定为正常用户（type 0），但引擎综合评分{engine_score:.0%}显示多个可疑信号，请结合详细证据判断"
     detail_str = "；".join(detail_parts)
     return f"{desc}。详细证据：{detail_str}。LLM置信度{confidence}%，引擎评分{engine_score:.0%}。"
 

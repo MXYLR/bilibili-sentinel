@@ -118,6 +118,7 @@ class BilibiliUserSpider(scrapy.Spider):
             skipped += 1
         if skipped > 0:
             logger.info(f"All {skipped} seeds already collected")
+        logger.info("start_requests done, waiting for seeds (spider_idle will poll)...")
         self._idle_start_time = time.time()
 
     # ================================================================
@@ -616,17 +617,14 @@ def _update_user_post_count(mid, count):
     # ================================================================
 
     def spider_idle(self):
-        """
-        空闲时检查 Redis 是否有新种子。
-        参考 bilibili_comment_spider 的实现。
-        """
-        # 先检查是否还有待处理种子
+        """空闲时检查 Redis 是否有新种子。"""
         mid = self._pop_seed()
         if mid and mid not in self._seen_mids:
             self._seen_mids.add(mid)
             req = self._request_user_info(mid)
             if req:
                 self.crawler.engine.crawl(req)
+                logger.info(f"spider_idle: new seed mid={mid}")
                 raise DontCloseSpider("New user seed found, continue crawling")
 
         # 检查超时

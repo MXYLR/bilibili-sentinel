@@ -3468,6 +3468,7 @@ def api_video_refresh_users(bvid: str):
 def api_user_refresh(mid: int):
     """注入单个用户 MID 到种子队列并启动用户爬虫。"""
     try:
+        import redis
         r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
         r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))
 

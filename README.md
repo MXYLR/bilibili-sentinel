@@ -324,6 +324,98 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 ---
 
+## v2.29 更新 (2026-06-05)
+
+### LLM 分析深度优化与 Bug 修复
+
+#### 1. 修复评论数据丢失导致误判为"正常用户"
+**问题**: LLM 初筛看不到评论数据，因为字段名不匹配
+- `app.py` 单用户分析: `single_user["sample_comments"] = user_comments[:5]`
+- `llm_prompts.py` + `aicu_prompts.py`: 读的是 `user.get("comments", [])`
+- 结果: 评论数据永远传不进 prompt，LLM 看到的是 `(无)`
+
+**修复**: 两处都改为兼容两种字段名
+```python
+# 修复前
+comments = user.get("comments", [])
+
+# 修复后
+comments = user.get("sample_comments") or user.get("comments", [])
+```
+
+#### 2. 修改 Prompt 原则，修复无评论时误判问题
+**问题**: 旧 prompt 原则2: "必须有评论证据才能判水军"
+- 导致 F12=0.4（骨骼账号）+ F14=100（敏感内容）的高风险账号被误判为"正常用户"
+- LLM 返回: "用户无评论数据，仅凭特征值无法判定水军"
+
+**修复**: 删除保守规则，添加"无评论时的判定规则"
+- 原则2: "内容为主，分数为辅" → "内容为王，但非绝对"
+- 新增规则:
+  - F12≥0.6（3/5命中）→ 可判 type6，即使无评论
+  - F14≥0.3 → 可判 type8，即使无评论
+  - F12≥0.4 + F14≥0.3 → 可判 type8（双重证据）
+- 降低 f12 判定阈值: 0.8 → 0.6（3/5命中即可判骨骼号）
+- 添加示例2（无评论）: 展示骨骼+F14 双重证据如何判定为水军
+
+#### 3. Prompt 大幅精简（-59%），减少分析时间
+**问题**: 分析时间太长（110秒），影响用户体验
+
+**修改内容**:
+- **SYSTEM_PROMPT 瘦身**: 1600 → 737 字符（-54%）
+  - 删除 13 维特征的逐条解释
+  - 8 种类型定义压缩为 1 行/类型
+  - 判定流程合并简化
+
+- **build_user_prompt() 重写**:
+  - 特征展示: 13 维 3 行 → 1 行（仅 f≥0.3）
+  - 删除 WATER_ARMY_TYPES 完整描述（SYSTEM_PROMPT 已含）
+  - 用户头部信息合并为 1 行
+
+- **max_tokens 减少**:
+  - `_call_llm` 单用户: 2000 → 600
+  - `_call_deep_llm`: 4000 → 1500
+
+- **同步修改 aicu_prompts.py**:
+  - DEEP_SYSTEM_PROMPT 瘦身: ~1600 → 718 字符（-55%）
+  - build_deep_prompt() 重写: 特征展示压缩为 1 行（仅 f≥0.3）
+
+#### 4. 修复 JSON 解析 Bug（正则修复+日志增强）
+**问题**: "LLM 服务不可用" + confidence=0%，实际是 JSON 解析失败
+
+**根因**:
+- 正则 Bug: 非贪婪 `*?` 在嵌套 JSON 中会停在第一个 `}`，导致截断
+- 字段名不匹配: Prompt 未指定字段名，模型返回任意键名，导致 `dict.get("confidence", 0)` 永远返回 0
+
+**修复**:
+- **parse_llm_response() 重写**（三层解析策略）:
+  1. 直接 `json.loads(text)`
+  2. 提取 ` ```json ... ``` ` 代码块
+  3. 贪婪正则 `r'\{[\s\S]*\}'`（正确处理嵌套 JSON）
+
+- **Prompt 尾部添加格式示例**（使用明确字段名）:
+  ```
+  {"results": [{"mid": 123456, "type_id": 0, "type_name": "正常用户",
+    "confidence": 0, "reasoning": "f12=0.4命中2/5项非四无号..."}]}
+  ```
+
+- **response_format 条件化**:
+  - 仅 OpenAI provider 支持 `json_object`
+  - DeepSeek 可能报错 `unknown variant image_url`
+  - 修复: `if self.provider == "openai": call_kwargs["response_format"] = {"type": "json_object"}`
+
+- **诊断日志增强**:
+  - 添加 info 级别日志: prompt 字符数、响应长度、解析结果数量
+
+#### 5. 前端超时修复
+**问题**: 前端轮询超时 < 后端 API 超时，导致用户看到超时错误但实际分析还在进行
+
+**修复**:
+- LLM 初筛: 60s → 210s
+- AICU 深度: 120s → 360s
+- 批量分析: 300s → 480s
+
+---
+
 ## v2.28 更新 (2026-06-05)
 
 ### AICU 网页评论提取 DOM 选择器修正

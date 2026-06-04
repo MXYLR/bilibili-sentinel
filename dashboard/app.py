@@ -2132,7 +2132,7 @@ def _run_single_llm_bg(bvid, mid, report, user, analyzer, task_key):
 
         video_info = report.get("video_info", {}) or _load_video_info(bvid) or {}
         _log("info", "调用 LLM API...")
-        result = analyzer.deep_analyze([single_user], comments_data=comments, video_info=video_info, threshold_override=0)
+        result = analyzer.analyze([single_user], comments_data)
 
         enhanced_users = result.get("enhanced_users", [])
         enhanced_by_mid = {u["mid"]: u for u in enhanced_users if u.get("mid")}

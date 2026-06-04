@@ -42,7 +42,7 @@ logger = logging.getLogger("bilibili_comment")
 MAX_COMMENT_PAGES = 100     # 100 x 20 = 2000 条主评论 (v2.2: 从25提升到100)
 MAX_SUB_REPLIES = 5         # 每个主评论最多翻5页子评论 (v2.2: 从3提升到5)
 MAX_COMMENTS_TOTAL = 10000  # 全局上限 (v2.2: 从2000提升到10000)
-MAX_IDLE_TIME = 300         # 空闲超时(s): 等待视频爬虫注入种子的最大时间
+MAX_IDLE_TIME = 60          # 空闲超时(s): 等待视频爬虫注入种子的最大时间
 # v2.2: 双排序模式采集
 ENABLE_DUAL_SORT = True     # 时间排序结束后自动切换热度排序，覆盖更多评论
 SORT_SWITCH_RATIO = 0.3     # 采集量 < 预期量 * 30% 时触发模式切换

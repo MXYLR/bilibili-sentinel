@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.21。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 18 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.22。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -17,7 +17,7 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
      `---------+----------+------+-------`                    |
                v                 v                            v
             Redis          fetch_user_posts.py         analyzer/ engine
-        (调度/去重/种子)    (独立curl_cffi采集)      (F1-F18 特征 + LLM 语义)
+        (调度/去重/种子)    (独立curl_cffi采集)      (F1-F8等13维 + LLM)
                |                 |                            |
                v                 v                            v
          store/ (JSON)   data/users/*_posts.json    AICU (用户历史回溯
@@ -49,7 +49,7 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 无需手动干预，Flask 终端实时显示 `[Chain]` 进度。
 
 ### 水军检测
-- **18 维特征评分引擎 (F1-F18)**: 覆盖账号身份、行为模式、内容质量、空间画像四大维度
+- **13 维特征评分引擎 (F1-F8/F12/F14-F16/F18)**: 覆盖账号身份、行为模式、内容质量、空间画像四大维度。v2.22 移除 5 个零活性特征（f9批量注册/f10互动圈子/f11VIP异常/f13转发抽奖/f17自评相似）
 - **LLM 语义分析**: 多 Provider 支持（DeepSeek V4 / OpenAI GPT-4o / 自定义端点），异步后台执行 + 前端轮询进度，支持 Modal 阈值调节。Prompt 含明确规则：无头像+ID乱码+无动态+无投稿 → 直接判定黑产养号型 confidence≥90
 - **AICU 深度分析**: 对高风险用户回溯历史评论/弹幕/动态，三次融合评分（引擎 50% + LLM 25% + 深度 25%），同样支持 Modal 阈值调节
 - **8 种水军类型识别**: 模板刷评 / 情绪引导 / AI 生成 / 引流广告 / 批量操控 / 黑产养号 / 对立引战 / 敏感内容
@@ -191,7 +191,7 @@ scrapy crawl bilibili_comment
 ```
 bilibili-sentinel/
 ├── analyzer/                  # 水军分析引擎
-│   ├── feature_extractor.py   #   F1-F18 特征提取
+│   ├── feature_extractor.py   #   F1-F8/F12/F14-F16/F18 13维特征提取
 │   ├── scorer.py              #   加权评分器
 │   ├── llm_analyzer.py        #   LLM 语义分析核心
 │   ├── llm_prompts.py         #   LLM Prompt 构造

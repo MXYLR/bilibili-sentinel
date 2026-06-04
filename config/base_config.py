@@ -112,33 +112,20 @@ COOKIE_FILE = os.path.join(DATA_DIR, "cookies.json")
 #  水军检测权重 (可调)
 # ============================================================
 DEFAULT_WEIGHTS = {
-    # --- 核心身份特征 (v2.17: 死特征权重归零，活特征加强) ---
-    "f1_account_age":         0.08,  # 账号年龄: MID号段推算兜底 (0.06→0.08)
-    "f2_follow_ratio":        0.06,  # 粉丝/关注比: 97%活性 → 加重 (0.01→0.06)
-    "f3_level_score":         0.13,  # 用户等级: 15%活性, 强信号 (0.09→0.13)
-    "f4_avatar_verify":       0.08,  # 头像/认证: 100%覆盖 (0.05→0.08)
-    "f5_content_similarity":  0.11,  # 内容相似度: 23%触发率 (0.08→0.11)
-    "f6_time_burst":          0.11,  # 时间爆发: 23%触发率 (0.08→0.11)
-    "f7_sentiment_extreme":   0.02,  # 情感极端: 极低触发 (0.01→0.02)
-    "f8_like_ratio":          0.06,  # 赞评比: 83%覆盖 (0.04→0.06)
-
-    # --- 低 / 零活性 (数据源缺失, 保留最低权重) ---
-    "f9_registration_batch":  0.00,  # 批量注册: 💀 0/989 (需birthday数据)
-    "f10_interaction_ring":   0.00,  # 互动圈子: 💀 0/989 (需@提及)
-    "f11_vip_anomaly":        0.00,  # VIP异常: 💀 0/989 (需VIP数据)
-
-    # --- 账号空间画像 (v2.17: 核心特征大幅加强) ---
-    "f12_account_skeleton":   0.23,  # 账号骨架: MVP特征 (0.15→0.23)
-    "f13_lottery_repost":     0.00,  # 转发模式: 💀 (需user_posts数据)
-    "f14_sensitive_content":  0.03,  # 敏感内容: 💀 (需user_posts数据, 保留硬加成)
-    "f15_commercial_spam":    0.04,  # 商业引流: 0.5%触发 (0.10→0.04)
-
-    # --- v2.10 CleanX 行为分析 ---
-    "f16_time_regularity":    0.02,  # 时间规律: 1%触发 (0.04→0.02)
-    "f17_self_similarity":    0.00,  # 自评相似: 💀 (需≥3评论/用户)
-
-    # --- v2.16 签名引战 ---
-    "f18_signature_troll":    0.03,  # 签名引战: 0.1%触发 (0.05→0.03)
+    # --- 核心身份特征 (v2.18: 13维, 删除5个零活性特征) ---
+    "f1_account_age":         0.08,  # 账号年龄: MID号段推算兜底
+    "f2_follow_ratio":        0.06,  # 粉丝/关注比
+    "f3_level_score":         0.13,  # 用户等级: 低等级+高活跃→可疑
+    "f4_avatar_verify":       0.08,  # 头像/认证: 双无账号
+    "f5_content_similarity":  0.11,  # 内容相似度: 与他人雷同
+    "f6_time_burst":          0.11,  # 时间爆发: 集中刷评
+    "f7_sentiment_extreme":   0.02,  # 情感极端
+    "f8_like_ratio":          0.06,  # 赞评比: 零赞=无人认同
+    "f12_account_skeleton":   0.23,  # 账号骨架: MVP特征(五维检测)
+    "f14_sensitive_content":  0.03,  # 敏感内容: 保留硬加成触发
+    "f15_commercial_spam":    0.04,  # 商业引流
+    "f16_time_regularity":    0.02,  # 时间规律性
+    "f18_signature_troll":    0.03,  # 签名引战
 }
 
 # 风险等级阈值 (v2.16: HIGH 70→60, 更积极捕获水军)

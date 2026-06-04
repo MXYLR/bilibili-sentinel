@@ -48,16 +48,6 @@ class FeatureExtractor:
         "别信", "骗人", "资本", "境外势力", "1450", "网军",
     }
 
-    # ---- F13 转发抽奖/投票关键词 (v2.17 扩展) ----
-    _LOTTERY_KW = {
-        "抽奖", "转发抽奖", "送", "roll", "揪", "抽", "关注+",
-        "三连", "一键三连", "白嫖", "福利", "粉丝福利",
-    }
-    _VOTE_KW = {
-        "投票", "投一票", "打榜", "打投", "助力", "拉票",
-        "pick", "你最", "请投票", "帮投", "每日一票",
-    }
-
     # ---- F18 签名引战关键词库 (v2.16) ----
     # 分类一: 直接挑衅 — 向点击主页的人宣战
     _SIGN_TROLL_DIRECT_KW = {
@@ -146,17 +136,12 @@ class FeatureExtractor:
             features["f6_time_burst"] = self._f6_time_burst(mid)
             features["f7_sentiment_extreme"] = self._f7_sentiment_extreme(user_comms)
             features["f8_like_ratio"] = self._f8_like_ratio(user_comms)
-            features["f9_registration_batch"] = self._f9_registration_batch(mid)
-            features["f10_interaction_ring"] = self._f10_interaction_ring(mid, user_comms)
-            features["f11_vip_anomaly"] = self._f11_vip_anomaly(mid, user_comms)
 
             # ---- v2.1 新增: 账号空间画像 ----
             features["f12_account_skeleton"] = self._f12_account_skeleton(mid, user_comms)
-            features["f13_lottery_repost"] = self._f13_lottery_repost(mid)
             features["f14_sensitive_content"] = self._f14_sensitive_content(mid)
             features["f15_commercial_spam"] = self._f15_commercial_spam(user_comms)  # v2.8
             features["f16_time_regularity"] = self._f16_time_regularity(user_comms)  # v2.10
-            features["f17_self_similarity"] = self._f17_self_similarity(user_comms)  # v2.10
             features["f18_signature_troll"] = self._f18_signature_troll(mid)         # v2.16
 
             # Gather sample comments
@@ -383,117 +368,6 @@ class FeatureExtractor:
         return max(0, 1 - avg_likes / 10)
 
     # ================================================================
-    #  Feature 9: Registration Batch
-    # ================================================================
-
-    def _f9_registration_batch(self, mid: int) -> float:
-        """
-        特征9: 批量注册。
-
-        来自 TimeAnalyzer 的注册日期集中度。
-        """
-        return self._batch_scores.get(int(mid), 0.0)
-
-    # ================================================================
-    #  Feature 10: Interaction Ring
-    # ================================================================
-
-    _MENTION_RE = re.compile(r'@(.+?)(?:\s|$|:)')
-
-    def _f10_interaction_ring(self, mid: int, user_comms: list) -> float:
-        """
-        特征10: 互动小圈子检测。
-
-        子评论中反复 @ 相同几个账号 → 互相刷量嫌疑。
-        """
-        mentioned = defaultdict(int)
-
-        for c in user_comms:
-            content = c.get("content", "")
-            mentions = self._MENTION_RE.findall(content)
-            for m in mentions:
-                mentioned[m] += 1
-
-        if not mentioned:
-            return 0.0
-
-        # Check concentration: if mentions are concentrated on few targets
-        mention_counts = sorted(mentioned.values(), reverse=True)
-        total = sum(mention_counts)
-        if total < 3:
-            return 0.0
-
-        # Top-2 targets' share
-        top2 = sum(mention_counts[:2])
-        concentration = top2 / total
-
-        # 80%+ mentions on same 2 targets → suspicious
-        if concentration > 0.8:
-            return 0.8
-        if concentration > 0.6:
-            return 0.5
-        if concentration > 0.4:
-            return 0.2
-        return 0.0
-
-    # ================================================================
-    #  Feature 11: VIP Anomaly (大会员异常)
-    # ================================================================
-
-    def _f11_vip_anomaly(self, mid: int, user_comms: list) -> float:
-        """
-        特征11: 大会员异常。
-
-        设计意图:
-          当前 F4 已将 VIP 移除——大会员不再被视为"正常用户"证据。
-          本特征专门捕捉"买大会员做伪装"的水军模式。
-
-        判断逻辑:
-          1. 无大会员 → 0.0（不在此特征扣分，由其他特征覆盖）
-          2. 高等级(Lv4+) + 大会员 → 0.0（真正常付费用户）
-          3. 低等级 + 大会员 + 模板化/爆发评论 → 0.6~1.0
-
-        VIP 类型区分:
-          vip_status=1 (月度) → 成本25元，水军最爱 → 乘数1.0
-          vip_status=2 (年度) → 成本较高 → 乘数0.7
-        """
-        user = self.users.get(mid, {})
-        if not user:
-            return 0.0
-
-        vip_status = user.get("vip_status", 0)
-
-        # 无大会员 → 不在本特征评分
-        if vip_status == 0:
-            return 0.0
-
-        level = user_comms[0].get("level", 3) if user_comms else 3
-
-        # 高等级 + 大会员 = 正常付费用户，不扣分
-        if level >= 4:
-            return 0.0
-
-        # --- 低等级 + 大会员 → 需要结合其他信号判断 ---
-
-        # 等级反比基础分：等级越低 + 有大会员 → 越像买来的号
-        level_score_map = {0: 0.9, 1: 0.7, 2: 0.5, 3: 0.3}
-        base = level_score_map.get(level, 0.2)
-
-        # 获取其他可疑信号（复用已有特征方法）
-        sim_score = self._f5_content_similarity(mid)
-        burst_score = self._f6_time_burst(mid)
-
-        # 内容/行为越可疑，VIP 作为伪装的嫌疑越大
-        suspicious_amplifier = max(sim_score, burst_score)
-
-        # 月费大会员比年费更像水军伪装（成本低，可批量）
-        vip_type_multiplier = 1.0 if vip_status == 1 else 0.7
-
-        vip_anomaly = base * (1.0 + suspicious_amplifier) * vip_type_multiplier
-
-        return min(1.0, vip_anomaly)
-
-    # ================================================================
     #  Helper: Garbled Name Detection
     # ================================================================
 
@@ -622,98 +496,6 @@ class FeatureExtractor:
             score += 0.20
 
         return score
-
-    # ================================================================
-    #  Feature 13: Lottery Repost (转发抽奖检测)
-    # ================================================================
-
-    def _f13_lottery_repost(self, mid: int) -> float:
-        """
-        特征13: 转发模式检测（转发动态/转发抽奖/转发投票）。
-
-        规则: 动态中转发内容占比越高 + 转发类型越偏水军 → 得分越高。
-        有视频投稿不再直接排除 — 部分水军号会混入少量投稿伪装。
-
-        三级信号:
-          1. 纯转发 (转发比高但无抽奖/投票特征) → 弱信号
-          2. 转发投票 (含打榜/拉票/投票) → 中等信号
-          3. 转发抽奖 (含抽奖/福利) → 强信号（水军号典型特征）
-
-        判定:
-          转发比 > 80% + 抽奖比 > 50% → 0.85 (极高——抽奖号)
-          转发比 > 80% + 投票比 > 50% → 0.65 (高——打投号)
-          转发比 > 80% + 纯转发 > 50%  → 0.40 (中——内容转发工具号)
-          转发比 > 60%                  → 0.50 (中)
-          转发比 > 40%                  → 0.30 (低)
-          其他                           → 0.00
-
-        v2.17: 扩展范围至「转发动态」「转发投票」。
-        v2.16: 移除"有投稿→0.0"硬规则，改为投稿稀释。
-        """
-        user = self.users.get(mid, {})
-
-        # 数据不足
-        posts = self._user_posts.get(mid, [])
-        if not posts or len(posts) < 3:
-            return 0.0
-
-        repost_count = 0
-        lottery_count = 0
-        vote_count = 0
-
-        for post in posts:
-            content = post if isinstance(post, str) else (
-                post.get("content", "") if isinstance(post, dict) else str(post)
-            )
-
-            # 判断是否转发
-            is_repost = False
-            if isinstance(post, dict):
-                is_repost = post.get("is_repost", False)
-                if not is_repost:
-                    is_repost = "转发" in content[:20]
-
-            if is_repost:
-                repost_count += 1
-                # 三级分类: 抽奖 > 投票 > 纯转发
-                if any(kw in content for kw in self._LOTTERY_KW):
-                    lottery_count += 1
-                elif any(kw in content for kw in self._VOTE_KW):
-                    vote_count += 1
-                # else: 纯转发(无特定关键词) — 计入但权重低
-
-        total = len(posts)
-        repost_ratio = repost_count / max(total, 1)
-        lottery_ratio = lottery_count / max(repost_count, 1)
-        vote_ratio = vote_count / max(repost_count, 1)
-        pure_repost_ratio = (repost_count - lottery_count - vote_count) / max(repost_count, 1)
-
-        # 基础分
-        base = 0.0
-        if repost_ratio >= 0.8:
-            if lottery_ratio > 0.5:
-                base = 0.85   # 抽奖号 — 典型水军
-            elif vote_ratio > 0.5:
-                base = 0.65   # 打投号 — 高概率批量操控
-            elif pure_repost_ratio > 0.5:
-                base = 0.40   # 内容转发工具号
-            else:
-                base = 0.30   # 混合型转发
-        elif repost_ratio > 0.6:
-            base = 0.50
-        elif repost_ratio > 0.4:
-            base = 0.30
-        else:
-            return 0.0
-
-        # v2.16: 投稿稀释 (不再直接清零有投稿的账号)
-        uploads = user.get("upload_count", 0)
-        if uploads > 0:
-            # ≤5 投稿 ≈ 不稀释, 10 投稿 ≈ 降 20%, 20+ 投稿 ≈ 降 50%
-            dilution = max(0.50, 1.0 - min(uploads, 20) * 0.025)
-            base *= dilution
-
-        return min(1.0, round(base, 2))
 
     # ================================================================
     #  Feature 14: Sensitive Content (敏感内容检测)
@@ -879,66 +661,6 @@ class FeatureExtractor:
         elif coefficient_of_variation < 0.8:
             return 0.3
         return 0.0
-
-    # ================================================================
-    #  Feature 17: Self-Comment Similarity (自评相似度) — v2.10
-    #  Source: CleanX 机器人判断增强版 — analyzeCommentContent
-    # ================================================================
-
-    def _f17_self_similarity(self, user_comms: list) -> float:
-        """
-        特征17: 自评相似度。
-
-        来自 CleanX 脚本的内容分析:
-        - 真实用户评论内容多样、表达自然
-        - 水军经常复制粘贴同一段话发到不同视频 (模板化发言)
-        - 计算用户自己评论之间的平均相似度
-
-        算法:
-          1. 提取所有评论文本，过滤空/过短内容
-          2. 对所有评论对计算 Levenshtein 比率
-          3. 平均相似度 → 归一化为 0-1 分数
-
-        仅适用于文本长度 ≥ 5 字的内容 (过滤表情/数字回复)。
-        需要 ≥ 3 条有效评论 (否则无法判断模式)。
-        """
-        if len(user_comms) < 3:
-            return 0.0
-
-        # Filter: only keep substantial comments (≥ 5 chars)
-        contents = [
-            c.get("content", "").strip()
-            for c in user_comms
-            if c.get("content", "").strip() and len(c.get("content", "").strip()) >= 5
-        ]
-
-        if len(contents) < 3:
-            return 0.0
-
-        # Pairwise Levenshtein ratio
-        total_sim = 0.0
-        pair_count = 0
-
-        for i in range(len(contents)):
-            for j in range(i + 1, len(contents)):
-                ratio = self._levenshtein_ratio(contents[i], contents[j])
-                total_sim += ratio
-                pair_count += 1
-
-        if pair_count == 0:
-            return 0.0
-
-        avg_sim = total_sim / pair_count
-
-        # High self-similarity = more bot-like
-        # avg_sim ≤ 0.3 → 0.0 (normal diversity)
-        # avg_sim ≥ 0.8 → 1.0 (obvious copypasta)
-        if avg_sim < 0.3:
-            return 0.0
-        elif avg_sim > 0.8:
-            return 1.0
-        else:
-            return (avg_sim - 0.3) / 0.5  # Linear map 0.3→0.0, 0.8→1.0
 
     # ================================================================
     #  Feature 18: Signature Troll Detection (v2.16)

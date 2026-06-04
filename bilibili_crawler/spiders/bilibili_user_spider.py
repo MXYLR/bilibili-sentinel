@@ -243,9 +243,23 @@ class BilibiliUserSpider(scrapy.Spider):
             card_url,
             callback=self._parse_card_api,
             meta={"mid": mid, "user_meta": meta},
-            errback=lambda f: self._space_page_fallback(f.request.meta["mid"], f.request.meta["user_meta"]),
+            errback=self._card_api_fallback,
             dont_filter=True,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36", "Referer": f"https://space.bilibili.com/{mid}"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0", "Referer": f"https://space.bilibili.com/{mid}"},
+        )
+
+    def _card_api_fallback(self, failure):
+        """card API errback → 空间页 HTML。"""
+        request = failure.request
+        mid = request.meta.get("mid")
+        meta = request.meta.get("user_meta", {})
+        logger.warning(f"[mid={mid}] card API errback: {failure.value}")
+        page_url = f"https://space.bilibili.com/{mid}"
+        logger.info(f"[mid={mid}] FallbackB: space page")
+        yield scrapy.Request(
+            page_url, callback=self._parse_space_page,
+            meta={"mid": mid, "user_meta": meta}, errback=self._handle_error, dont_filter=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0", "Referer": "https://www.bilibili.com/"},
         )
 
     def _space_page_fallback(self, mid, meta):

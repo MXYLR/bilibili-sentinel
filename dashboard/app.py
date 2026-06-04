@@ -3324,8 +3324,12 @@ def api_aicu_test():
 
 @app.route("/api/crawler/status")
 def api_crawler_status():
+    global _user_spider_auto_started
     data = spider_mgr.get_status()
-    data["_user_auto_queued"] = _comment_finished_trigger_user  # ★ 附加标记
+    data["_user_auto_queued"] = _comment_finished_trigger_user  # 等待触发
+    data["_user_auto_started"] = _user_spider_auto_started       # 已自动启动（前端消费后清零）
+    if _user_spider_auto_started:
+        _user_spider_auto_started = False  # ★ 消费后清零，避免重复提示
     return jsonify({"success": True, "data": data})
 
 
@@ -3549,36 +3553,27 @@ def _build_raw_profile_line(user_data: dict) -> str:
 
 
 def _auto_start_user_spider() -> dict:
-    """注入用户种子 + 如果未运行则启动用户爬虫。"""
+    """注入用户种子，标记等待评论爬虫完成后自动启动。"""
     try:
-        # 注入种子
-        inject_result = spider_mgr.inject_seeds("rescan_users")
-        injected = inject_result.get("injected", 0)
-
-        # 启动用户爬虫（如果未运行）
-        state = spider_mgr._read_state()
-        user_running = state.get("bilibili_user", {}).get("status") == "running"
-
-        if user_running:
-            return {"success": True, "injected": injected, "started": False,
-                    "message": f"用户爬虫已在运行，已注入 {injected} 个种子"}
-
-        start_result = spider_mgr.start_spider("bilibili_user")
-        started = start_result.get("success", False)
-        return {"success": True, "injected": injected, "started": started,
-                "pid": start_result.get("pid"),
-                "message": f"已注入 {injected} 个种子，" + ("用户爬虫已启动" if started else "用户爬虫启动失败")}
+        result = spider_mgr.inject_seeds("rescan_users")
+        injected = result.get("injected", 0)
+        # ★ 标记：评论爬虫完成后应触发用户爬虫
+        global _comment_finished_trigger_user
+        _comment_finished_trigger_user = True
+        return {"success": True, "injected": injected,
+                "message": f"已注入 {injected} 个用户种子，等待评论爬虫完成后自动启动用户爬虫"}
     except Exception as e:
-        return {"success": False, "message": f"自动联动失败: {e}"}
+        return {"success": False, "message": f"注入失败: {e}"}
 
 
 # ★ 后台监控：评论爬虫完成后自动启动用户爬虫
 _comment_finished_trigger_user = False
 _last_comment_running = False
+_user_spider_auto_started = False  # ★ 前端通知标记
 
 def _check_comment_to_user() -> None:
     """每秒检查一次：如果评论爬虫从运行→停止，自动启动用户爬虫。"""
-    global _comment_finished_trigger_user, _last_comment_running
+    global _comment_finished_trigger_user, _last_comment_running, _user_spider_auto_started
     import time as _time
     while True:
         try:
@@ -3588,16 +3583,17 @@ def _check_comment_to_user() -> None:
 
             if _last_comment_running and not comment_running and _comment_finished_trigger_user and not user_running:
                 logger.info("评论爬虫已完成，自动启动用户爬虫...")
-                spider_mgr.inject_seeds("rescan_users")  # 再补充一次种子
+                spider_mgr.inject_seeds("rescan_users")
                 result = spider_mgr.start_spider("bilibili_user")
                 if result.get("success"):
                     logger.info(f"用户爬虫已自动启动 (PID={result.get('pid')})")
+                    _user_spider_auto_started = True  # ★ 通知前端
                 _comment_finished_trigger_user = False
 
             _last_comment_running = comment_running
         except Exception:
             pass
-        _time.sleep(2)  # 每2秒检查一次
+        _time.sleep(2)
 
 
 @app.route("/api/crawler/stop-all", methods=["POST"])

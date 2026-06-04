@@ -362,6 +362,16 @@ function refresh() {
         const rOk = document.getElementById('redis-ok');
         rOk.textContent = q.redis_ok ? 'Redis: 正常' : ('Redis: '+(q.error||'异常'));
         rOk.className = 'badge ' + (q.redis_ok ? 'bg-success' : 'bg-danger');
+        // ★ 用户爬虫自动启动通知
+        if (s._user_auto_started) {
+            showToast('评论爬虫已完成，用户爬虫已自动启动', 'success');
+        }
+        if (s._user_auto_queued) {
+            const p = document.getElementById('login-panel');
+            if (p && !p.querySelector('.auto-queue-badge')) {
+                p.insertAdjacentHTML('beforeend', '<br><span class="auto-queue-badge badge bg-info mt-1">⏳ 评论完成后自动启动用户爬虫</span>');
+            }
+        }
     }).catch(()=>{});
 }
 

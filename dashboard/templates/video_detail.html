@@ -1439,8 +1439,8 @@ async function startDeepAnalyze() {
                     console.warn('deep-analyze poll error:', pollErr);
                 }
             }, 1000);
-            // 超时保护 5分钟
-            setTimeout(() => { clearInterval(timer); reject(new Error('分析超时(5分钟)')); }, 300000);
+            // 超时保护 8分钟
+            setTimeout(() => { clearInterval(timer); reject(new Error('分析超时(8分钟)')); }, 480000);
         });
 
         document.getElementById('deep-loading-box').classList.add('d-none');
@@ -1513,7 +1513,7 @@ async function runLLMAnalyzeInModal(mid) {
                     else if (st.status === 'error') { clearInterval(timer); reject(new Error(st.error || 'LLM异常')); }
                 } catch (pollErr) {}
             }, 500);
-            setTimeout(() => { clearInterval(timer); reject(new Error('超时(1分钟)')); }, 60000);
+            setTimeout(() => { clearInterval(timer); reject(new Error('超时(3.5分钟)')); }, 210000);
         });
 
         // 3. 刷新弹窗
@@ -1576,7 +1576,7 @@ async function runAICUAnalyzeInModal(mid) {
                     else if (s.status === 'error') { clearInterval(timer); reject(new Error(s.error || '后台异常')); }
                 } catch (pollErr) {}
             }, 500);
-            setTimeout(() => { clearInterval(timer); reject(new Error('超时(2分钟)')); }, 120000);
+            setTimeout(() => { clearInterval(timer); reject(new Error('超时(6分钟)')); }, 360000);
         });
 
         // 3. 分析完成

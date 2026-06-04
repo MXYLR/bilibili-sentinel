@@ -276,7 +276,7 @@ class BilibiliUserSpider(scrapy.Spider):
     def _parse_card_api(self, response):
         """解析 card API 响应。"""
         mid = response.meta["mid"]
-        meta = response.meta["user_meta"]
+        meta = response.meta.get("user_meta", response.meta)  # 兼容两种meta结构
         import json as _json
         try:
             data = _json.loads(response.text)
@@ -307,7 +307,7 @@ class BilibiliUserSpider(scrapy.Spider):
     def _parse_space_page(self, response):
         """解析 B站空间页 HTML, 提取 __INITIAL_STATE__ JSON。"""
         mid = response.meta["mid"]
-        meta = response.meta["user_meta"]
+        meta = response.meta.get("user_meta", response.meta)
         import re
         data = {}
         try:

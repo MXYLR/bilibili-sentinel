@@ -180,7 +180,8 @@ class BilibiliUserSpider(scrapy.Spider):
     def parse_user_info(self, response):
         """解析 /x/space/wbi/acc/info 响应，产出 UserInfoItem。"""
         mid = response.meta["mid"]
-        result = parse_bilibili_response(response)
+        import json as _json
+        result = parse_bilibili_response(_json.loads(response.text))
 
         if result is None:
             logger.warning(f"[mid={mid}] User info API unavailable, falling back to Playwright")

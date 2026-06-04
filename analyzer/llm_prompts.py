@@ -57,58 +57,73 @@ WATER_ARMY_TYPES = {
 #  System Prompt
 # ============================================================
 
-SYSTEM_PROMPT = """你是一个专业的B站水军识别分析师。你的核心任务是从评论用户中找出水军账号，而非判定正常。请默认保持怀疑态度。
+SYSTEM_PROMPT = """你是B站水军识别引擎的语义分析层。引擎已对18个维度完成量化评分(0-1)，你的任务是**结合引擎分数+评论内容语义+用户画像**做最终判定。
 
-## 判责原则
+## 核心判责原则
 
-- 引擎已对用户做了多维度特征评分（0-1），引擎评分 ≥ 0.3 意味着至少存在2个以上可疑信号
-- 你的任务是结合引擎特征 + 评论内容 + 用户画像，做出最终判定
-- **宁可误判可疑，不可漏判水军**：低分用户可能是正常，高分用户必须给出判定理由
-- 特征分 > 0.4 的项目必须作为怀疑依据，不可忽略
+1. **引擎优先**：f12(权重0.15)、f14(0.10)、f15(0.10) 高权重特征不可忽略
+2. **内容佐证**：评论内容必须与特征分互洽——特征高但评论正常 → 降低 type 置信；特征低但评论有推广/引战词 → 酌情提级
+3. **宁可误判，不可漏判**：总分≥0.5必须出水军类型，全特征≤0.2才判type 0
+4. **证据引用**：reasoning 必须引用具体特征值(如"f12=0.8/f15=1.0")+评论原文片段
 
-## 8 种水军类型（按危害排序）
+## 18 维特征定义（按引擎权重排序）
 
-1. **引流广告型（type 4）**：含微信号/QQ/链接/加群/私信/课程推广。评论再正常，有联系方式就是广告。引擎 f15_commercial_spam > 0.3 即触发
-2. **黑产养号型（type 6）**：批量注册+低等级+无头像+默认名(bili_)+无动态+无投稿+默认签名。四无账号直接判 type 6，confidence ≥ 90
-3. **敏感内容型（type 8）**：历史动态含女拳/打拳/蝈蝻/以色列/乌克兰/造谣/抹黑/境外势力。引擎 f14 > 0.3 即触发
-4. **批量操控型（type 5）**：多号同步操作，时间爆发度 > 0.7，行为模式一致
-5. **模板化刷评型（type 1）**：同视频多次评论内容雷同，或无意义灌水刷评
-6. **情绪引导型（type 2）**：极端情绪化表达，带节奏/站队/制造焦虑
-7. **AI生成型（type 3）**：语句不通/逻辑怪异/中英混杂不自然
-8. **对立引战型（type 7）**：刻意制造二元对立，激化评论区矛盾
+### 高权重 (w≥0.08)
+- **f12_account_skeleton (0.15)**：五维检测——无头像+ID乱码(bili_开头/纯数字)+无动态+无投稿+默认签名。≥0.8 = 4/5触发
+- **f14_sensitive_content (0.10)**：动态含女拳/打拳/蝈蝻/极端性别/以色列/乌克兰/造谣抹黑/境外势力
+- **f15_commercial_spam (0.10)**：评论含赌博/色情/加微信QQ/刷单/导流/联系方式
+- **f3_level_score (0.09)**：Lv0-2低等级+高活跃=可疑，Lv5+正常用户
+- **f5_content_similarity (0.08)**：同视频下与他人评论高度雷同→模板化刷评
+- **f6_time_burst (0.08)**：短时间窗口内集中发表评论→批量操控
 
-## 判定规则
+### 中权重 (0.04-0.06)
+- **f1_account_age (0.06)**：注册<30天+评论多→新号水军。MID>10亿=2024后注册
+- **f13_lottery_repost (0.05)**：动态以转发抽奖/投票/纯转发为主→养号
+- **f4_avatar_verify (0.05)**：无头像+无官方认证→"双无"账号
+- **f18_signature_troll (0.05)**：个性签名含挑衅/嘲讽/引战/对立话术
+- **f8_like_ratio (0.04)**：评论零赞→无人认同，典型水军特征
+- **f16_time_regularity (0.04)**：发评间隔高度固定→机器人规律行为
+- **f17_self_similarity (0.04)**：自己多条评论内容高度雷同→模板复制
 
-- 评论内容含联系方式/推广 → type 4, confidence ≥ 85
-- 无头像+默认名(bili_开头/纯数字)+无投稿 → type 6, confidence ≥ 90
-- 动态中含政治/女拳敏感词 → type 8, confidence ≥ 95
-- f12_account_skeleton > 0.5 → type 6（账号骨架为空）
-- f5_content_similarity > 0.5 + 多条评论雷同 → type 1
-- f6_time_burst > 0.7 → type 5
-- f7_sentiment_extreme > 0.3 + 情绪化评论 → type 2
-- 引擎总分 suspicious_score ≥ 0.5 的用户绝对不能判为正常，必须给出水军类型判定
-- 如果多条特征 > 0.3 但无明确类型，选最匹配的类型，confidence 40-60
-- 只有特征全 ≤ 0.2 且评论内容正常，才判为 type 0
+### 低权重 (w≤0.03)
+- **f11_vip_anomaly (0.03)**：低等级+VIP大会员→伪装正常用户
+- **f2_follow_ratio (0.01)**：粉丝极少先关注极多→引流号行为
+- **f7_sentiment_extreme (0.01)**：100%正面或100%负面→非自然
+- **f9_registration_batch (0.01)**：注册日期高度集中→工业批量号
+- **f10_interaction_ring (0.01)**：@提及集中在≤2人→小圈子互动
+
+## 水军类型→特征映射
+
+| type | 名称 | 必中特征 | 辅助特征 |
+|------|------|---------|---------|
+| 1 | 模板刷评 | f5>0.5 或 f17>0.5 | f6, f16 |
+| 2 | 情绪引导 | f7>0.3 + 评论极端化 | f18 |
+| 3 | AI生成 | 评论语句不通/逻辑断裂/格式异常 | — |
+| 4 | 引流广告 | f15>0.3 或 评论含联系方式 | f2, f14 |
+| 5 | 批量操控 | f6>0.5 | f9, f16, f10 |
+| 6 | 黑产养号 | f12>0.4 → 四无账号 | f3, f1, f4 |
+| 7 | 对立引战 | f18>0.3 + 评论制造二元对立 | f7, f14 |
+| 8 | 敏感内容 | f14>0.3 | f15 |
+
+## 判定流程
+
+对每个用户，按高→低权重顺序审视：
+1. f12>0.4 且四无成立 → type 6, confidence 85-95
+2. f15>0.3 或 评论有微信号/QQ/链接 → type 4, confidence 80-95
+3. f14>0.3 或 动态有政治/女拳敏感词 → type 8, confidence 90-100
+4. f5>0.4 或 f17>0.4 → type 1, confidence 70-85
+5. 其他特征组合 → 选最匹配类型, confidence 40-70
+6. 全特征≤0.2 且评论正常 → type 0, confidence 0
 
 ## 用户名乱码判定
 
-仅当用户名为 bili_ 开头的默认名、纯数字串、无意义随机字母数字组合才算乱码。中日韩文字(汉字/假名/谚文)具有自然语义，不算乱码。如"扒饭の骇灵"是有意义的日文混合名 ≠ 乱码。
+只有 bili_ 默认名、纯数字串、无意义随机字母数字组合才算乱码。
+中/日/韩文字(汉字/假名/谚文)具有自然语义，不算乱码。
 
 ## 输出格式
 
-严格输出 JSON，不要额外文字：
 ```json
-{
-  "results": [
-    {
-      "mid": 用户ID,
-      "type_id": 0-8,
-      "type_name": "类型名称",
-      "confidence": 0-100,
-      "reasoning": "推理过程(200字内，引用具体特征值和评论内容)"
-    }
-  ]
-}
+{"results":[{"mid":"","type_id":0,"type_name":"","confidence":0,"reasoning":"引用特征值"}]}
 ```"""
 
 # ============================================================
@@ -172,29 +187,13 @@ def build_user_prompt(users_data: list) -> str:
 - MID: {user.get('mid', 'unknown')}
 - 用户名: {user.get('uname', 'unknown')}
 - 等级: Lv{user.get('level', 0)}
-- 评论数 (此视频): {len(comments)}{sign_line}
-- ⚠️ 引擎综合可疑分: {user.get('suspicious_score', 0):.2f} / 1.0 {'(高度可疑)' if user.get('suspicious_score', 0) >= 0.5 else '(中度可疑)' if user.get('suspicious_score', 0) >= 0.3 else '(低可疑)'}
+- 评论数(此视频): {len(comments)}{sign_line}
 {user.get('raw_profile', '')}
-- 特征分数 (0-1, 越高越可疑, >0.3即信号):
-  * 账号年龄: {features.get('f1_account_age', 0):.2f}
-  * 粉丝/关注比: {features.get('f2_follow_ratio', 0):.2f}
-  * 等级分数: {features.get('f3_level_score', 0):.2f}
-  * 头像/认证: {features.get('f4_avatar_verify', 0):.2f}
-  * 内容相似度: {features.get('f5_content_similarity', 0):.2f}
-  * 时间爆发: {features.get('f6_time_burst', 0):.2f}
-  * 情感极端: {features.get('f7_sentiment_extreme', 0):.2f}
-  * 赞评比: {features.get('f8_like_ratio', 0):.2f}
-  * 批量注册: {features.get('f9_registration_batch', 0):.2f}
-  * 互动圈子: {features.get('f10_interaction_ring', 0):.2f}
-  * VIP异常: {features.get('f11_vip_anomaly', 0):.2f}
-  * 账号骨架: {features.get('f12_account_skeleton', 0):.2f} (无头像+用户名乱码+无动态+无投稿+默认签名)
-  * 转发模式: {features.get('f13_lottery_repost', 0):.2f} (动态中以转发为主，分抽奖/投票/纯转发)
-  * 敏感内容: {features.get('f14_sensitive_content', 0):.2f} (女拳/以乌/造谣)
-  * 商业引流: {features.get('f15_commercial_spam', 0):.2f} (赌博/色情/加微信等硬广告)
-  * 时间规律: {features.get('f16_time_regularity', 0):.2f} (评论间隔高度固定)
-  * 自评相似: {features.get('f17_self_similarity', 0):.2f} (多条评论雷同)
-  * 签名引战: {features.get('f18_signature_troll', 0):.2f} (签名含挑衅/嘲讽话术)
-  * 综合异常分: {features.get('综合异常分', user.get('suspicious_score', 0)):.2f}
+- ⚠️ 引擎综合可疑分: {user.get('suspicious_score', 0):.2f} / 1.0 {'(高度可疑!!)' if user.get('suspicious_score', 0) >= 0.5 else '(中度可疑)' if user.get('suspicious_score', 0) >= 0.3 else '(低可疑)'}
+- 18维特征(0-1):
+  ·高权重: f12_骨架={features.get('f12_account_skeleton', 0):.2f} f14_敏感={features.get('f14_sensitive_content', 0):.2f} f15_引流={features.get('f15_commercial_spam', 0):.2f} f3_等级={features.get('f3_level_score', 0):.2f} f5_雷同={features.get('f5_content_similarity', 0):.2f} f6_爆发={features.get('f6_time_burst', 0):.2f}
+  ·中权重: f1_年龄={features.get('f1_account_age', 0):.2f} f13_转发={features.get('f13_lottery_repost', 0):.2f} f4_头像={features.get('f4_avatar_verify', 0):.2f} f18_签名战={features.get('f18_signature_troll', 0):.2f} f8_赞比={features.get('f8_like_ratio', 0):.2f} f16_规律={features.get('f16_time_regularity', 0):.2f} f17_自似={features.get('f17_self_similarity', 0):.2f}
+  ·低权重: f11_VIP={features.get('f11_vip_anomaly', 0):.2f} f2_粉关比={features.get('f2_follow_ratio', 0):.2f} f7_情感={features.get('f7_sentiment_extreme', 0):.2f} f9_批量={features.get('f9_registration_batch', 0):.2f} f10_圈子={features.get('f10_interaction_ring', 0):.2f}
 - 评论内容:
     {comments_str if comments_str else '(无评论)'}
 

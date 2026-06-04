@@ -3747,7 +3747,7 @@ def _check_comment_to_user() -> None:
 
             if _last_comment_running and not comment_running and _comment_finished_trigger_user and not user_running:
                 logger.info("评论爬虫已完成，自动启动用户爬虫...")
-                spider_mgr.inject_seeds("rescan_users")
+                # ★ 种子已由 api_video_refresh 注入，这里只负责启动
                 result = spider_mgr.start_spider("bilibili_user")
                 if result.get("success"):
                     logger.info(f"用户爬虫已自动启动 (PID={result.get('pid')})")

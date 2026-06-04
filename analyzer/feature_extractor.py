@@ -48,13 +48,17 @@ class FeatureExtractor:
         "别信", "骗人", "资本", "境外势力", "1450", "网军",
     }
 
-    # ---- F18 签名引战关键词库 (v2.16) ----
+    # ---- F18 签名引战关键词库 (v2.23 扩展) ----
     # 分类一: 直接挑衅 — 向点击主页的人宣战
     _SIGN_TROLL_DIRECT_KW = {
         "查成分", "查你爹", "查爹", "点进主页", "点进来",
         "你爹", "你妈", "你主子", "你爹成分", "成分查",
         "视奸", "偷看", "窥屏", "翻主页", "看主页",
         "精神胜利", "精神胜利法",
+        "急了", "急啦", "你急", "别急",
+        "破防", "破大防", "无能狂怒",
+        "不服", "不服来", "来打",
+        "我就喜欢", "我就乐意", "关你屁事", "关你什么事",
     }
     # 分类二: 防御/嘲讽 — 预设自己遭到攻击并进行嘲讽
     _SIGN_TROLL_DEFENSIVE_KW = {
@@ -64,15 +68,20 @@ class FeatureExtractor:
         "你攻击", "有人会理你吗", "你又能怎样",
         "你又能如何", "你什么都不是",
         "可怜的自尊心", "满足一下你",
-    }
-    # 分类三: 引战宣言 — "我就是来搞事的"
-    _SIGN_TROLL_PROVOKE_KW = {
-        "我混的圈子", "你攻击啥", "我圈子",
-        "你尽管骂", "随便骂", "随便喷",
+        "随便骂", "随便喷", "你尽管",
         "无所谓", "不在意", "不痛不痒",
         "只会口嗨", "口嗨", "网络巨人",
         "现实唯唯诺诺", "重拳出击", "网络重拳",
         "来对线", "欢迎对线", "来对骂",
+        "二极管", "非黑即白",
+        "洗地", "孝子", "孝子贤孙",
+    }
+    # 分类三: 引战宣言 + 联系方式/推广弱信号
+    _SIGN_TROLL_PROVOKE_KW = {
+        "我混的圈子", "你攻击啥", "我圈子",
+        "只看不评", "永久退站", "退站",
+        "引流", "加群", "私信", "找我",
+        "求关注", "互关", "互粉",
     }
 
     def __init__(self, comments, users, get_user_sim_score,
@@ -687,12 +696,12 @@ class FeatureExtractor:
             return 0.0
 
         sign = user.get("sign", "")
-        if not sign:
-            return 0.0  # 无签名 = 不触发引战检测（由F4三无检测覆盖）
-
-        # 默认签名（从未修改过个人简介）= 不触发引战，归 F12 账号骨架
-        if sign == self._DEFAULT_SIGN:
-            return 0.0
+        # ★ v2.23: 空签名/默认签名 = 微信号，不再归零
+        if not sign or sign == self._DEFAULT_SIGN:
+            return 0.05
+        # 极短签名（<5字）= 养号/批量注册特征
+        if len(sign.strip()) < 5:
+            return 0.10
 
         score = 0.0
 
@@ -800,15 +809,18 @@ def _mid_to_approx_year(mid: int) -> int:
 
 
 def _account_age_score(account_days: int, comment_count: int) -> float:
-    """根据账号天数+评论数计算 F1 分数。新号+多评论=高风险。"""
+    """根据账号天数+评论数计算 F1 分数。新号+多评论=高风险, 老号也有基线分。"""
     if account_days < 30:
         return 0.9 if comment_count >= 5 else 0.7
     elif account_days < 90:
         return 0.6 if comment_count >= 5 else 0.4
     elif account_days < 180:
-        return max(0.3, comment_count * 0.03)
+        return max(0.30, comment_count * 0.03)
     elif account_days < 365:
-        return max(0.15, comment_count * 0.02)
+        return max(0.20, comment_count * 0.02)
     elif account_days < 730:
-        return max(0.05, comment_count * 0.01)
-    return 0.0
+        return max(0.10, comment_count * 0.01)
+    elif account_days < 1825:  # < 5年
+        return 0.05
+    else:
+        return 0.02  # 老号也保留微信号，不再归零

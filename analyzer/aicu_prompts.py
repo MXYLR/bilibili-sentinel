@@ -20,90 +20,34 @@ except ImportError:
 #  深度分析 System Prompt
 # ============================================================
 
-DEEP_SYSTEM_PROMPT = """你是B站水军深度分析专家。基于用户当前视频行为+历史评论记录(来自AICU)，进行跨视频模式分析，给出最终水军判定。
+DEEP_SYSTEM_PROMPT = """你是B站水军深度分析专家。基于当前视频行为+历史评论(来自AICU)，进行跨视频模式分析，做最终判定。
 
-## 分析原则
-
-1. **谨慎判断，避免误报**：历史数据缺失 ≠ 水军，新号无历史记录是正常的
-2. **内容为主**：历史评论自然、有个人观点 → 即使引擎分高也要慎重
-3. **证据充分再判定**：必须有明确的水军特征（模板化、引流、引战、账号异常）才能判为水军
-4. **reasoning必须具体**：必须引用具体特征值+历史评论原文片段
+## 原则
+1. 谨慎判断，避免误报。历史数据缺失≠水军，新号无历史正常
+2. 内容为主。必须有评论证据才能判水军
+3. 必须引用特征值+评论原文，不能只说"分数高"
 
 ## 分析维度
+跨视频行为一致性、时间模式、内容模板化、账号异常(设备/昵称变更)、证据链叠加
 
-1. **跨视频行为一致性**: 不同视频下的评论风格、立场是否统一？是否存在多视频同一套话术？
-2. **时间模式**: 历史评论时间是否集中在某时段？间隔是否规律（机器人特征）？
-3. **内容模板化**: 历史评论是多元真实交流，还是套路化输出？
-4. **账号异常**: 设备是否频繁变更？历史昵称是否有养号特征（乱码→正常名更名链）？
-5. **证据链叠加**: 引擎高分特征 + 历史数据异常模式 = 可信证据链
+## 关键特征速查
+- f12 账号骨架: 1.0=5/5全中, 0.8=4/5, 0.6=3/5, 0.4=2/5(轻度), 0.2=1/5。**f12=0.4不是四无号**
+- f5 内容雷同: ≥0.6→模板刷评  f6 时间爆发: ≥0.7→批量操控
+- f15 商业引流: ≥0.3→广告  f14 敏感内容: ≥0.3→敏感
 
-## 13维引擎特征解读指南（重要！）
+## 8类型
+1模板刷评 2情绪引导 3AI生成 4引流广告 5批量操控 6黑产养号(f12≥0.8) 7对立引战 8敏感内容
 
-### 高权重 (w≥0.08)
-- **f12_account_skeleton (0.23)**：账号骨架检测
-  * 1.0 = 5/5全中（无头像+ID乱码+无动态+无投稿+默认签名）→ 铁证
-  * 0.8 = 4/5命中 → 高度可疑
-  * 0.6 = 3/5命中 → 中等可疑
-  * 0.4 = 2/5命中 → 轻度可疑（不是空壳号！）
-  * 0.2 = 1/5命中 → 基本正常
-  * 0.0 = 0/5命中 → 正常账号
-  * **注意：f12=0.4 只命中2项，不是四无账号，不应直接判水军**
+## 判定
+- f12≥0.8+4-5/5命中+历史异常→type6,conf≥85 | f12=0.4-0.6+历史正常→可能是真实用户
+- 引擎≥70+历史模板化→type1 | 引擎<30+历史多元→type0
+- type0=正常用户, type1-8=水军
 
-- **f3_level_score (0.13)**：等级异常
-  * Lv0-2 + 高活跃 → 可疑
-  * Lv3+ → 正常
+## 输出
+每个用户输出JSON。reasoning 80-120字，含特征解读+1条历史评论原文+判定逻辑。AICU无数据时注明"历史缺失"。
 
-- **f5_content_similarity (0.11)**：内容雷同
-  * >0.6 → 模板化刷评
-  * <0.3 → 正常
-
-- **f6_time_burst (0.11)**：时间爆发
-  * >0.7 → 批量操控
-  * <0.4 → 正常
-
-- **f15_commercial_spam (0.04)**：商业引流
-  * >0.3 → 含赌博/色情/联系方式
-
-- **f14_sensitive_content (0.03)**：敏感内容
-  * >0.3 → 动态含女拳/政治/造谣
-
-## 8种水军类型定义
-
-1. **模板刷评型(type 1)**：评论内容高度雷同，明显复制粘贴
-2. **情绪引导型(type 2)**：刻意煽动情绪、带节奏
-3. **AI生成型(type 3)**：评论语句不通、逻辑断裂、AI味重
-4. **引流广告型(type 4)**：含联系方式、推广信息
-5. **批量操控型(type 5)**：多账号同时间集中发评
-6. **黑产养号型(type 6)**：f12≥0.8（4-5/5命中）+ 其他可疑特征
-7. **对立引战型(type 7)**：刻意制造对立、激怒他人
-8. **敏感内容型(type 8)**：动态含女拳/政治/造谣内容
-
-## 判定规则（按优先级）
-
-- **f12 ≥ 0.8** + 4-5/5命中 + 历史评论有异常 → type 6, confidence ≥ 85
-- **f12 = 0.4~0.6** + 历史评论正常 → 可能是真实用户，谨慎判定
-- **引擎总分 ≥ 70** + 历史评论有模板化迹象 → type 1, confidence ≥ 70
-- **引擎总分 < 30** + 历史评论多元自然 → type 0, confidence 0
-- **历史评论 < 5 条** → 可能是新注册用户（不一定是水军）
-
-## 输出格式
-
-每个用户的深度分析结果必须包含 detailed reasoning（150-200字），结构如下：
-
-**reasoning 写作框架（必须遵循）：**
-1. **【引擎特征解读】**（约40字）逐条列出高分特征的含义，重点解读 f12（命中几项）、f5、f6 等
-2. **【历史评论分析】**（约60字）引用1-2条历史评论原文，分析跨视频行为是否一致、是否模板化
-3. **【综合判定逻辑】**（约50字）结合引擎特征+历史评论，说明最终判定依据
-4. **【证据链说明】**（约30字）列出支持判定的关键证据（如"f12=1.0 + 历史评论全为引流"）
-
-**reasoning 质量要求：**
-- 必须 150-200 字，不能少于120字
-- 必须引用具体特征值（如 f12=1.0，5/5全中）并解释含义
-- 必须引用至少1条历史评论原文（用中文引号括起来）
-- 如 AICU 无数据，必须说明"历史数据缺失，仅基于当前视频判断"
-- 不能只说"分数高"，必须给出具体分析过程
-
-8种水军类型: 1模板刷评 2情绪引导 3AI生成 4引流广告 5批量操控 6黑产养号 7对立引战 8敏感内容"""
+示例 reasoning(90字): "f12=0.8命中4/5项，历史评论'加我薇信xxx'持续引流。跨3个视频同一话术，确认引流广告水军(type4,conf90)。"
+"""
 
 
 # ============================================================
@@ -134,112 +78,60 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
     _mid_from_aicu = aicu_data.mid if aicu_data else 0
     mid = _mid_from_user or _mid_from_aicu
 
-    prompt = f"""## 深度分析任务
+    prompt = f"""## 深度分析: {user_data.get('uname', '?')} (MID:{mid})
 
-请对以下用户进行跨视频行为深度分析:
+**当前视频:** Lv{user_data.get('level', 0)} 评论{user_data.get('comment_count', 0)}条 引擎分{user_data.get('suspicious_score', 0):.1f}/100 初筛:type{user_data.get('llm_type_id', 0)}({user_data.get('llm_type_name', '?')}) conf{user_data.get('llm_confidence', 0)}%"""
 
----
-
-### 用户 {user_data.get('uname', 'unknown')} (MID: {mid})
-
-**账号属性:**
-- 等级: Lv{user_data.get('level', 0)}
-- 签名: {user_data.get('sign', '无')[:80] if user_data.get('sign') else '无'}
-
-**当前视频行为:**
-- 在此视频中发表了 {user_data.get('comment_count', 0)} 条评论
-- 引擎综合可疑分: {user_data.get('suspicious_score', 0):.1f}/100
-- LLM 初筛结果: 类型{user_data.get('llm_type_id', 0)} ({user_data.get('llm_type_name', '未分析')}), 置信度{user_data.get('llm_confidence', 0)}%
-"""
-
-    # v2.29: 限制 raw_profile 长度，避免 prompt 过大
+    # v2.29: 压缩 raw_profile
     _raw_profile = user_data.get('raw_profile', '')
     if _raw_profile:
-        _raw_profile = _raw_profile[:300] + ("...(截断)" if len(_raw_profile) > 300 else "")
-    prompt += _raw_profile + "\n"
+        _raw_profile = _raw_profile[:200] + ("…" if len(_raw_profile) > 200 else "")
+        prompt += f"\n{_raw_profile}"
 
-    # ★ 特征评分（按权重排列13维）
-    prompt += f"""
-**13维特征评分 (0-1):**
-  ·高权重: f12_骨架={features.get('f12_account_skeleton', 0):.2f} f3_等级={features.get('f3_level_score', 0):.2f} f5_雷同={features.get('f5_content_similarity', 0):.2f} f6_爆发={features.get('f6_time_burst', 0):.2f} f1_年龄={features.get('f1_account_age', 0):.2f} f4_头像={features.get('f4_avatar_verify', 0):.2f}
-  ·中权重: f2_粉关={features.get('f2_follow_ratio', 0):.2f} f8_赞比={features.get('f8_like_ratio', 0):.2f} f15_引流={features.get('f15_commercial_spam', 0):.2f}
-  ·低权重: f14_敏感={features.get('f14_sensitive_content', 0):.2f} f18_签名={features.get('f18_signature_troll', 0):.2f} f7_情感={features.get('f7_sentiment_extreme', 0):.2f} f16_规律={features.get('f16_time_regularity', 0):.2f}
-"""
+    # v2.29: 特征一行展示（仅f≥0.3）
+    active_features = []
+    fnames = {"f1_account_age":"f1年龄","f2_follow_ratio":"f2粉关","f3_level_score":"f3等级",
+              "f4_avatar_verify":"f4头像","f5_content_similarity":"f5雷同","f6_time_burst":"f6爆发",
+              "f7_sentiment_extreme":"f7情感","f8_like_ratio":"f8赞比",
+              "f12_account_skeleton":"f12骨架","f14_sensitive_content":"f14敏感",
+              "f15_commercial_spam":"f15引流","f16_time_regularity":"f16规律","f18_signature_troll":"f18签名"}
+    for fk, fs in fnames.items():
+        fv = features.get(fk, 0)
+        if fv >= 0.3:
+            active_features.append(f"{fs}={fv:.2f}")
+    feat_line = "、".join(active_features) if active_features else "无显著异常"
+    prompt += f"\n特征(f≥0.3): {feat_line}"
 
-    # Top 3 高贡献特征
-    top_features = sorted(features.items(), key=lambda x: x[1], reverse=True)[:3]
-    if top_features:
-        feature_labels = {
-            "f1_account_age": "账号年龄", "f2_follow_ratio": "粉丝/关注比",
-            "f3_level_score": "用户等级", "f4_avatar_verify": "头像/认证",
-            "f5_content_similarity": "内容相似度", "f6_time_burst": "时间爆发",
-            "f7_sentiment_extreme": "情感极端", "f8_like_ratio": "赞评比",
-            "f12_account_skeleton": "账号骨架", "f14_sensitive_content": "敏感内容",
-            "f15_commercial_spam": "商业引流", "f16_time_regularity": "时间规律性",
-            "f18_signature_troll": "签名引战",
-        }
-        prompt += "- 高贡献特征:\n"
-        for k, v in top_features:
-            label = feature_labels.get(k, k)
-            prompt += f"  * {label}: {v:.2f}\n"
+    # F12 骨架警告
+    f12_val = features.get("f12_account_skeleton", 0)
+    if f12_val >= 0.40:
+        prompt += f"\n⚠️ F12骨架={f12_val:.2f}({int(f12_val*5)}/5命中)"
 
-        # ★ F12 骨架信号显式警告
-        f12_val = features.get("f12_account_skeleton", 0)
-        if f12_val >= 0.40:
-            prompt += f"\n⚠️ **账号骨架警告**: F12={f12_val:.2f} ({int(f12_val*5)}/5 项命中)\n"
-            prompt += "四无账号(无头像/ID乱码/无动态/无投稿/默认签名) — 批量注册水军号铁证\n"
-            if f12_val >= 0.60:
-                prompt += "直接判定水军 confidence≥85。AICU无历史数据恰恰印证新号。\n"
-
-    # v2.29: 使用智能压缩器（保留语义，减少 token）
+    # v2.29: 当前视频评论（智能压缩）
     user_comments = user_data.get("comments", [])
     if user_comments:
-        comments_summary = compress_fn(user_comments, max_examples=3)
-        prompt += "- 当前视频评论分析:\n"
-        prompt += comments_summary.replace("\n", "\n    ") + "\n"
+        comments_summary = compress_fn(user_comments, max_examples=2)
+        prompt += f"\n当前评论: {comments_summary}"
     
-    prompt += "\n**历史评论画像 (来自 AICU):**\n"
-
-    # AICU 数据
+    # AICU 历史数据
     if aicu_data and aicu_data.fetch_ok:
-        prompt += f"- 历史评论总数: {aicu_data.comment_count} 条（最近100条）\n"
-        prompt += f"- 最活跃时段: {aicu_data.active_hour or '未知'}点\n"
-        prompt += f"- 平均评论长度: {aicu_data.avg_comment_length}字\n"
-
+        parts = [f"\n**AICU历史:** {aicu_data.comment_count}条评论"]
+        if aicu_data.active_hour:
+            parts.append(f"活跃{aicu_data.active_hour}点")
         if aicu_data.device_name:
-            prompt += f"- 常用设备: {aicu_data.device_name}\n"
-
+            parts.append(f"设备:{aicu_data.device_name}")
         if aicu_data.history_names:
-            names_str = ", ".join(aicu_data.history_names[:5])
-            prompt += f"- 历史昵称: {names_str}\n"
+            parts.append(f"昵称:{','.join(aicu_data.history_names[:3])}")
+        prompt += "\n" + " ".join(parts)
 
-        if aicu_data.profile:
-            p = aicu_data.profile
-            if p.get("sign"):
-                prompt += f"- 个人签名: {p['sign'][:80]}\n"
-            prompt += f"- 粉丝: {p.get('fans', 0)}, 关注: {p.get('following', 0)}\n"
-
-        # v2.29: 使用智能压缩器（保留语义，减少 token）
+        # v2.29: 历史评论（智能压缩，max_examples=3）
         if aicu_data.comments:
-            prompt += "\n### 历史评论分析（智能压缩）\n"
-            history_summary = compress_fn(aicu_data.comments, max_examples=5)
-            prompt += history_summary.replace("\n", "\n    ") + "\n"
+            history_summary = compress_fn(aicu_data.comments, max_examples=3)
+            prompt += f"\n{history_summary}"
     else:
-        prompt += "- 无法获取历史数据（AICU 接口无数据或超时）\n"
-        prompt += "- 请仅基于当前视频的评论行为进行深度判断\n"
+        prompt += "\n**AICU:** 无历史数据"
 
-    prompt += """
----
-请输出深度分析 JSON 结果。
-
-**reasoning 字段要求（重要）：**
-1. 长度 150-200 字，少于120字视为不合格
-2. 必须包含【引擎特征解读】【历史评论分析】【综合判定逻辑】【证据链说明】四个部分
-3. 必须引用至少1条历史评论原文（用中文引号括起来）
-4. 必须逐条解释每个高分特征（f值≥0.4）的含义
-5. 如 AICU 无历史数据，在 reasoning 中注明"历史数据缺失，仅基于当前视频行为判断"
-
-只输出 JSON，不要输出其他内容。"""
+    prompt += "\n\n请输出深度分析 JSON。reasoning 80-120字，含特征解读+历史评论原文+判定逻辑。只输出JSON。"
 
     return prompt
 

@@ -528,7 +528,7 @@
                     调用 LLM（DeepSeek / OpenAI）对候选用户评论进行<b>语义级水军识别</b>：<br>
                     <span class="text-muted ms-2">
                         ① 自动分析评论内容的<b>水军特征</b>（模板刷评、情绪引导、AI生成等 8 类）<br>
-                        ② 输出<b>水军类型 + 置信度</b>，与现有 18 维特征评分融合<br>
+                        ② 输出<b>水军类型 + 置信度</b>，与现有 13 维特征评分融合<br>
                         ③ 结果写回报告并自动刷新页面<br>
                     </span>
                     每批 5 人，单次最多 <b>50 人</b>（10 批），超出部分需再次触发。预计耗时 <b>10-30 秒/批</b>。
@@ -1128,10 +1128,9 @@ const LLM_TYPE_COLORS = {
 const FEATURE_NAMES_ALL = {
     'f1_account_age':'账号年龄','f2_follow_ratio':'粉丝/关注比','f3_level_score':'用户等级',
     'f4_avatar_verify':'头像/认证','f5_content_similarity':'内容相似度','f6_time_burst':'时间爆发',
-    'f7_sentiment_extreme':'情感极端','f8_like_ratio':'赞评比异常','f9_registration_batch':'批量注册',
-    'f10_interaction_ring':'互动小圈子','f11_vip_anomaly':'VIP异常','f12_account_skeleton':'账号骨架',
-    'f13_lottery_repost':'转发模式','f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流',
-    'f16_time_regularity':'时间规律性','f17_self_similarity':'自评相似度','f18_signature_troll':'签名引战'
+    'f7_sentiment_extreme':'情感极端','f8_like_ratio':'赞评比异常','f12_account_skeleton':'账号骨架',
+    'f14_sensitive_content':'敏感内容','f15_commercial_spam':'商业引流',
+    'f16_time_regularity':'时间规律性','f18_signature_troll':'签名引战'
 };
 
 const FEATURE_DESCRIPTIONS = {

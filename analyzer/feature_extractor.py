@@ -1,7 +1,7 @@
 """
 水军特征提取器
 
-从评论列表和用户信息中提取 18 个特征 (F1-F18)。
+从评论列表和用户信息中提取 13 个特征 (F1-F8, F12, F14-F16, F18)。
 每个特征返回 0.0 ~ 1.0 分数, 1.0 = 高度可疑。
 
 v2.1 新增 F12-F14: 账号空间画像检测
@@ -19,7 +19,7 @@ from datetime import datetime
 
 class FeatureExtractor:
     """
-    18 个水军特征提取器 (F1-F18)。
+    13 个水军特征提取器 (F1-F8, F12, F14-F16, F18)。
 
     输入:
       comments: [CommentItem dict]

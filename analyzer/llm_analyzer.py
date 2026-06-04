@@ -372,10 +372,12 @@ class LLMAnalyzer:
             if llm_result and llm_result.get("type_id", 0) > 0:
                 # 融合评分
                 llm_confidence = llm_result.get("confidence", 0)
-                fused = engine_score * ENGINE_WEIGHT + llm_confidence * LLM_WEIGHT
+                # ★ 归一化: LLM 返回 0-100，内部计算用 0-1
+                llm_confidence_norm = llm_confidence / 100.0 if llm_confidence > 1.0 else llm_confidence
+                fused = engine_score * ENGINE_WEIGHT + llm_confidence_norm * LLM_WEIGHT
 
                 enhanced["engine_score_raw"] = engine_score
-                enhanced["suspicious_score"] = round(fused, 1)
+                enhanced["suspicious_score"] = round(fused * 100, 1)  # ★ 转回 0-100
                 enhanced["llm_type_id"] = llm_result["type_id"]
                 enhanced["llm_type_name"] = llm_result.get("type_name", "")
                 enhanced["llm_confidence"] = llm_confidence
@@ -664,16 +666,27 @@ class LLMAnalyzer:
                 # 三次融合 + 重新评估风险等级（只在判定为水军时）
                 if deep_result.get("deep_type_id", 0) > 0:
                     engine_score = u.get("engine_score_raw", u.get("suspicious_score", 0))
+                    # ★ 归一化 engine_score 到 0-1
+                    if engine_score > 1.0:
+                        engine_score = engine_score / 100.0
+                    
                     llm1_confidence = u.get("llm_confidence", 0)
+                    # ★ 归一化 LLM 初筛置信度到 0-1
+                    if llm1_confidence > 1.0:
+                        llm1_confidence = llm1_confidence / 100.0
+                    
                     deep_confidence = deep_result.get("deep_confidence", 0)
-
+                    # ★ 归一化深度分析置信度到 0-1
+                    if deep_confidence > 1.0:
+                        deep_confidence = deep_confidence / 100.0
+                    
                     fused = (
                         engine_score * DEEP_ENGINE_WEIGHT
                         + llm1_confidence * DEEP_LLM1_WEIGHT
                         + deep_confidence * DEEP_LLM2_WEIGHT
                     )
 
-                    enhanced["suspicious_score"] = round(fused, 1)
+                    enhanced["suspicious_score"] = round(fused * 100, 1)  # ★ 转回 0-100
 
                     if fused >= RISK_HIGH:
                         enhanced["risk_level"] = "high"

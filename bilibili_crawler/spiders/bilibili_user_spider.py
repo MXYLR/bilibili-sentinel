@@ -82,7 +82,9 @@ class BilibiliUserSpider(scrapy.Spider):
         self._user_count = 0
         self._total_posts = 0
         self._idle_start_time = None
-        self._seen_mids = set()  # 本次运行已处理的 MID
+        self._seen_mids = set()
+        self._use_playwright = False  # ★ 不触发 Playwright 兜底
+        self._412_count = 0
         logger.info(f"BilibiliUserSpider initialized (Redis db={_REDIS_DB}, key={_REDIS_KEY}, max_idle={MAX_IDLE_TIME}s)")
 
     @classmethod

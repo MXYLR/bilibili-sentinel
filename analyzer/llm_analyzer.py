@@ -372,12 +372,18 @@ class LLMAnalyzer:
                 enhanced["llm_confidence"] = llm_confidence
                 enhanced["llm_reasoning"] = llm_result.get("reasoning", "")
             else:
-                enhanced["llm_reasoning"] = ""
-                # 引擎高分用户仍保留评分和风险等级提示
-                if engine_score >= RISK_HIGH:
-                    enhanced["risk_level"] = "high"
-                elif engine_score >= RISK_MEDIUM:
-                    enhanced["risk_level"] = "medium"
+                # LLM 判正常但引擎高分 → 保留 LLM 输出 + 系统标注
+                llm_raw = llm_result.get("reasoning", "") if llm_result else ""
+                if engine_score >= 0.50:
+                    f12 = u.get("features", {}).get("f12_account_skeleton", 0)
+                    f12_n = f12 / 100.0 if f12 > 1.0 else f12
+                    note = f"【系统标注】引擎评分{engine_score:.0%}"
+                    if f12_n >= 0.4:
+                        note += f"、账号骨架F12={f12_n:.2f}（四无账号）"
+                    note += "，与LLM判定矛盾，建议人工复核。"
+                    enhanced["llm_reasoning"] = (llm_raw + "\n" + note) if llm_raw else note
+                else:
+                    enhanced["llm_reasoning"] = llm_raw
 
             enhanced_users.append(enhanced)
 

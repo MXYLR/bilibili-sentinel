@@ -1591,6 +1591,12 @@ def video_detail(bvid: str):
                 "llm_type_id": u.get("llm_type_id", 0),
             }
 
+    # ★ 标记用户是否有采集数据
+    if report and report.get("top_suspects"):
+        for u in report["top_suspects"]:
+            mid = u.get("mid", 0)
+            u["_has_data"] = (Path(DATA_DIR) / "users" / f"{mid}.json").exists()
+
     resp = make_response(render_template(
         "video_detail.html",
         bvid=bvid,
@@ -3535,6 +3541,28 @@ def api_video_refresh_users(bvid: str):
             "injected": injected,
             "message": f"已注入 {injected} 个用户种子 (来自 {bvid})" + ("，用户爬虫已启动" if pid else "，用户爬虫已在运行" if user_running else "")
         })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ★ 批量注入用户种子
+@app.route("/api/user/batch/refresh", methods=["POST"])
+def api_user_batch_refresh():
+    """注入一批用户 MID 到种子队列并启动用户爬虫。"""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        mids = data.get("mids", [])
+        if not mids:
+            return jsonify({"success": False, "message": "未提供用户列表"}), 400
+        import redis as redis_mod
+        r = redis_mod.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+        for m in mids:
+            r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": m}))
+        state = spider_mgr._read_state()
+        if state.get("bilibili_user", {}).get("status") != "running":
+            spider_mgr.start_spider("bilibili_user")
+        logger.info(f"[BatchRefresh] {len(mids)} mids injected, spider started")
+        return jsonify({"success": True, "injected": len(mids), "message": f"已注入 {len(mids)} 个用户种子，爬虫已启动"})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

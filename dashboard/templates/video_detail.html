@@ -259,11 +259,49 @@
                                 <th style="width:65px">评论数</th>
                                 <th style="width:50px">等级</th>
                                 <th>Top 3 可疑特征</th>
-                                <th style="width:80px">操作</th>
+                                <th style="width:100px">操作</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for user in report.top_suspects %}
+                        {% set has_data_users = report.top_suspects | selectattr('_has_data', 'equalto', true) | list %}
+                        {% set no_data_users = report.top_suspects | selectattr('_has_data', 'equalto', false) | list %}
+                        <!-- 未采集用户: 高亮表头 + 一键采集按钮 -->
+                        {% if no_data_users %}
+                        <tbody style="border-top: 3px solid #fd7e14">
+                            <tr class="table-warning">
+                                <td colspan="9" class="text-center fw-bold">
+                                    ⚠️ 未采集用户数据 ({{ no_data_users|length }}人)
+                                    <button class="btn btn-sm btn-warning ms-3" onclick="collectUsersWithoutData({{ no_data_users | map(attribute='mid') | list | tojson }})">
+                                        <i class="bi bi-download"></i> 一键采集全部
+                                    </button>
+                                </td>
+                            </tr>
+                            {% for user in no_data_users %}
+                            <tr class="table-warning" data-mid="{{ user.mid }}" data-idx="{{ loop.index0 + has_data_users|length }}">
+                                <td>{{ user.rank }}</td>
+                                <td><strong>{{ user.uname }}</strong><br><small class="text-muted">MID: {{ user.mid }}</small></td>
+                                <td><span class="fw-bold {% if user.score >= 70 %}text-danger{% elif user.score >= 40 %}text-warning{% else %}text-success{% endif %}">{{ user.score }}</span></td>
+                                <td>
+                                    {% if user.risk_level == 'high' %}<span class="badge bg-danger">高风险</span>
+                                    {% elif user.risk_level == 'medium' %}<span class="badge bg-warning text-dark">中风险</span>
+                                    {% else %}<span class="badge bg-success">低风险</span>{% endif %}
+                                </td>
+                                <td><small class="text-muted">待采集</small></td>
+                                <td>{{ user.comment_count }}</td>
+                                <td>Lv{{ user.level }}</td>
+                                <td>{% for feat in user.top_features[:3] %}<span class="badge bg-secondary me-1">{{ feat.name }}: {{ feat.score }}%</span>{% endfor %}</td>
+                                <td class="text-center">
+                                    <button class="btn btn-sm btn-outline-warning" onclick="refreshSingleUser({{ user.mid }})" title="采集此用户数据">
+                                        <i class="bi bi-arrow-repeat"></i> 采集
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        {% endif %}
+                        <!-- 已采集用户 -->
+                        <tbody>
+                            {% for user in has_data_users %}
                             <tr class="{% if user.risk_level == 'high' %}table-danger{% elif user.risk_level == 'medium' %}table-warning{% endif %}"
                                 data-mid="{{ user.mid }}" data-idx="{{ loop.index0 }}">
                                 <td>
@@ -281,7 +319,7 @@
                                 <td>
                                     {% if user.llm_type_id and user.llm_type_id > 0 %}
                                     <span class="llm-badge llm-type-{{ user.llm_type_id }} user-detail-trigger"
-                                          onclick="showUserDetail({{ loop.index0 }})"
+                                          onclick="showUserDetailByMid({{ user.mid }})"
                                           style="cursor:pointer"
                                           title="点击查看 LLM + AICU 详细分析">🔍 {{ user.llm_type_name }}</span>
                                     <small class="text-muted d-block">{{ (user.llm_confidence|float / 100 if user.llm_confidence|float > 100 else user.llm_confidence|float)|round(1) }}%</small>
@@ -293,7 +331,7 @@
                                 <td>Lv{{ user.level }}</td>
                                 <td>{% for feat in user.top_features[:3] %}<span class="badge bg-secondary me-1">{{ feat.name }}: {{ feat.score }}%</span>{% endfor %}</td>
                                 <td class="text-center">
-                                    <button class="btn btn-sm btn-outline-primary" onclick="showUserDetail({{ loop.index0 }})" title="查看详情">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="showUserDetailByMid({{ user.mid }})" title="查看详情">
                                         <i class="bi bi-eye"></i> 详情
                                     </button>
                                 </td>
@@ -1957,6 +1995,34 @@ async function refreshVideoData() {
         showToast('刷新请求失败: ' + err.message, 'error');
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 刷新数据';
+    }
+}
+
+// ★ 按 MID 查找用户详情索引
+function showUserDetailByMid(mid) {
+    const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+    if (idx >= 0) showUserDetail(idx);
+}
+
+// ★ 一键采集未采集用户数据
+async function collectUsersWithoutData(mids) {
+    if (!mids || mids.length === 0) return;
+    showToast(`正在注入 ${mids.length} 个用户种子...`, 'info');
+    try {
+        const resp = await fetch('/api/user/batch/refresh', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mids: mids})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            showToast(data.message || '注入失败', 'error');
+        }
+    } catch (err) {
+        showToast('请求失败: ' + err.message, 'error');
     }
 }
 

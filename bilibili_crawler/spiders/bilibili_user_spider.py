@@ -88,14 +88,16 @@ class BilibiliUserSpider(scrapy.Spider):
         logger.info(f"BilibiliUserSpider initialized (Redis db={_REDIS_DB}, key={_REDIS_KEY}, max_idle={MAX_IDLE_TIME}s)")
 
     @classmethod
-    def from_crawler(cls, crawler, *args, **kwargs):
+    def     from_crawler(cls, crawler, *args, **kwargs):
         spider = super().from_crawler(crawler, *args, **kwargs)
         crawler.signals.connect(spider.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(spider.spider_idle, signal=signals.spider_idle)
+        logger.info("Signals connected: spider_opened + spider_idle")
         return spider
 
     def spider_opened(self):
         """Spider 打开后立即消费种子（批量跳过已采集的）。"""
+        logger.info("=== spider_opened FIRED ===")
         skipped = 0
         while True:
             mid = self._pop_seed()

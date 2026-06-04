@@ -87,10 +87,6 @@
                         title="重新抓取视频信息和最新评论">
                     <i class="bi bi-arrow-repeat"></i> 刷新数据
                 </button>
-                <button class="btn btn-sm btn-outline-primary me-2" id="btn-reanalyze" onclick="reanalyzeData()"
-                        title="基于已有数据重新分析(不跑爬虫，约30秒)">
-                    <i class="bi bi-lightning"></i> 重新分析
-                </button>
                 <button class="btn btn-sm btn-outline-danger btn-delete-video" onclick="deleteThisVideo()">
                     <i class="bi bi-trash-fill"></i> 删除数据
                 </button>
@@ -1103,57 +1099,20 @@ async function runAnalysis() {
 async function runReanalysis() {
     const btn = document.getElementById('btn-reanalyze');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 分析中...'; }
-
-    const container = document.querySelector('#progress-container');
-    if (container) {
-        container.style.display = 'block';
-        container.innerHTML = `<div class="progress mt-1" style="height:6px"><div class="progress-bar progress-bar-striped progress-bar-animated" id="progress-bar" style="width:0%"></div></div><small class="text-muted" id="progress-text">启动分析...</small>`;
-    }
-
-    const progressBar = document.getElementById('progress-bar');
-    const progressText = document.getElementById('progress-text');
-
+    showToast('正在基于已有数据重新提取特征...', 'info');
     try {
-        const resp = await fetch('/api/run-analysis/{{ bvid }}', { method: 'POST' });
-        const result = await resp.json();
-
-        if (!result.success && resp.status !== 409) {
-            showToast(result.message, 'error');
+        const resp = await fetch('/api/video/{{ bvid }}/reanalyze', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            showToast(data.message || '分析失败', 'error');
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重新分析'; }
-            if (container) container.style.display = 'none';
-            return;
         }
-
-        let pct = 0;
-        const pollInterval = setInterval(async () => {
-            try {
-                const sr = await fetch('/api/analysis-status/{{ bvid }}');
-                const sd = await sr.json();
-                const data = sd.data;
-
-                if (data.status === 'done') {
-                    clearInterval(pollInterval);
-                    if (progressText) progressText.textContent = '分析完成！刷新中...';
-                    if (progressBar) progressBar.style.width = '100%';
-                    setTimeout(() => location.reload(), 500);
-                } else if (data.status === 'error') {
-                    clearInterval(pollInterval);
-                    showToast(data.error || '分析失败', 'error');
-                    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重新分析'; }
-                    if (container) container.style.display = 'none';
-                } else {
-                    pct = Math.min(pct + 2, 85);
-                    const text = data.progress || '分析中';
-                    if (progressBar) progressBar.style.width = pct + '%';
-                    if (progressText) progressText.textContent = text;
-                    if (btn) btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> ' + text;
-                }
-            } catch(e) {}
-        }, 1500);
-    } catch(e) {
-        showToast('请求失败: ' + e.message, 'error');
+    } catch (err) {
+        showToast('请求失败: ' + err.message, 'error');
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重新分析'; }
-        if (container) container.style.display = 'none';
     }
 }
 
@@ -2097,30 +2056,6 @@ async function collectAllNoData() {
 function showUserDetailByMid(mid) {
     const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
     if (idx >= 0) showUserDetail(idx);
-}
-
-// ★ 基于已有数据重新分析（不跑爬虫）
-async function reanalyzeData() {
-    const btn = document.getElementById('btn-reanalyze');
-    if (!btn) return;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 分析中...';
-    try {
-        const resp = await fetch('/api/video/{{ bvid }}/reanalyze', { method: 'POST' });
-        const data = await resp.json();
-        if (data.success) {
-            showToast(data.message, 'success');
-            setTimeout(() => location.reload(), 3000);
-        } else {
-            showToast(data.message || '分析失败', 'error');
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-lightning"></i> 重新分析';
-        }
-    } catch (err) {
-        showToast('请求失败: ' + err.message, 'error');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-lightning"></i> 重新分析';
-    }
 }
 
 // ★ 刷新单个用户数据（注入种子 + 启动爬虫 + 等待文件生成后自动更新弹窗）

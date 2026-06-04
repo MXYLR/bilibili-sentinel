@@ -86,6 +86,7 @@ class BilibiliUserSpider(scrapy.Spider):
         self._idle_start_time = None
         self._seen_mids = set()
         self._use_playwright = False
+        self._never_use_playwright = True  # ★ 禁用中间件的 Playwright 兜底
         self._412_count = 0
         logger.info(f"BilibiliUserSpider v2026-06-04-18:58 (native scheduler) initialized")
 
@@ -175,6 +176,7 @@ class BilibiliUserSpider(scrapy.Spider):
 
         # ★ 主接口: card API | 每次请求前强制关闭 Playwright 兜底
         self._use_playwright = False
+        self._never_use_playwright = True  # ★ 禁用中间件的 Playwright 兜底
         self._412_count = 0
         card_url = f"https://api.bilibili.com/x/web-interface/card?mid={mid}"
         return scrapy.Request(

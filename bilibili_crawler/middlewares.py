@@ -653,12 +653,16 @@ class BilibiliResponseMiddleware:
                 trigger_count = 5
 
             if self._consecutive_412 >= trigger_count:
-                spider._use_playwright = True
-                spider.logger.warning(
-                    f"[PlaywrightFallback] Triggered! "
-                    f"({self._consecutive_412} consecutive 412s) — "
-                    f"Switching to real browser mode (zero 412 rate)"
-                )
+                # ★ 检查 spider 是否禁用了 Playwright 兜底（如用户爬虫）
+                if hasattr(spider, '_never_use_playwright') and spider._never_use_playwright:
+                    spider.logger.debug(f"[PlaywrightFallback] Skipped (spider opted out)")
+                else:
+                    spider._use_playwright = True
+                    spider.logger.warning(
+                        f"[PlaywrightFallback] Triggered! "
+                        f"({self._consecutive_412} consecutive 412s) — "
+                        f"Switching to real browser mode (zero 412 rate)"
+                    )
 
             if retry_count > 5:
                 spider.logger.error("风控重试次数超标，放弃请求")

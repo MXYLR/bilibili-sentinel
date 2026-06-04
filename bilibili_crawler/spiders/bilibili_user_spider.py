@@ -143,7 +143,6 @@ class BilibiliUserSpider(scrapy.Spider):
 
     def start_requests(self):
         """启动: 从 Redis 读取种子并开始爬取。"""
-        print("=== start_requests CALLED ===", flush=True)
         prewarm_wbi_cache()
 
         seeds = []
@@ -156,11 +155,9 @@ class BilibiliUserSpider(scrapy.Spider):
 
         if not seeds:
             self._idle_start_time = time.time()
-            print("=== No seeds, entering idle ===", flush=True)
             logger.info("No user seeds in Redis. Entering idle mode, waiting for seeds...")
             return
 
-        print(f"=== Starting with {len(seeds)} seed(s): {seeds} ===", flush=True)
         logger.info(f"Starting with {len(seeds)} user seed(s): {seeds}")
         for mid in seeds:
             self._seen_mids.add(mid)
@@ -178,7 +175,9 @@ class BilibiliUserSpider(scrapy.Spider):
             self._fetch_next_user()
             return
 
-        # ★ 主接口: card API (轻量, 无需WBI签名, 无352)
+        # ★ 主接口: card API | 每次请求前强制关闭 Playwright 兜底
+        self._use_playwright = False
+        self._412_count = 0
         card_url = f"https://api.bilibili.com/x/web-interface/card?mid={mid}"
         return scrapy.Request(
             card_url, callback=self._parse_card_api,

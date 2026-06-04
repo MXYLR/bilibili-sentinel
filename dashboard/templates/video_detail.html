@@ -1005,7 +1005,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const topSuspects = {{ report.top_suspects | tojson | safe }};
         const featureCounts = {};
-        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','批量注册','互动小圈子','VIP异常','账号骨架','转发模式','敏感内容','商业引流','时间规律性','自评相似度'].forEach(n => featureCounts[n] = 0);
+        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','账号骨架','敏感内容','商业引流','时间规律性','签名引战'].forEach(n => featureCounts[n] = 0);
         topSuspects.forEach(user => {
             user.top_features.forEach(f => {
                 if (featureCounts[f.name] !== undefined) featureCounts[f.name]++;

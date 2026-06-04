@@ -802,7 +802,7 @@ class SpiderManager:
         if video_path.exists(): video_count = len(list(video_path.glob("*.json")))
         if comment_path.exists(): comment_count = len(list(comment_path.glob("*_comments.json")))
         if report_path.exists(): report_count = len(list(report_path.glob("*_report.json")))
-        if user_path.exists(): user_count = len(list(user_path.glob("*.json")))
+        if user_path.exists(): user_count = len([f for f in user_path.glob("*.json") if not f.name.endswith("_posts.json") and f.name != "unique_mids.json"])
         if danmaku_path.exists(): danmaku_count = len(list(danmaku_path.glob("*_danmaku.json")))
         return {
             "videos_collected": video_count,

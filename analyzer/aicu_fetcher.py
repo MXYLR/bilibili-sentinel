@@ -20,6 +20,7 @@ AICU 数据抓取器 — 获取 B站用户的历史评论和弹幕
 
 import json
 import logging
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -38,13 +39,25 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ★ Playwright 浏览器实例（懒加载，全局复用）
-_playwright_browser = None
-_playwright_context = None
+# ★ Playwright 浏览器实例（懒加载，per-thread 复用）
+# 使用 threading.local() 让每个线程有独立的 Playwright 实例，避免线程安全问题
+_thread_local = threading.local()
 
 # ============================================================
 #  Playwright 辅助函数
 # ============================================================
+
+def _get_thread_playwright():
+    """获取当前线程的 Playwright 实例（懒加载）"""
+    if not hasattr(_thread_local, 'playwright_browser'):
+        _thread_local.playwright_browser = None
+        _thread_local.playwright_context = None
+    return _thread_local.playwright_browser, _thread_local.playwright_context
+
+def _set_thread_playwright(browser, context):
+    """设置当前线程的 Playwright 实例"""
+    _thread_local.playwright_browser = browser
+    _thread_local.playwright_context = context
 
 def _detect_cloudflare(page) -> bool:
     """检测页面是否出现 CloudFlare 验证。"""
@@ -454,15 +467,9 @@ class AicuFetcher:
         Returns:
             [{time, message, readable_time, oid, type, rank}, ...] 或 None
         """
-        global _playwright_browser, _playwright_context
-
-        # v2.29: 线程安全检查 — Playwright 不能在后台线程中使用
-        import threading
-        if threading.current_thread() != threading.main_thread():
-            logger.warning(f"[AICU:Web] 后台线程中禁用 Playwright (mid={mid})")
-            if self._log:
-                self._log("warn", f"  后台线程中跳过 Playwright 浏览器抓取 (mid={mid})")
-            return None
+        # v2.29: 使用 threading.local() 让每个线程有独立的 Playwright 实例
+        # 这样后台线程也能安全使用 Playwright，不会跨线程崩溃
+        _playwright_browser, _playwright_context = _get_thread_playwright()
 
         try:
             from playwright.sync_api import sync_playwright
@@ -494,6 +501,8 @@ class AicuFetcher:
                     locale="zh-CN",
                     viewport={"width": 1280, "height": 800},
                 )
+                # 保存到当前线程的本地存储
+                _set_thread_playwright(_playwright_browser, _playwright_context)
 
             page = _playwright_context.new_page()
 
@@ -633,13 +642,8 @@ class AicuFetcher:
 
     def _get_via_playwright(self, url: str, params: dict) -> Optional[dict]:
         """通过 Playwright 真实浏览器请求 AICU API，绕过 CloudFlare WAF。"""
-        global _playwright_browser, _playwright_context
-
-        # v2.29: 线程安全检查 — Playwright 不能在后台线程中使用
-        import threading
-        if threading.current_thread() != threading.main_thread():
-            logger.warning(f"[AICU:Playwright] 后台线程中禁用 Playwright: {url[:60]}")
-            return None
+        # v2.29: 使用 threading.local() 让每个线程有独立的 Playwright 实例
+        _playwright_browser, _playwright_context = _get_thread_playwright()
 
         try:
             from playwright.sync_api import sync_playwright
@@ -651,6 +655,8 @@ class AicuFetcher:
         logger.info(f"[AICU:Playwright] 请求 {full_url[:100]}...")
 
         try:
+            _playwright_browser, _playwright_context = _get_thread_playwright()
+
             if _playwright_browser is None:
                 pw = sync_playwright().start()
                 _playwright_browser = pw.chromium.launch(
@@ -665,6 +671,8 @@ class AicuFetcher:
                     ),
                     locale="zh-CN",
                 )
+                # 保存到当前线程的本地存储
+                _set_thread_playwright(_playwright_browser, _playwright_context)
 
             page = _playwright_context.new_page()
             try:

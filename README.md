@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.30。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 15 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.30。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -36,7 +36,7 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 ### 数据采集
 - **视频搜索**: 关键词搜索 + 热门排行 + UP主全部投稿（`bilibili_mid://` 种子），采集视频元信息
 - **评论采集**: 双排序模式（时间排序耗尽自动切换热度），支持楼中楼主评论，单视频上限 10,000 条
-- **用户空间**: card API 采集用户画像（name/face/level/sign/fans/attention/archives/vip/official），2.5s 间隔防风控
+- **用户空间**: card API 采集用户画像（mid/name/sex/face/sign/level/birthday/vip_status/official_verify/follower/following/video_count/post_count），2.5s 间隔防风控
 - **用户动态**: `tools/fetch_user_posts.py` 独立脚本，用 curl_cffi 绕过 412 批量采集用户动态，存为 `data/users/{mid}_posts.json`，供 F14 特征使用
 - **弹幕数据**: 集成在 AICU 深度分析中，通过 AICU API 自动获取用户历史弹幕（已移除独立弹幕爬虫）
 - **种子联动**: 注入用户 UID → 自动推入视频爬虫队列 → 视频爬虫拉取 UP主全部投稿 → 有评论的视频自动推入评论队列
@@ -49,7 +49,7 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 无需手动干预，Flask 终端实时显示 `[Chain]` 进度。
 
 ### 水军检测
-- **15 维特征评分引擎 (F1-F18)**: 覆盖账号身份、行为模式、内容质量、空间画像四大维度。含 F15 商业引流、F16 时间规律性、F18 签名引战等新增特征
+- **13 维特征评分引擎 (F1-F8, F12, F14-F16, F18)**: 覆盖账号身份、行为模式、内容质量、空间画像四大维度。含 F15 商业引流、F16 时间规律性、F18 签名引战等新增特征
 - **LLM 语义分析**: 多 Provider 支持（DeepSeek V4 / OpenAI GPT-4o / 自定义端点），异步后台执行 + 前端轮询进度，支持 Modal 阈值调节。Prompt 允许无评论时根据账号特征判定水军（F12≥0.6 或 F14≥0.3 即可判定）
 - **AICU 深度分析**: 对高风险用户回溯历史评论/弹幕/动态，三次融合评分（引擎 50% + LLM 25% + 深度 25%），同样支持 Modal 阈值调节。新增时间模式分析（检测长时间不活跃后突然活跃）
 - **8 种水军类型识别**: 模板刷评 / 情绪引导 / AI 生成 / 引流广告 / 批量操控 / 黑产养号 / 对立引战 / 敏感内容

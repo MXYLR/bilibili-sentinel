@@ -131,7 +131,12 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
     else:
         prompt += "\n**AICU:** 无历史数据"
 
-    prompt += "\n\n请输出深度分析 JSON。reasoning 80-120字，含特征解读+历史评论原文+判定逻辑。只输出JSON。"
+    prompt += """\n\n请输出深度分析 JSON。reasoning 80-120字，含特征解读+历史评论原文+判定逻辑。
+
+输出格式:
+{"results": [{"mid": 123456, "deep_type_id": 0, "deep_type_name": "正常用户", "deep_confidence": 0, "deep_reasoning": "f12=0.8命中4/5项，历史评论引流，判黑产养号(type6)"}]}
+字段说明: deep_type_id(0=正常 1-8=水军), deep_type_name(中文类型名), deep_confidence(0-100整数), deep_reasoning(80-120字)。
+只输出JSON。"""
 
     return prompt
 

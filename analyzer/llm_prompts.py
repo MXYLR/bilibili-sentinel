@@ -160,7 +160,9 @@ def build_user_prompt(users_data: list) -> str:
 
     prompt += """请分析以上用户，只输出 JSON（不要markdown代码块）。
 
-reasoning 要求: 80-120字，必须引用至少1条评论原文+解释特征值含义。
+输出格式（每个用户一个对象，放在 results 数组中）：
+{"results": [{"mid": 123456, "type_id": 0, "type_name": "正常用户", "confidence": 0, "reasoning": "f12=0.4命中2/5项非四无号，评论'讲得还行'自然，判正常(type0)"}]}
+字段说明: type_id(0=正常 1-8=水军), type_name(中文类型名), confidence(0-100整数), reasoning(80-120字分析)。
 只输出 JSON，不要其他内容。"""
     return prompt
 

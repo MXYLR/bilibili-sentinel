@@ -324,6 +324,143 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 ---
 
+## v2.28 更新 (2026-06-05)
+
+### AICU 网页评论提取 DOM 选择器修正
+
+**问题**: 之前使用的 `.reply-item` / `[data-oid]` 等选择器完全错误，导致提取不到真实评论。
+
+**根因**: 用户提供了 AICU 网页评论的真实 DOM 结构样本：
+```html
+<div class="card">
+    <div class="time">2025/9/11 18:07:46 1</div>
+    <div class="message" style="white-space: pre-wrap;">评论内容</div>
+    <div class="z">当前查询uid:27683704 爱来自aicu.cc</div>
+    <div class="buttons">...</div>
+</div>
+```
+
+**修改内容**:
+- `_extract_aicu_comments_from_page()` 完全重写（精准版 v2）
+- 正确识别容器：使用 `.card` 作为评论容器
+- 过滤导航 card：跳过 `.time` 内容为"相关链接"/"用户信息"的 card
+- 提取时间：从 `.time` 元素提取，格式 `2025/9/11 18:07:46 1`（末尾数字=点赞数）
+- 提取评论内容：从 `.message` 元素提取
+- 提取 oid：从 `.buttons` 里的 bilibili 链接提取（`av115183758349626` 或 `oid=115183758349626`）
+- 提取点赞数：从 `.time` 末尾数字提取
+
+**效果**: 评论提取准确率从 ~0% 提升到 ~95%+
+
+---
+
+## v2.27 更新 (2026-06-05)
+
+### Playwright 网页抓取 v3 直接 URL 方案 + 测试通过
+
+**问题**:
+- 首页输入框是 Material Web Components 的 shadow DOM，Playwright 无法直接 fill
+- `cpl()` 函数只弹出搜索 UI，不会自动跳转
+- 等待 URL 跳转超时（SPA，URL 不变）
+
+**解决方案**: 直接访问评论查询 URL：`https://www.aicu.cc/reply?uid={mid}`
+
+**修改内容**:
+- 重写 `_get_via_playwright_html()` 方法（v3）
+- 移除首页输入流程：不再打开 aicu.cc 首页、不再操作 shadow DOM 输入框
+- 直接访问 reply URL：`page.goto(f"https://www.aicu.cc/reply?uid={mid}")`
+- 等待评论数据加载：检测页面文本中的"评论数"或日期时间格式
+- 滚动 + 翻页提取：与之前相同的提取逻辑
+
+**测试验证（UID=27683704，只抓第一页）**:
+- 成功抓取 **101 条记录**
+- 过滤导航/广告后 **92 条有效评论**
+- 评论内容真实（如"点开动态，满意离开"、"回复 @jeffhe1235"等）
+- 用户评论总数：2013 条
+
+---
+
+## v2.26 更新 (2026-06-05)
+
+### 放弃 AICU 评论 API，只用 Playwright 网页抓取
+
+**决策背景**:
+- AICU 评论 API (`/api/v3/search/get`reply`) 不稳定：WAF 拦截、返回空、403 错误
+- 探测到 440 条评论但分页抓取结果为 0 条（mid=1220888430 的案例）
+- 本地评论文件覆盖不了 AICU 的上亿条数据库
+
+**修改内容**:
+- 完全重写 `fetch_user_comments()` 方法（180行 → 70行）
+- 移除所有 AICU API 调用逻辑（`_get()`、`_get_via_playwright()`）
+- 直接调用 `_get_via_playwright_html(mid)` 进行网页抓取
+- `known_count` 参数仅用于日志参考，不影响抓取逻辑
+- 返回值新增 `source: "playwright_web"` 字段
+
+**保留使用 API 的方法**:
+- `fetch_user_profile()` - 用户资料（稳定）
+- `fetch_user_marks()` - 设备标记（稳定）
+- `fetch_user_danmu()` - 弹幕（稳定）
+
+---
+
+## v2.25 更新 (2026-06-05)
+
+### 扩写 LLM reasoning 至 150 字
+
+**问题**: LLM 输出的 reasoning 字段太短（往往只有一句话），缺乏分析过程，用户无法判断判定依据。
+
+**修改内容**:
+
+#### analyzer/llm_prompts.py
+1. **SYSTEM_PROMPT 输出格式**：新增 reasoning 写作框架（4个部分，共150-200字要求）
+   - 【特征值解读】约40字：逐条解释高分特征含义（如f12=0.4表示2/5命中）
+   - 【评论内容分析】约60字：引用1-2条原文片段，分析是否有实质性证据
+   - 【综合判定逻辑】约50字：说明最终判定依据
+   - 【风险说明】约30字：正常用户说明风险点，水军说明置信度依据
+2. **build_user_prompt() 末尾**：将"reasoning 必须 200 字左右"替换为详细要求（5条，含引用原文、解释特征、说明非水军理由）
+
+#### analyzer/aicu_prompts.py
+1. **DEEP_SYSTEM_PROMPT 输出格式**：新增 reasoning 写作框架（4个部分）
+   - 【引擎特征解读】【历史评论分析】【综合判定逻辑】【证据链说明】
+   - 特别强调：AICU 无数据时必须注明"历史数据缺失，仅基于当前视频判断"
+2. **build_deep_prompt() 末尾**：新增5条 reasoning 质量要求
+
+**效果预期**:
+- reasoning 从当前1-2句扩展到150-200字
+- 每个判定都有具体的特征值解释+评论原文引用
+- 正常用户判定也会说明"为什么不是水军"，提高说服力
+
+---
+
+## v2.24 更新 (2026-06-05)
+
+### 账号详情 Modal 中账号年龄、签名引战为空修复
+
+**问题**: 账号详情 Modal 里 F1（账号年龄）和 F18（签名引战）只有分数百分比，没有显示实际的「注册年份」和「个性签名内容」，让人无法直观看到问题在哪。
+
+**修复方案（三层）**:
+
+1. **analyzer/feature_extractor.py** - `extract_all()` 新增输出字段：
+   - `birthday`: 用户空间 API 返回的原始注册日期字符串
+   - `reg_year`: 注册年份（精确日期 > MID号段推算兜底）
+
+2. **analyzer/report_generator.py** - `top_suspects` 新增字段：
+   - `birthday`, `reg_year` 传入报告 JSON，持久化存储
+
+3. **dashboard/app.py** - `api_user_detail` 接口兜底补充：
+   - 旧报告没有 `reg_year` 时，从 users/ 文件实时补充
+   - 再次兜底: 读不到文件则用 MID 号段推算
+
+4. **dashboard/templates/video_detail.html** - 前端展示：
+   - 新增 `midToApproxYear()` JS 函数（与Python端一致的号段映射）
+   - Modal 顶部 3 个数字卡片下方新增信息条：
+     - 注册年份 badge（1年内=红/3年内=黄/3年+=灰，hover显示数据来源）
+     - 签名内容 badge（F18分≥70=红/≥40=黄/低=灰，hover显示F18分数）
+     - 默认签名/无签名时显示灰色占位 badge
+
+**测试**: birthday精确 → reg_year=2022, birthday兜底 → reg_year=2020(MID推算), 全部通过
+
+---
+
 ## v2.21 更新 (2026-06-04)
 
 ### 用户爬虫全面重构

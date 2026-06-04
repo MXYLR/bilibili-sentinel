@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.22
+title Bilibili Sentinel v2.28
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -184,7 +184,7 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.22: 13维评分引擎(MID年龄推算)+死特征删除+一键LLM初筛+用户分组采集
+echo   v2.28: AICU网页抓取(Playwright)+评论DOM提取修正+LLM提示词优化+账号年龄/签名展示修复
 echo   全链路: 视频+评论 → 用户爬虫 → 分析+LLM初筛, 全自动
 echo.
 echo ============================================================

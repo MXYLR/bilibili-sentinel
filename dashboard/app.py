@@ -2440,6 +2440,39 @@ def api_user_detail(bvid: str, mid: int):
     user_file = Path(DATA_DIR) / "users" / f"{mid}.json"
     user["_user_data_available"] = user_file.exists()
 
+    # ★ 兜底补充 reg_year / sign（旧报告可能没有这两个字段）
+    if "reg_year" not in user or user.get("reg_year") is None:
+        if user_file.exists():
+            try:
+                with open(user_file, "r", encoding="utf-8") as uf:
+                    ud = json.load(uf)
+                birthday = ud.get("birthday", "")
+                reg_year = None
+                if isinstance(birthday, str) and len(birthday) >= 10:
+                    try:
+                        from datetime import datetime as _dt
+                        reg_year = _dt.strptime(birthday[:10], "%Y-%m-%d").year
+                        user["birthday"] = birthday
+                    except ValueError:
+                        pass
+                elif isinstance(birthday, (int, float)) and birthday > 1000000000:
+                    from datetime import datetime as _dt
+                    reg_year = _dt.fromtimestamp(birthday).year
+                    user["birthday"] = str(birthday)
+                if reg_year is None:
+                    from analyzer.feature_extractor import _mid_to_approx_year
+                    reg_year = _mid_to_approx_year(mid)
+                user["reg_year"] = reg_year
+                # 同时补充 sign
+                if not user.get("sign") and ud.get("sign"):
+                    user["sign"] = ud.get("sign", "")
+            except Exception:
+                from analyzer.feature_extractor import _mid_to_approx_year
+                user["reg_year"] = _mid_to_approx_year(mid)
+        else:
+            from analyzer.feature_extractor import _mid_to_approx_year
+            user["reg_year"] = _mid_to_approx_year(mid)
+
     return jsonify({"success": True, "data": user})
 
 

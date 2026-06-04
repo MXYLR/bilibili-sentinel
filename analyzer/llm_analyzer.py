@@ -857,7 +857,7 @@ class LLMAnalyzer:
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.1 if len(users_payload) == 1 else 0.3,
+                    temperature=0.1 if len(users_data) == 1 else 0.3,
                     max_tokens=2000,
                 )
 

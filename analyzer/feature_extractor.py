@@ -158,6 +158,21 @@ class FeatureExtractor:
 
             user_info = self.users.get(mid, {})
 
+            # ★ 账号注册年份（用于前端展示，三层兜底）
+            birthday_raw = user_info.get("birthday", "")
+            reg_year = None
+            if isinstance(birthday_raw, str) and len(birthday_raw) >= 10:
+                try:
+                    from datetime import datetime as _dt
+                    reg_year = _dt.strptime(birthday_raw[:10], "%Y-%m-%d").year
+                except ValueError:
+                    pass
+            elif isinstance(birthday_raw, (int, float)) and birthday_raw > 1000000000:
+                from datetime import datetime as _dt
+                reg_year = _dt.fromtimestamp(birthday_raw).year
+            if reg_year is None:
+                reg_year = _mid_to_approx_year(mid)  # 号段推算兜底
+
             results.append({
                 "mid": mid,
                 "uname": user_comms[0].get("uname", f"User_{mid}"),
@@ -166,6 +181,8 @@ class FeatureExtractor:
                 "features": features,
                 "sample_comments": sample,
                 "sign": user_info.get("sign", ""),  # v2.16: 个性签名传给LLM分析
+                "birthday": birthday_raw,            # ★ 原始注册日期字符串（可能为空）
+                "reg_year": reg_year,               # ★ 推算注册年份（前端展示用）
             })
 
         return results

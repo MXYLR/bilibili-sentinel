@@ -27,8 +27,14 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
-from curl_cffi import requests as cr_requests
-from curl_cffi.requests.errors import RequestsError as CR_Error
+try:
+    from curl_cffi import requests as cr_requests
+    from curl_cffi.requests.errors import RequestsError as CR_Error
+    _HAS_CURL_CFFI = True
+except ImportError:
+    cr_requests = None
+    CR_Error = Exception  # 兜底，避免 NameError
+    _HAS_CURL_CFFI = False
 
 logger = logging.getLogger(__name__)
 
@@ -65,49 +71,118 @@ def _detect_cloudflare(page) -> bool:
 
 
 def _extract_aicu_comments_from_page(page) -> list:
-    """从 AICU reply 页面 DOM 中提取评论数据。"""
+    """从 AICU reply 页面 DOM 中提取评论数据（精准版 v2）。
+
+    真实结构（来自用户提供的样本）:
+        <div class="card">           ← 可能是导航/用户信息/评论
+            <div class="time">2025/9/11 18:07:46 1</div>  ← 日期格式=评论
+            <div class="message">评论内容</div>
+            <div class="z">当前查询uid:27683704 爱来自aicu.cc</div>  ← 每个card都有
+            <div class="buttons">...</div>
+        </div>
+
+    过滤规则:
+        - 保留：有 .message + .time 匹配日期格式
+        - 跳过：.time 含"相关链接"/"用户信息"（导航card）
+        - 注意：.z 元素每个 card 都有，不能作为过滤条件
+    """
     comments = []
     try:
-        # AICU 页面评论结构 (从网页源码推断)
-        # 可能的 class 名: .reply-item, .comment-card, article, .list-item 等
-        for selector in [".reply-item", ".comment-item", "article.comment", ".card", ".list-item > div"]:
-            items = page.locator(selector)
-            if items.count() > 0:
-                for i in range(items.count()):
-                    try:
-                        el = items.nth(i)
-                        text = el.inner_text()
-                        if not text or len(text) < 3:
-                            continue
-                        # 尝试提取结构化数据
-                        oid = el.get_attribute("data-oid") or ""
-                        ts = el.get_attribute("data-time") or ""
-                        comments.append({
-                            "message": text[:500],
-                            "oid": oid,
-                            "time": ts,
-                            "readable_time": "",
-                            "type": 0,
-                            "rank": 0,
-                        })
-                    except Exception:
-                        continue
-                if comments:
-                    break
+        # 方法1: 用 JS 直接遍历 .card 容器，精准提取
+        result = page.evaluate("""() => {
+            const items = [];
+            const cards = document.querySelectorAll('.card');
+            cards.forEach(card => {
+                // 必须有 .message 元素（评论内容）
+                const msgEl = card.querySelector('.message');
+                if (!msgEl) return;  // 无评论内容，跳过
 
-        # 如果以上 selector 都没找到，用 JS 提取所有文本块
-        if not comments:
-            result = page.evaluate("""() => {
-                const items = [];
-                const containers = document.querySelectorAll('.reply-item, .comment-item, article, .card, .list-item, [data-oid]');
-                containers.forEach(el => {
-                    const oid = el.getAttribute('data-oid') || '';
-                    const text = el.textContent?.trim() || '';
-                    if (text.length > 5) items.push({message: text.slice(0, 500), oid, time: '', readable_time: '', type: 0, rank: 0});
+                const message = msgEl.textContent.trim();
+                if (!message || message.length < 2) return;
+
+                // 必须有 .time 元素，且内容是日期格式
+                const timeEl = card.querySelector('.time');
+                if (!timeEl) return;  // 无时间，跳过
+
+                const timeText = (timeEl.textContent || '').trim();
+                // 过滤导航 card：.time 内容是"相关链接"或"用户信息"
+                if (timeText.includes('相关链接') || timeText.includes('用户信息')) {
+                    return;  // 导航 card，跳过
+                }
+
+                // 解析时间: "2025/9/11 18:07:46 1" (末尾数字=点赞数)
+                let timestamp = 0;
+                let readableTime = '';
+                const dateMatch = timeText.match(/^(\\d{4})[\\/](\\d{1,2})[\\/](\\d{1,2})\\s+(\\d{1,2}):(\\d{1,2}):(\\d{1,2})/);
+                if (dateMatch) {
+                    try {
+                        // JS Date: month 是 0-based
+                        const dt = new Date(dateMatch[1], dateMatch[2]-1, dateMatch[3], dateMatch[4], dateMatch[5], dateMatch[6]);
+                        timestamp = Math.floor(dt.getTime() / 1000);
+                        readableTime = dateMatch[1] + '/' + dateMatch[2] + '/' + dateMatch[3] + ' ' + dateMatch[4] + ':' + dateMatch[5];
+                    } catch(e) {}
+                }
+
+                // 提取 oid (视频AV号) — 从 buttons 里的链接获取
+                let oid = '';
+                const links = card.querySelectorAll('a[href*="bilibili.com"]');
+                links.forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    // 匹配 /video/av115183758349626 或 oid=115183758349626
+                    const avMatch = href.match(/\\/av(\\d+)/);
+                    const oidMatch = href.match(/[?&]oid=(\\d+)/);
+                    if (avMatch) oid = avMatch[1];
+                    else if (oidMatch) oid = oidMatch[1];
                 });
-                return items;
-            }""")
-            comments = result or []
+
+                // 提取点赞数 — 从 .time 末尾的数字
+                let rank = 0;
+                const rankMatch = timeText.match(/\\s+(\\d+)$/);
+                if (rankMatch) rank = parseInt(rankMatch[1]);
+
+                items.push({
+                    message: message.slice(0, 500),
+                    oid: oid,
+                    time: timestamp > 0 ? timestamp : '',
+                    readable_time: readableTime,
+                    type: 1,  // 评论
+                    rank: rank,
+                });
+            });
+            return items;
+        }""")
+        comments = result or []
+
+        # 方法2: Playwright locator 兜底（如果 JS 没拿到）
+        if not comments:
+            cards = page.locator('.card')
+            count = cards.count()
+            for i in range(min(count, 200)):
+                try:
+                    card = cards.nth(i)
+                    # 跳过页脚 card
+                    z_text = card.locator('.z').first.inner_text() if card.locator('.z').count() > 0 else ''
+                    if '当前查询uid' in z_text or '爱来自aicu.cc' in z_text:
+                        continue
+                    msg_el = card.locator('.message').first
+                    if msg_el.count() == 0:
+                        continue
+                    message = msg_el.inner_text().strip()
+                    if not message or len(message) < 2:
+                        continue
+                    time_text = card.locator('.time').first.inner_text().strip() if card.locator('.time').count() > 0 else ''
+                    comments.append({
+                        "message": message[:500],
+                        "oid": "",
+                        "time": "",
+                        "readable_time": time_text[:19] if time_text else '',
+                        "type": 1,
+                        "rank": 0,
+                    })
+                except Exception:
+                    continue
+
+        logger.info(f"[AICU:Web] 当前页提取到 {len(comments)} 条评论")
 
     except Exception as e:
         logger.warning(f"[AICU:Web] 评论提取异常: {e}")
@@ -361,17 +436,20 @@ class AicuFetcher:
 
         return None
 
-    def _get_via_playwright_html(self, mid: int) -> Optional[list]:
-        """终极兜底：通过 Playwright 真实浏览器操作 AICU 网页，提取评论数据。
+    def _get_via_playwright_html(self, mid: int, max_pages: int = 50) -> Optional[list]:
+        """通过 Playwright 真实浏览器访问 AICU 评论查询页，提取评论数据。
 
-        流程:
-          1. 打开 aicu.cc 首页
-          2. 在 UID 输入框输入 mid
-          3. 点击"查评论"按钮
-          4. 滚动页面加载全部评论
-          5. 逐页点击翻页按钮获取所有评论
+        流程（v3 - 直接URL方案，绕过首页输入框）:
+          1. 直接打开 https://www.aicu.cc/reply?uid={mid}
+          2. 等待页面加载完成
+          3. 滚动触发懒加载
+          4. 提取当前页评论
+          5. 点击翻页按钮获取更多
           6. 从中提取评论内容
-          7. 若遇 CloudFlare 拦截，提示用户手动操作
+
+        Args:
+            mid: B站用户 UID
+            max_pages: 最大翻页次数（默认50，测试时可设为1）
 
         Returns:
             [{time, message, readable_time, oid, type, rank}, ...] 或 None
@@ -386,17 +464,17 @@ class AicuFetcher:
 
         logger.info(f"[AICU:Web] 启动浏览器抓取 mid={mid}...")
         if self._log:
-            self._log("info", f"  启动 Playwright 浏览器模拟人工查询...")
+            self._log("info", f"  启动 Playwright 浏览器查询 AICU...")
 
         pw = None
         page = None
-        need_user_cf = False  # CloudFlare 需要人工介入
+        need_user_cf = False
 
         try:
             if _playwright_browser is None:
                 pw = sync_playwright().start()
                 _playwright_browser = pw.chromium.launch(
-                    headless=False,  # ★ 必须非无头，CloudFlare 检测 headless
+                    headless=False,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
                 _playwright_context = _playwright_browser.new_context(
@@ -411,9 +489,11 @@ class AicuFetcher:
 
             page = _playwright_context.new_page()
 
-            # ---- Step 1: 打开 AICU 首页 ----
-            page.goto("https://www.aicu.cc/", wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
+            # ---- Step 1: 直接打开评论查询 URL ----
+            target_url = f"https://www.aicu.cc/reply?uid={mid}"
+            logger.info(f"[AICU:Web] 访问 {target_url}")
+            page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
 
             # 检测 CloudFlare
             if _detect_cloudflare(page):
@@ -423,61 +503,31 @@ class AicuFetcher:
                     self._log("warn", "  ⚠️ CloudFlare 验证 — 请手动完成浏览器中的验证，60秒超时")
                 try:
                     page.wait_for_function(
-                        "document.querySelector('#uidInput') !== null",
+                        "document.body.innerText.includes('评论') || document.body.innerText.includes('回复')",
                         timeout=60000,
                     )
                 except Exception:
                     logger.error("[AICU:Web] CloudFlare 验证超时")
                     return None
 
-            # ---- Step 2: 在 UID 输入框输入 mid ----
-            # Material Web Components 的 shadow DOM 结构:
-            # <md-filled-field> → shadowRoot → <input class="input">
-            uid_input = page.locator("#uidInput")
-            if not uid_input.count():
-                # 兜底：通过 shadow DOM 穿透
-                uid_input = page.locator("md-filled-field input.input")
-            if not uid_input.count():
-                # 再兜底：任意 input
-                uid_input = page.locator("input[type='text']").first
+            # 等待评论数据加载
+            try:
+                page.wait_for_function(
+                    """() => {
+                        const text = document.body.innerText || '';
+                    return /评论数\\s*\\d+/.test(text) || /\\d{4}\\/\\d{1,2}\\/\\d{1,2}\\s+\\d{1,2}:\\d{1,2}/.test(text);
+                    }""",
+                    timeout=20000,
+                )
+                logger.info("[AICU:Web] 评论数据已加载")
+            except Exception:
+                logger.warning("[AICU:Web] 等待评论数据超时，继续尝试提取...")
 
-            uid_input.click()
-            uid_input.fill("")
-            uid_input.type(str(mid), delay=50)
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(2000)
 
-            # ---- Step 3: 点击"查评论" ----
-            # onclick="cpl(document.getElementById('uidInput').value)"
-            search_btn = page.locator("md-filled-button:has-text('查评论')")
-            if not search_btn.count():
-                search_btn = page.locator("button:has-text('查评论')")
-            if not search_btn.count():
-                # 直接执行 JS
-                page.evaluate(f"cpl(document.getElementById('uidInput').value)")
-            else:
-                search_btn.click()
-
-            # 等待跳转到 reply 页面
-            page.wait_for_url(f"**/reply?uid={mid}**", timeout=15000)
-            page.wait_for_timeout(3000)
-
-            # ---- Step 4: 滚动加载 + 翻页获取全部评论 ----
+            # ---- Step 2: 滚动加载 + 翻页获取全部评论 ----
             all_comments = []
             seen_ids = set()
-
-            # 再次检测 CloudFlare
-            if _detect_cloudflare(page):
-                need_user_cf = True
-                logger.warning("[AICU:Web] reply页检测到CloudFlare，等待60秒...")
-                if self._log:
-                    self._log("warn", "  ⚠️ 评论页 CloudFlare — 请手动验证，60秒超时")
-                try:
-                    page.wait_for_function(
-                        "document.querySelector('.reply-item, .comment-item, article, .card') !== null || document.querySelector('#pagination') !== null",
-                        timeout=60000,
-                    )
-                except Exception:
-                    pass
 
             # 先滚动到底部触发懒加载
             for _ in range(3):
@@ -486,48 +536,72 @@ class AicuFetcher:
 
             # 翻页逻辑
             current_page = 1
-            max_pages = 50  # 安全上限
+            pages_limit = max_pages or 50
 
-            while current_page <= max_pages:
+            while current_page <= pages_limit:
                 # 提取当前页评论
                 comments = _extract_aicu_comments_from_page(page)
+                new_count = 0
                 for c in comments:
-                    oid = c.get("oid", 0)
+                    oid = c.get("oid", "") or c.get("message", "")[:50]
                     if oid and oid not in seen_ids:
                         seen_ids.add(oid)
                         all_comments.append(c)
+                        new_count += 1
 
-                logger.info(f"[AICU:Web] 第{current_page}页提取 {len(comments)} 条 (累计{len(all_comments)})")
+                logger.info(f"[AICU:Web] 第{current_page}页提取 {len(comments)} 条 (新增{new_count}, 累计{len(all_comments)})")
 
-                # 点击下一页
-                next_btn = page.locator(f"#pagination a.pagination-button:has-text('{current_page + 1}')")
-                next_count = next_btn.count()
-                if next_count == 0 or not next_btn.is_visible():
-                    # 尝试"..."后面的页
-                    all_btns = page.locator("#pagination a.pagination-button")
-                    btn_count = all_btns.count()
-                    clicked = False
-                    for i in range(btn_count):
-                        btn = all_btns.nth(i)
-                        text = btn.inner_text()
+                # 如果这一页没有新评论，说明已到末页
+                if new_count == 0 and current_page > 1:
+                    logger.info("[AICU:Web] 当前页无新评论，停止翻页")
+                    break
+
+                # ---- 翻页：多种策略 ----
+                clicked = False
+
+                # 策略1: 找"下一页"箭头 / 文字按钮
+                for next_sel in [
+                    "a:has-text('>')",
+                    "a:has-text('下一页')",
+                    "a.pagination-next",
+                    "button:has-text('下一页')",
+                    ".pagination a:last-child",
+                ]:
+                    btn = page.locator(next_sel)
+                    if btn.count() > 0 and btn.first.is_visible():
                         try:
-                            page_num = int(text.strip())
-                            if page_num > current_page:
+                            btn.first.click()
+                            clicked = True
+                            current_page += 1
+                            break
+                        except Exception:
+                            continue
+
+                # 策略2: 找数字按钮（比当前页大）
+                if not clicked:
+                    all_btns = page.locator("#pagination a, .pagination a, nav a")
+                    btn_count = all_btns.count()
+                    for i in range(btn_count):
+                        try:
+                            btn = all_btns.nth(i)
+                            text = btn.inner_text().strip()
+                            page_num = int(text)
+                            if page_num == current_page + 1:
                                 btn.click()
                                 current_page = page_num
                                 clicked = True
                                 break
-                        except ValueError:
+                        except (ValueError, Exception):
                             continue
-                    if not clicked:
-                        break
-                else:
-                    next_btn.click()
-                    current_page += 1
 
-                page.wait_for_timeout(2000)
+                if not clicked:
+                    logger.info(f"[AICU:Web] 无下一页按钮，停止翻页 (共{current_page}页)")
+                    break
+
+                # 等待页面加载
+                page.wait_for_timeout(2500)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(1500)
 
             logger.info(f"[AICU:Web] 完成: {len(all_comments)} 条评论 (mid={mid})")
             if self._log:
@@ -548,7 +622,6 @@ class AicuFetcher:
                     page.close()
                 except Exception:
                     pass
-            # 不关闭 browser/context，复用
 
     def _get_via_playwright(self, url: str, params: dict) -> Optional[dict]:
         """通过 Playwright 真实浏览器请求 AICU API，绕过 CloudFlare WAF。"""
@@ -685,186 +758,65 @@ class AicuFetcher:
 
     def fetch_user_comments(self, mid: int, known_count: int = None) -> dict:
         """
-        分页获取用户历史评论（AICU API）。
+        通过 Playwright 网页抓取获取用户历史评论（放弃 AICU API）。
 
-        先请求 ps=0 获取 all_count，然后分页获取全部评论（每页最多 500 条）。
+        直接访问 aicu.cc 网页，模拟点击翻页，提取评论内容。
+        known_count 参数仅用于日志参考（AICU 探测结果），不影响抓取逻辑。
 
         Args:
             mid: B站用户 UID
+            known_count: 已知评论总数（仅用于日志，可选）
 
         Returns:
             {
-                comments: [{time, message, rank, readable_time, timestamp, oid, type}],
+                comments: [{time, message, rank, readable_time, oid, type}],
                 count: int,
-                stats: {active_hour, avg_length, hour_dist}
+                stats: {active_hour, avg_length, hour_dist, source}
             }
         """
-        # 第一步：获取评论总数（如果已有探测结果则跳过）
-        try:
-            if known_count is not None:
-                all_count = known_count
-                if self._log:
-                    self._log("info", f"  使用探测结果: 评论总数={all_count}")
-            else:
-                count_params = {
-                    "uid": mid,
-                    "pn": 1,
-                    "ps": 0,
-                    "mode": 0,
-                    "keyword": "",
-                }
-                count_raw = self._get(AICU_REPLY_API, count_params)
-                if not count_raw or count_raw.get("code") != 0:
-                    logger.debug(f"[AICU] 评论总数获取失败: mid={mid}, code={count_raw.get('code') if count_raw else 'N/A'}")
-                    return {"comments": [], "count": 0, "stats": {}}
-                all_count = count_raw.get("data", {}).get("cursor", {}).get("all_count", 0)
-            if all_count == 0:
-                logger.info(f"[AICU] 用户 {mid} 无历史评论")
-                return {"comments": [], "count": 0, "stats": {}}
-
-            logger.info(f"[AICU] 用户 {mid} 共有 {all_count} 条历史评论，开始分页获取...")
+        if known_count:
+            logger.info(f"[AICU] 开始网页抓取评论: mid={mid} (已知{known_count}条)")
             if self._log:
-                total_pages = (all_count + page_size - 1) // page_size
-                self._log("info", f"  AICU API: 分页获取评论 mid={mid}, 共{all_count}条/{total_pages}页")
+                self._log("info", f"  放弃 API，启动网页抓取: mid={mid}, 已知{known_count}条评论")
+        else:
+            logger.info(f"[AICU] 开始网页抓取评论: mid={mid}")
+            if self._log:
+                self._log("info", f"  启动网页抓取: mid={mid}")
 
-        except Exception as e:
-            logger.error(f"[AICU] fetch_user_comments({mid}) 获取总数异常: {e}")
+        # 直接调用 Playwright 网页抓取（默认最多50页）
+        html_comments = self._get_via_playwright_html(mid, max_pages=50)
+
+        if not html_comments:
+            logger.warning(f"[AICU] 网页抓取评论失败: mid={mid}")
+            if self._log:
+                self._log("warn", f"  网页抓取失败: mid={mid}")
             return {"comments": [], "count": 0, "stats": {}}
 
-        # 第二步：分页获取评论
-        parsed = []
+        # 统计
+        parsed = html_comments
         all_lengths = []
         hour_counter = Counter()
-        page = 1
-        page_size = 500  # AICU API 最大每页 500 条
-        use_playwright = False  # ★ curl_cffi 失败后切换 Playwright
 
-        while len(parsed) < all_count:
-            params = {
-                "uid": mid,
-                "pn": page,
-                "ps": page_size,
-                "mode": 0,
-                "keyword": "",
-            }
+        for c in parsed:
+            msg = c.get("message", "")
+            if msg:
+                all_lengths.append(len(msg))
+            # 尝试从 time 字段提取小时
+            ts = c.get("time", "")
+            if ts and isinstance(ts, (int, float)) and ts > 0:
+                try:
+                    dt = datetime.fromtimestamp(int(ts), tz=_BEIJING_TZ)
+                    hour_counter[dt.hour] += 1
+                except (OSError, ValueError, OverflowError):
+                    pass
 
-            try:
-                raw = None
-                if use_playwright:
-                    # ★ Playwright 兜底：绕过 CloudFlare WAF
-                    raw = self._get_via_playwright(AICU_REPLY_API, params)
-                else:
-                    # curl_cffi 直连
-                    try:
-                        resp = self._get_session().get(
-                            AICU_REPLY_API, params=params, timeout=20, verify=False
-                        )
-                        if resp.status_code == 200:
-                            raw = resp.json()
-                        else:
-                            raw = None
-                            if self._log:
-                                self._log("warn", f"  评论分页 HTTP {resp.status_code}: page={page}")
-                    except Exception as req_err:
-                        raw = None
-                        if self._log:
-                            self._log("warn", f"  评论分页请求异常 page={page}: {str(req_err)[:80]}")
-
-                if not raw or raw.get("code") != 0:
-                    # ★ curl_cffi 被 WAF 拦截 → 切换到 Playwright
-                    if not use_playwright and page == 1:
-                        logger.warning(f"[AICU] curl_cffi 评论分页被 WAF 拦截，切换到 Playwright")
-                        if self._log:
-                            self._log("warn", "  curl_cffi 被 WAF 拦截，切换 Playwright 浏览器...")
-                        use_playwright = True
-                        continue  # 重试当前页
-                    logger.warning(f"[AICU] 评论分页失败: page={page}, code={raw.get('code') if raw else 'N/A'}")
-                    break
-
-                data = raw.get("data", {})
-                replies = data.get("replies", [])
-
-                if not replies:
-                    # 空页但 is_end=false，继续
-                    if not data.get("cursor", {}).get("is_end", True):
-                        logger.warning(f"[AICU] 评论页 {page} 为空但 is_end=false，继续...")
-                        page += 1
-                        continue
-                    break
-
-                for r in replies:
-                    if not isinstance(r, dict):
-                        continue
-
-                    ts = r.get("time") or 0
-                    msg = r.get("message", "")
-                    rank_val = r.get("rank", 0)
-                    oid = r.get("dyn", {}).get("oid", 0) if isinstance(r.get("dyn"), dict) else 0
-                    rtype = r.get("dyn", {}).get("type", 0) if isinstance(r.get("dyn"), dict) else 0
-
-                    # 时间格式化
-                    try:
-                        dt = datetime.fromtimestamp(ts, tz=_BEIJING_TZ)
-                        readable = dt.strftime("%Y-%m-%d %H:%M")
-                        hour_counter[dt.hour] += 1
-                    except (OSError, ValueError, OverflowError):
-                        readable = f"ts={ts}"
-                        hour_counter[0] += 1
-
-                    parsed.append({
-                        "time": ts,
-                        "readable_time": readable,
-                        "message": msg,
-                        "rank": rank_val,
-                        "oid": oid,
-                        "type": rtype,
-                    })
-                    if msg:
-                        all_lengths.append(len(msg))
-
-                # 检查是否结束
-                if data.get("cursor", {}).get("is_end", False):
-                    logger.info(f"[AICU] 评论分页获取完成 (cursor.is_end=True): 获取 {len(parsed)}/{all_count}")
-                    if self._log:
-                        self._log("success", f"  评论获取完成 mid={mid}: {len(parsed)}/{all_count}条")
-                    break
-
-                page += 1
-
-                # 进度日志（每5页或最后一页）
-                if self._log and (page % 5 == 0 or page > (all_count // page_size)):
-                    self._log("info", f"  评论分页中 mid={mid}: 第{page-1}页, 已获{len(parsed)}/{all_count}条")
-
-                # 安全退出：防止无限循环
-                if page > (all_count // page_size) + 10:
-                    logger.warning(f"[AICU] 评论分页页码异常，强制退出: page={page}, fetched={len(parsed)}, total={all_count}")
-                    break
-
-            except Exception as e:
-                logger.error(f"[AICU] 评论分页异常: mid={mid}, page={page}, error={e}")
-                break
-
-        # 统计
         active_hour = hour_counter.most_common(1)[0][0] if hour_counter else None
         avg_length = round(sum(all_lengths) / len(all_lengths), 1) if all_lengths else 0.0
         hour_dist = dict(hour_counter.most_common(5))
 
-        # ★ 终极兜底：API 完全失败 → Playwright 网页抓取
-        if len(parsed) == 0 and all_count > 0:
-            logger.warning(f"[AICU] API 获取评论内容失败 (all_count={all_count})，尝试网页抓取...")
-            if self._log:
-                self._log("warn", f"  API 无法获取评论内容，启动网页抓取...")
-            html_comments = self._get_via_playwright_html(mid)
-            if html_comments:
-                parsed = html_comments
-                for c in parsed:
-                    msg = c.get("message", "")
-                    if msg:
-                        all_lengths.append(len(msg))
-
-        logger.info(f"[AICU] 评论获取完成: mid={mid}, 实际={len(parsed)}, 总数={all_count}")
+        logger.info(f"[AICU] 网页抓取评论完成: mid={mid}, 实际={len(parsed)}条")
         if self._log:
-            self._log("success", f"  评论获取完成 mid={mid}: {len(parsed)}条, 活跃时段={active_hour}点, 均长={avg_length}字")
+            self._log("success", f"  网页抓取完成 mid={mid}: {len(parsed)}条, 活跃时段={active_hour}点, 均长={avg_length}字")
         return {
             "comments": parsed,
             "count": len(parsed),
@@ -872,6 +824,7 @@ class AicuFetcher:
                 "active_hour": active_hour,
                 "avg_length": avg_length,
                 "hour_dist": hour_dist,
+                "source": "playwright_web",
             },
         }
 

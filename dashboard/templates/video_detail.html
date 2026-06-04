@@ -1125,6 +1125,25 @@ const LLM_TYPE_COLORS = {
     1: '#c00', 2: '#d80', 3: '#60c', 4: '#069',
     5: '#c06', 6: '#080', 7: '#a60', 8: '#900'
 };
+
+// ★ 前端兜底: MID号段推算注册年份（与 feature_extractor._mid_to_approx_year 保持一致）
+function midToApproxYear(mid) {
+    mid = parseInt(mid) || 0;
+    if (mid < 1000000)       return 2010;
+    if (mid < 10000000)      return 2011;
+    if (mid < 100000000)     return 2013;
+    if (mid < 200000000)     return 2015;
+    if (mid < 300000000)     return 2017;
+    if (mid < 400000000)     return 2018;
+    if (mid < 500000000)     return 2019;
+    if (mid < 600000000)     return 2020;
+    if (mid < 700000000)     return 2021;
+    if (mid < 800000000)     return 2022;
+    if (mid < 1000000000)    return 2023;
+    if (mid < 1200000000)    return 2024;
+    return 2025;
+}
+
 const FEATURE_NAMES_ALL = {
     'f1_account_age':'账号年龄','f2_follow_ratio':'粉丝/关注比','f3_level_score':'用户等级',
     'f4_avatar_verify':'头像/认证','f5_content_similarity':'内容相似度','f6_time_burst':'时间爆发',
@@ -1853,12 +1872,40 @@ function showUserDetail(index) {
     // --- Metadata ---
     const reportTime = '{{ (report.report_meta.generated_at[:19] if report else "") }}';
 
+    // --- 账号年龄与签名信息 ---
+    const currentYear = new Date().getFullYear();
+    // reg_year: 优先用报告字段，旧报告没有则前端用MID号段推算
+    const regYear = user.reg_year || midToApproxYear(user.mid);
+    const srcLabel = user.birthday ? '精确日期' : (user.reg_year ? 'MID号段推算(已验证)' : 'MID号段推算(前端估算)');
+    let regYearHtml = '';
+    if (regYear) {
+        const ageYears = currentYear - regYear;
+        const ageText = ageYears <= 0 ? '本年注册（新号）' : `约 ${ageYears} 年 (注册于 ${regYear} 年)`;
+        const ageColor = ageYears <= 1 ? 'danger' : (ageYears <= 3 ? 'warning' : 'secondary');
+        regYearHtml = `<span class="badge bg-${ageColor} me-1" title="数据来源: ${srcLabel}"><i class="bi bi-calendar-event"></i> ${ageText}</span>`;
+    }
+    let signHtml = '';
+    const signRaw = (user.sign || '').trim();
+    if (signRaw && signRaw !== '这个人没有填简介啊~~~') {
+        const signEsc = signRaw.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const f18Val = (user.features && user.features['f18_signature_troll']) || 0;
+        const signBadgeColor = f18Val >= 70 ? 'danger' : (f18Val >= 40 ? 'warning' : 'secondary');
+        signHtml = `<span class="badge bg-${signBadgeColor} text-wrap text-start" style="max-width:100%;white-space:normal;font-weight:normal" title="F18签名引战分: ${f18Val}%"><i class="bi bi-quote"></i> ${signEsc}</span>`;
+    } else if (!signRaw || signRaw === '这个人没有填简介啊~~~') {
+        signHtml = `<span class="badge bg-light text-muted border"><i class="bi bi-dash"></i> 默认签名/无签名</span>`;
+    }
+
     // --- Assemble modal body ---
     modalBody.innerHTML = `
         <div class="row mb-3">
             <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">综合评分</div><h3 class="text-${riskColor} mb-0">${user.score}</h3></div></div>
             <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">风险等级</div><h4 class="mb-0"><span class="badge bg-${riskColor} fs-6">${riskLabel}</span></h4></div></div>
             <div class="col-md-4"><div class="border rounded p-2 text-center"><div class="text-muted small">Lv${user.level} · ${user.comment_count}条评论</div><h5 class="mb-0 text-muted">${reportTime}</h5></div></div>
+        </div>
+
+        <div class="mb-2 d-flex flex-wrap gap-1 align-items-center">
+            ${regYearHtml}
+            ${signHtml}
         </div>
 
         <div class="mb-3">

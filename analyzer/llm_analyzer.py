@@ -416,10 +416,10 @@ class LLMAnalyzer:
                 enhanced["llm_reasoning"] = reasoning
                 logger.warning(f"[LLM override] mid={mid} score={engine_score:.0%} LLM said normal → forced {type_name}")
 
-                # 重新评估风险等级
-                if fused >= RISK_HIGH:
+                # 重新评估风险等级（用引擎分，elide block 无 fused）
+                if engine_score >= RISK_HIGH:
                     enhanced["risk_level"] = "high"
-                elif fused >= RISK_MEDIUM:
+                elif engine_score >= RISK_MEDIUM:
                     enhanced["risk_level"] = "medium"
                 else:
                     enhanced["risk_level"] = "low"

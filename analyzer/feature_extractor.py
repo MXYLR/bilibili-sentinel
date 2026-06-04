@@ -182,46 +182,39 @@ class FeatureExtractor:
 
     def _f1_account_age(self, mid: int, user_comms: list) -> float:
         """
-        特征1: 账号年龄。
-
-        数据来源: UserInfoItem.birthday (B站 API 字段名就是 birthday, 实际是注册日期)
-        规则: 注册 < 30天 且 评论多 → 高分
+        特征1: 账号年龄。三层兜底:
+          1. card API birthday (精确)
+          2. MID号段推算 (±1年)
+          3. 用户等级
         """
         user = self.users.get(mid, {})
         birthday = user.get("birthday", "")
 
-        # ★ MID 号段推算近似注册年份 (birthday 为 0 时兜底)
-        if not birthday:
-            estimated_year = _mid_to_approx_year(mid)
-            if estimated_year:
-                account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
-                return _account_age_score(account_days, len(user_comms))
-
-            level = user_comms[0].get("level", 3)
-            if level <= 1:
-                return 0.6
-            return 0.3
-
-        try:
-            if isinstance(birthday, str):
+        # 验证 birthday 是否为有效日期
+        reg_date = None
+        if isinstance(birthday, str) and len(birthday) >= 10:
+            try:
                 reg_date = datetime.strptime(birthday[:10], "%Y-%m-%d")
-            elif isinstance(birthday, int):
-                reg_date = datetime.fromtimestamp(birthday)
-            else:
-                estimated_year = _mid_to_approx_year(mid)
-                if estimated_year:
-                    account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
-                    return _account_age_score(account_days, len(user_comms))
-                return 0.3
-        except (ValueError, TypeError):
-            estimated_year = _mid_to_approx_year(mid)
-            if estimated_year:
-                account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
-                return _account_age_score(account_days, len(user_comms))
-            return 0.3
+            except ValueError:
+                pass
+        elif isinstance(birthday, (int, float)) and birthday > 1000000000:
+            reg_date = datetime.fromtimestamp(birthday)
 
-        account_days = (datetime.now() - reg_date).days
-        return _account_age_score(account_days, len(user_comms))
+        if reg_date:
+            account_days = (datetime.now() - reg_date).days
+            return _account_age_score(account_days, len(user_comms))
+
+        # ★ 兜底1: MID 号段推算
+        estimated_year = _mid_to_approx_year(mid)
+        if estimated_year:
+            account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
+            return _account_age_score(account_days, len(user_comms))
+
+        # ★ 兜底2: 等级
+        level = user_comms[0].get("level", 3)
+        if level <= 1:
+            return 0.6
+        return 0.3
 
     # ================================================================
     #  Feature 2: Follow Ratio

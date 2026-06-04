@@ -160,21 +160,22 @@ class BilibiliUserSpider(scrapy.Spider):
     # ================================================================
 
     def _request_user_info(self, mid: int):
-        """请求用户空间基本信息（跳过已采集的）。"""
-        # ★ 跳过已有有效数据的用户
+        """请求用户信息 (优先 card API，无352风控)。"""
         user_file = os.path.join(DATA_DIR, "users", f"{mid}.json")
         if os.path.exists(user_file) and os.path.getsize(user_file) > 100:
             logger.debug(f"[mid={mid}] Already collected, skipping")
             self._fetch_next_user()
             return
 
-        url = get_user_info_url(mid)
+        # ★ 主接口: card API (轻量, 无需WBI签名, 无352)
+        card_url = f"https://api.bilibili.com/x/web-interface/card?mid={mid}"
         return scrapy.Request(
-            url,
-            callback=self.parse_user_info,
-            meta={"mid": mid},
+            card_url, callback=self._parse_card_api,
+            meta={"mid": mid, "_primary": True},
             errback=self._handle_error,
             dont_filter=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
+                     "Referer": f"https://space.bilibili.com/{mid}"},
         )
 
     def parse_user_info(self, response):

@@ -133,7 +133,8 @@ class BilibiliUpVideosSpider(scrapy.Spider):
         page = response.meta.get("page", 1)
         up_name = response.meta.get("up_name", "")
 
-        result = parse_bilibili_response(response)
+        import json as _json
+        result = parse_bilibili_response(_json.loads(response.text))
         if result is None:
             # API 失败, 记录但不中断后续页
             logger.warning(f"[mid={mid}] Page {page} API returned error or empty")

@@ -90,8 +90,25 @@ class BilibiliUserSpider(scrapy.Spider):
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super().from_crawler(crawler, *args, **kwargs)
+        crawler.signals.connect(spider.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(spider.spider_idle, signal=signals.spider_idle)
         return spider
+
+    def spider_opened(self):
+        """Spider 打开后立即尝试消费种子。"""
+        logger.info("Spider opened, checking for seeds...")
+        mid = self._pop_seed()
+        if mid and mid not in self._seen_mids:
+            self._seen_mids.add(mid)
+            req = self._request_user_info(mid)
+            if req:
+                self.crawler.engine.crawl(req)
+                logger.info(f"Initial seed consumed: mid={mid}")
+            else:
+                logger.warning(f"_request_user_info returned None for mid={mid}")
+        else:
+            self._idle_start_time = time.time()
+            logger.info("No seeds at spider open, entering idle mode")
 
     # ================================================================
     #  Redis 种子读取

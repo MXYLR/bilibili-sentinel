@@ -278,8 +278,8 @@
                             </tr>
                         </thead>
                         <tbody>
-                        {% set has_data_users = report.top_suspects | selectattr('_has_data', 'equalto', true) | list %}
-                        {% set no_data_users = report.top_suspects | selectattr('_has_data', 'equalto', false) | list %}
+                        {% set has_data_users = report.top_suspects | selectattr('_user_data_available', 'equalto', true) | list %}
+                        {% set no_data_users = report.top_suspects | selectattr('_user_data_available', 'equalto', false) | list %}
                         <!-- 未采集用户: 高亮表头 + 一键采集按钮 -->
                         {% if no_data_users %}
                         <tbody id="tbody-nodata" style="border-top: 3px solid #fd7e14">

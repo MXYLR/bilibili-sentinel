@@ -1591,11 +1591,11 @@ def video_detail(bvid: str):
                 "llm_type_id": u.get("llm_type_id", 0),
             }
 
-    # ★ 标记用户是否有采集数据
+    # ★ 标记用户是否有采集数据 (v2.30: 字段名统一为 _user_data_available)
     if report and report.get("top_suspects"):
         for u in report["top_suspects"]:
             mid = u.get("mid", 0)
-            u["_has_data"] = (Path(DATA_DIR) / "users" / f"{mid}.json").exists()
+            u["_user_data_available"] = (Path(DATA_DIR) / "users" / f"{mid}.json").exists()
 
     resp = make_response(render_template(
         "video_detail.html",

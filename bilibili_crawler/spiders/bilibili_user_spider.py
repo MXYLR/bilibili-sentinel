@@ -96,7 +96,7 @@ class BilibiliUserSpider(scrapy.Spider):
         return spider
 
     def start_requests(self):
-        """使用 native scheduler: 直接消费 Redis 种子。"""
+        """使用 native scheduler: 消费种子或保持存活。"""
         prewarm_wbi_cache()
         skipped = 0
         while True:
@@ -118,8 +118,14 @@ class BilibiliUserSpider(scrapy.Spider):
             skipped += 1
         if skipped > 0:
             logger.info(f"All {skipped} seeds already collected")
-        logger.info("start_requests done, waiting for seeds (spider_idle will poll)...")
+        logger.info("start_requests: no seeds, spider will stay alive via spider_idle")
         self._idle_start_time = time.time()
+        # ★ yield 一个空请求占位，防止 spider 立即关闭
+        yield scrapy.Request("data:text/plain,keepalive", callback=self._keepalive, dont_filter=True)
+
+    def _keepalive(self, response):
+        """占位回调：触发 spider_idle 继续轮询种子。"""
+        pass
 
     # ================================================================
     #  Redis 种子读取

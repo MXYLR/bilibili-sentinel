@@ -427,45 +427,18 @@ class LLMAnalyzer:
                     features=u.get("features", {}),
                     engine_score=engine_score,
                 )
-            elif engine_score >= 0.70:
-                # ★ LLM 误判为正常但引擎高分 → 强制引擎判定
-                features = u.get("features", {})
-                f12 = features.get("f12_account_skeleton", 0)
-                # 归一化 f12（同 engine_score 处理）
-                f12_val = f12 / 100.0 if f12 > 1.0 else f12
-                f15 = features.get("f15_commercial_spam", 0)
-                f15_val = f15 / 100.0 if f15 > 1.0 else f15
-
-                if f12_val >= 0.4:
-                    type_id, type_name = 6, "黑产养号型"
-                    reasoning = _ensure_reasoning("", type_id, type_name, 90,
-                                                   features=features, engine_score=engine_score)
-                elif f15_val >= 0.3:
-                    type_id, type_name = 4, "引流广告型"
-                    reasoning = _ensure_reasoning("", type_id, type_name, 90,
-                                                   features=features, engine_score=engine_score)
-                else:
-                    type_id, type_name = 6, "黑产养号型"
-                    reasoning = _ensure_reasoning("", type_id, type_name, 90,
-                                                   features=features, engine_score=engine_score)
-
-                enhanced["engine_score_raw"] = engine_score
-                enhanced["suspicious_score"] = engine_score  # 直接使用引擎分(0-1)
-                enhanced["llm_type_id"] = type_id
-                enhanced["llm_type_name"] = type_name
-                enhanced["llm_confidence"] = 90
-                enhanced["llm_reasoning"] = reasoning
-                logger.warning(f"[LLM override] mid={mid} score={engine_score:.0%} LLM said normal → forced {type_name}")
-
-                # 重新评估风险等级（用引擎分，elide block 无 fused）
+            else:
+                # LLM 认为正常或失败 → 生成引擎推理但不强制改类型
+                enhanced["llm_reasoning"] = _ensure_reasoning(
+                    "", 0, "正常用户", 0,
+                    features=u.get("features", {}),
+                    engine_score=engine_score,
+                )
+                # 引擎高分用户仍保留评分和风险等级提示
                 if engine_score >= RISK_HIGH:
                     enhanced["risk_level"] = "high"
                 elif engine_score >= RISK_MEDIUM:
                     enhanced["risk_level"] = "medium"
-                else:
-                    enhanced["risk_level"] = "low"
-
-                llm_positive += 1
 
             enhanced_users.append(enhanced)
 

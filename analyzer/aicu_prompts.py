@@ -125,7 +125,44 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
     if user_comments:
         comments_summary = compress_fn(user_comments, max_examples=2)
         prompt += f"\n当前评论: {comments_summary}"
-    
+
+    # v2.30: 时间模式分析 — 检测突然活跃（长时间不活跃后突然发评论）
+    # 逻辑：如果历史最后活跃时间距离当前视频评论时间 > 30天 → 突然活跃（可疑）
+    if aicu_data and aicu_data.fetch_ok and aicu_data.comment_timestamps:
+        # 1. 获取历史最后活跃时间
+        history_latest_ts = aicu_data.comment_timestamps[-1]  # 已排序（在 fetch_all 中排序）
+
+        # 2. 获取当前视频的最新评论时间
+        current_video_latest_ts = 0
+        if user_comments:
+            # 从当前视频评论中提取最新时间戳（兼容多种字段名）
+            for c in user_comments:
+                ts = c.get("ctime", 0) or c.get("created_time", 0) or c.get("time", 0)
+                if ts and ts > current_video_latest_ts:
+                    current_video_latest_ts = ts
+
+        # 3. 计算时间差
+        if current_video_latest_ts > 0 and history_latest_ts > 0:
+            try:
+                from datetime import datetime, timezone, timedelta
+                _BEIJING_TZ = timezone(timedelta(hours=8))
+                history_dt = datetime.fromtimestamp(history_latest_ts, tz=_BEIJING_TZ)
+                current_dt = datetime.fromtimestamp(current_video_latest_ts, tz=_BEIJING_TZ)
+                gap_days = (current_dt - history_dt).days
+
+                if gap_days > 30:
+                    prompt += f"\n\n⚠️ **时间异常检测**: 历史最后活跃({history_dt.strftime('%Y-%m-%d')}) 距今{gap_days}天，但在当前视频下发评论 → **突然活跃（水军典型行为）**"
+                    prompt += f"\n时间模式: 长时间不活跃({gap_days}天) 后突然在当前视频下评论，疑似水军"
+                    if aicu_data.last_active_time:
+                        prompt += f"\n最后活跃: {aicu_data.last_active_time}"
+                elif gap_days > 0:
+                    prompt += f"\n时间模式: 历史最后活跃({history_dt.strftime('%Y-%m-%d')})，{gap_days}天前"
+            except Exception as e:
+                logger.debug(f"[AICU:Time] 时间分析异常: {e}")
+
+        # 4. 如果没有当前视频评论时间，只显示历史最后活跃时间
+        elif aicu_data.last_active_time:
+            prompt += f"\n时间模式: 历史最后活跃 {aicu_data.last_active_time}"
     # AICU 历史数据
     if aicu_data and aicu_data.fetch_ok:
         parts = [f"\n**AICU历史:** {aicu_data.comment_count}条评论"]

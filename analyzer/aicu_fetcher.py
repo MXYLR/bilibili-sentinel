@@ -249,7 +249,15 @@ class AicuUserData:
     stats: dict = field(default_factory=dict)
     fetch_ok: bool = False
     fetch_error: str = ""
-    waf_blocked: bool = False   # API 被 WAF 拦截（HTTP 468）
+    waf_blocked: bool = False   # API 被 WAF 拦截（HTTP 403）
+
+    # v2.30: 时间模式分析字段
+    comment_timestamps: list = field(default_factory=list)  # 所有历史评论的时间戳列表
+    time_gap_days: int = 0          # 最后一次活跃到当前评论的时间间隔（天）
+    is_sudden_activity: bool = False # 是否突然活跃（长时间不活跃后突然发评论）
+    last_active_time: str = ""      # 最后一次活跃时间（可读格式）
+    activity_timeline: list = field(default_factory=list)  # 活跃时间线 [{date, count}, ...]
+    sudden_activity_reason: str = "" # 突然活跃的原因分析
 
     def __bool__(self):
         return self.fetch_ok
@@ -1037,6 +1045,69 @@ class AicuFetcher:
             result.danmu_count = danmu_data.get("count", 0)
             result.stats = comment_data.get("stats", {})
             result.waf_blocked = self._waf_detected
+
+            # v2.30: 时间模式分析 — 提取评论时间戳，检测长时间不活跃
+            if result.comments:
+                # 1. 提取所有时间戳（秒级）
+                timestamps = []
+                for c in result.comments:
+                    t = c.get("time", 0)
+                    if t and isinstance(t, (int, float)) and t > 0:
+                        timestamps.append(int(t))
+                
+                if timestamps:
+                    # 2. 按时间排序
+                    timestamps.sort()
+                    result.comment_timestamps = timestamps
+
+                    # 3. 最后活跃时间（北京时区）
+                    try:
+                        from datetime import datetime, timezone, timedelta
+                        _BEIJING_TZ = timezone(timedelta(hours=8))
+                        last_ts = timestamps[-1]
+                        dt = datetime.fromtimestamp(last_ts, tz=_BEIJING_TZ)
+                        result.last_active_time = dt.strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        pass
+
+                    # 4. 计算时间间隔（天），检测长时间不活跃
+                    if len(timestamps) >= 2:
+                        max_gap_days = 0
+                        activity_timeline = []
+                        prev_date = None
+
+                        for ts in timestamps:
+                            try:
+                                dt = datetime.fromtimestamp(ts, tz=_BEIJING_TZ)
+                                date_str = dt.strftime("%Y-%m-%d")
+                                if prev_date and date_str != prev_date:
+                                    # 计算间隔
+                                    from datetime import datetime as _dt
+                                    d1 = _dt.strptime(prev_date, "%Y-%m-%d").replace(tzinfo=_BEIJING_TZ)
+                                    d2 = dt
+                                    gap = (d2 - d1).days
+                                    if gap > max_gap_days:
+                                        max_gap_days = gap
+                                prev_date = date_str
+                                # 统计每天评论数
+                                found = False
+                                for item in activity_timeline:
+                                    if item["date"] == date_str:
+                                        item["count"] += 1
+                                        found = True
+                                        break
+                                if not found:
+                                    activity_timeline.append({"date": date_str, "count": 1})
+                            except Exception:
+                                continue
+
+                        result.time_gap_days = max_gap_days
+                        result.activity_timeline = activity_timeline[-30:]  # 只保留最近30天
+
+                        # 5. 长时间不活跃检测（>30天）
+                        if max_gap_days >= 30:
+                            result.is_sudden_activity = True  # 有长时间空白，可能突然活跃
+                            result.sudden_activity_reason = f"历史评论存在{max_gap_days}天空白期"
             # marks 成功即视为有效抓取（设备+历史昵称对深度分析最有价值）
             result.fetch_ok = bool(marks) and not self._waf_detected
 

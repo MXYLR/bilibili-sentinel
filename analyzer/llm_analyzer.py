@@ -725,27 +725,33 @@ class LLMAnalyzer:
         """
         for attempt in range(LLM_RETRY + 1):
             try:
-                response = client.chat.completions.create(
-                    model=self.model,
-                    messages=[
+                call_kwargs = {
+                    "model": self.model,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.3,
-                    max_tokens=1500,  # v2.29 减少输出token加速响应
-                    timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
-                    response_format={"type": "json_object"},  # v2.29 强制JSON输出
-                )
+                    "temperature": 0.3,
+                    "max_tokens": 1500,  # v2.29 减少输出token加速响应
+                    "timeout": LLM_TIMEOUT,  # v2.29 添加请求级别超时
+                }
+                if self.provider == "openai":
+                    call_kwargs["response_format"] = {"type": "json_object"}
+
+                logger.info(f"[DeepLLM] API 调用: provider={self.provider}, model={self.model}, prompt_chars={len(system_prompt)+len(user_prompt)}")
+                response = client.chat.completions.create(**call_kwargs)
 
                 self._total_calls += 1
                 if hasattr(response, "usage") and response.usage:
                     self._total_tokens += response.usage.total_tokens
 
                 content = response.choices[0].message.content
+                logger.info(f"[DeepLLM Raw] response_len={len(content) if content else 0}, first_500={content[:500] if content else '<EMPTY>'}")
 
                 # 解析 JSON
                 from analyzer.llm_prompts import parse_llm_response
                 raw_results = parse_llm_response(content)
+                logger.info(f"[DeepLLM Parsed] results_count={len(raw_results)}")
 
                 # 映射字段名: type_id → deep_type_id 等
                 mapped = []
@@ -853,34 +859,41 @@ class LLMAnalyzer:
 
         for attempt in range(LLM_RETRY + 1):
             try:
-                response = client.chat.completions.create(
-                    model=self.model,
-                    messages=[
+                call_kwargs = {
+                    "model": self.model,
+                    "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.1 if len(users_data) == 1 else 0.3,
-                    max_tokens=600 if len(users_data) == 1 else 2000,  # v2.29 单用户减半输出
-                    timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
-                    response_format={"type": "json_object"},  # v2.29 强制JSON输出
-                )
+                    "temperature": 0.1 if len(users_data) == 1 else 0.3,
+                    "max_tokens": 600 if len(users_data) == 1 else 2000,  # v2.29 单用户减半输出
+                    "timeout": LLM_TIMEOUT,  # v2.29 添加请求级别超时
+                }
+                # v2.29: 仅 OpenAI 官方支持 json_object，DeepSeek 可能报错，条件添加
+                if self.provider == "openai":
+                    call_kwargs["response_format"] = {"type": "json_object"}
+
+                logger.info(f"[LLM] API 调用: provider={self.provider}, model={self.model}, users={len(users_data)}, prompt_chars={len(SYSTEM_PROMPT)+len(user_prompt)}")
+                response = client.chat.completions.create(**call_kwargs)
 
                 self._total_calls += 1
                 if hasattr(response, "usage") and response.usage:
                     self._total_tokens += response.usage.total_tokens
 
                 content = response.choices[0].message.content
-                logger.debug(f"[LLM Raw] {content[:300]}")  # ★ 调试 LLM 原始响应
+                logger.info(f"[LLM Raw] response_len={len(content) if content else 0}, first_500={content[:500] if content else '<EMPTY>'}")
 
                 # 解析 JSON
                 from analyzer.llm_prompts import parse_llm_response
                 results = parse_llm_response(content)
+                logger.info(f"[LLM Parsed] results_count={len(results)}")
 
                 # 验证
                 valid = [
                     r for r in results
                     if isinstance(r, dict) and "mid" in r
                 ]
+                logger.info(f"[LLM Valid] valid_count={len(valid)}")
                 # ★ 调试: 检查 reasoning 字段
                 for r in valid:
                     if not r.get("reasoning") or len(str(r.get("reasoning", "")).strip()) < 5:

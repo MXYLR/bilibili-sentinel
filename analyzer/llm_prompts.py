@@ -193,6 +193,9 @@ def build_single_user_prompt(user_data: dict) -> str:
 def parse_llm_response(response_text: str) -> list:
     """
     解析 LLM 返回的 JSON。
+    支持两种格式：
+      1. {"results": [{"mid":..., ...}, ...]}  (批量)
+      2. {"mid":..., "type_id":..., ...}       (单用户直接对象)
 
     Args:
         response_text: LLM 原始返回文本
@@ -203,21 +206,49 @@ def parse_llm_response(response_text: str) -> list:
     import json
     import re
 
-    # 尝试提取 JSON 块
-    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-    if not json_match:
-        # 尝试直接找 JSON 对象
-        json_match = re.search(r'\{[\s\S]*"results"[\s\S]*\}', response_text)
-        if json_match:
-            text = json_match.group(0)
-        else:
-            # 兜底：整个响应
-            text = response_text
-    else:
-        text = json_match.group(1)
-
-    try:
-        data = json.loads(text)
-        return data.get("results", [])
-    except json.JSONDecodeError:
+    if not response_text or not response_text.strip():
         return []
+
+    text = response_text.strip()
+
+    def _try_parse(s: str):
+        """尝试解析字符串，返回 (data, success)"""
+        try:
+            d = json.loads(s)
+            return d, True
+        except json.JSONDecodeError:
+            return None, False
+
+    def _extract_results(data):
+        """从解析后的数据中提取结果列表"""
+        if isinstance(data, dict):
+            if "results" in data:
+                r = data.get("results", [])
+                return r if isinstance(r, list) else []
+            if "mid" in data:
+                return [data]
+        if isinstance(data, list):
+            return data
+        return []
+
+    # 策略1: 直接解析整个文本
+    data, ok = _try_parse(text)
+    if ok:
+        return _extract_results(data)
+
+    # 策略2: 提取 ```json ... ``` 代码块
+    m = re.search(r'```(?:json)?\s*(\{[\s\S]*\})\s*```', text, re.DOTALL)
+    if m:
+        data, ok = _try_parse(m.group(1))
+        if ok:
+            return _extract_results(data)
+
+    # 策略3: 提取最外层 {} 块（贪婪匹配，解决嵌套JSON问题）
+    # 非贪婪 *? 会在第一个 } 停止，导致嵌套JSON截断
+    m = re.search(r'\{[\s\S]*\}', text)
+    if m:
+        data, ok = _try_parse(m.group(0))
+        if ok:
+            return _extract_results(data)
+
+    return []

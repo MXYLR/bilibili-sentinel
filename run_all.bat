@@ -119,10 +119,8 @@ if exist "%ROOT%\analyzer\llm_analyzer.py" (
 if not exist "%ROOT%\data\logs" mkdir "%ROOT%\data\logs"
 
 echo.
-echo [1/5] Spiders NOT auto-started.
-echo   Use the Dashboard to start spiders: http://localhost:5001/crawler
-echo.
-echo   To restore auto-start, set AUTO_START_SPIDERS=1 above.
+echo [1/5] Dashboard only — spiders start from Crawler page.
+echo   Open: http://localhost:5001/crawler
 
 echo.
 echo [2/5] Starting Dashboard on port 5001...
@@ -140,7 +138,6 @@ powershell -Command ^
   "  $_.MainWindowTitle -like 'Bilibili Video Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili Comment Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili User Spider*' -or" ^
-  "  $_.MainWindowTitle -like 'Bilibili Danmaku Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili UPVideos Spider*' -or" ^
   "  $_.MainWindowTitle -like 'Bilibili Sentinel Dashboard*'" ^
   "} | ForEach-Object { $pids += $_.Id };" ^
@@ -224,7 +221,6 @@ if exist "%ROOT%\data\spider_pids.txt" (
 taskkill /FI "WINDOWTITLE eq Bilibili Video Spider*"    /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Comment Spider*"  /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili User Spider*"     /F >nul 2>&1
-taskkill /FI "WINDOWTITLE eq Bilibili Danmaku Spider*"  /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili UPVideos Spider*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq Bilibili Sentinel Dashboard*" /F >nul 2>&1
 echo   [Title] Window-title cleanup done

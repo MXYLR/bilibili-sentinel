@@ -105,7 +105,8 @@ class BilibiliUserSpider(scrapy.Spider):
                 self.crawler.engine.crawl(req)
                 logger.info(f"Initial seed consumed: mid={mid}")
             else:
-                logger.warning(f"_request_user_info returned None for mid={mid}")
+                logger.info(f"Initial seed skipped (already collected): mid={mid}")
+                self._fetch_next_user()  # ★ 继续尝试下一个
         else:
             self._idle_start_time = time.time()
             logger.info("No seeds at spider open, entering idle mode")

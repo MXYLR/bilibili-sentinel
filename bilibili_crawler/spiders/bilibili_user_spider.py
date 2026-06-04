@@ -41,7 +41,7 @@ from bilibili_crawler.utils.bilibili_api import (
 logger = logging.getLogger("bilibili_user")
 
 # ---- 安全限制 ----
-MAX_USERS_PER_RUN = 500        # 单次运行最多处理500个用户
+MAX_USERS_PER_RUN = 2000       # 单次运行最多处理2000个用户（单视频~1000评论者）
 POSTS_PER_USER = 50            # 每个用户最多采集50条动态
 MAX_POSTS_PAGES = 5            # 动态最多翻5页 (每页约10-12条)
 MAX_IDLE_TIME = 300            # 空闲超时(s): 等待新种子的最大时间

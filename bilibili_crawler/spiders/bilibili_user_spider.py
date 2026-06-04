@@ -231,6 +231,11 @@ class BilibiliUserSpider(scrapy.Spider):
             upload_count=data.get("archive_count", 0),
             crawl_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
         )
+        # ★ 防御性检查: 禁止关键字段为硬编码零值(upload_count=0除外,正常)
+        if int(user_item["follower"]) == 0 and int(data.get("follower", 0)) > 0:
+            logger.error(f"BUG: follower={data.get('follower')} lost! item={user_item['follower']}")
+        if int(user_item["following"]) == 0 and int(data.get("following", 0)) > 0:
+            logger.error(f"BUG: following={data.get('following')} lost! item={user_item['following']}")
 
         meta["user_info_item"] = user_item
         videos_url = get_user_videos_url(mid, page=1, ps=1)
@@ -528,7 +533,12 @@ class BilibiliUserSpider(scrapy.Spider):
             return
 
         skipped = 0
+        loop_guard = 0
         while True:
+            loop_guard += 1
+            if loop_guard > 10000:  # ★ 安全上限: 防止死循环
+                logger.error(f"Loop guard triggered! {loop_guard} iterations, breaking")
+                break
             mid = self._pop_seed()
             if mid is None:
                 break
@@ -589,8 +599,14 @@ class BilibiliUserSpider(scrapy.Spider):
     #  Spider Idle — 等待新种子
     # ================================================================
 
+    spider_idle_count = 0  # ★ 防止信号处理死循环
+
     def spider_idle(self):
         """空闲时检查 Redis 是否有新种子。"""
+        self.spider_idle_count += 1
+        if self.spider_idle_count > 1000:
+            logger.error(f"spider_idle called {self.spider_idle_count} times, forcing close")
+            return  # 强制关闭，允许蜘蛛退出
         mid = self._pop_seed()
         if mid and mid not in self._seen_mids:
             self._seen_mids.add(mid)

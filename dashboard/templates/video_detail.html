@@ -87,6 +87,10 @@
                         title="重新抓取视频信息和最新评论">
                     <i class="bi bi-arrow-repeat"></i> 刷新数据
                 </button>
+                <button class="btn btn-sm btn-outline-primary me-2" id="btn-reanalyze" onclick="reanalyzeData()"
+                        title="基于已有数据重新分析(不跑爬虫，约30秒)">
+                    <i class="bi bi-lightning"></i> 重新分析
+                </button>
                 <button class="btn btn-sm btn-outline-danger btn-delete-video" onclick="deleteThisVideo()">
                     <i class="bi bi-trash-fill"></i> 删除数据
                 </button>
@@ -2093,6 +2097,30 @@ async function collectAllNoData() {
 function showUserDetailByMid(mid) {
     const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
     if (idx >= 0) showUserDetail(idx);
+}
+
+// ★ 基于已有数据重新分析（不跑爬虫）
+async function reanalyzeData() {
+    const btn = document.getElementById('btn-reanalyze');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 分析中...';
+    try {
+        const resp = await fetch('/api/video/{{ bvid }}/reanalyze', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            showToast(data.message || '分析失败', 'error');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-lightning"></i> 重新分析';
+        }
+    } catch (err) {
+        showToast('请求失败: ' + err.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-lightning"></i> 重新分析';
+    }
 }
 
 // ★ 刷新单个用户数据（注入种子 + 启动爬虫 + 等待文件生成后自动更新弹窗）

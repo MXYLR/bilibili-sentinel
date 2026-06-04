@@ -2754,6 +2754,20 @@ def _chain_refresh(bvid: str):
     _regenerate_report(bvid)
 
 
+# ★ 重新分析（基于现有数据，不跑爬虫）
+@app.route("/api/video/<bvid>/reanalyze", methods=["POST"])
+def api_video_reanalyze(bvid: str):
+    """使用现有评论+用户数据重新提取特征+生成报告（不触发爬虫）。"""
+    try:
+        comment_file = Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"
+        if not comment_file.exists():
+            return jsonify({"success": False, "message": "无评论数据，请先采集评论"}), 404
+        threading.Thread(target=_regenerate_report, args=(bvid,), daemon=True).start()
+        return jsonify({"success": True, "message": "重新分析已启动，约30秒后刷新页面"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 def _regenerate_report(bvid: str):
     """基于当前评论数据重新生成水军分析报告（后台线程）。"""
     try:

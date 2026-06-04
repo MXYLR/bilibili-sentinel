@@ -190,9 +190,13 @@ class FeatureExtractor:
         user = self.users.get(mid, {})
         birthday = user.get("birthday", "")
 
+        # ★ MID 号段推算近似注册年份 (birthday 为 0 时兜底)
         if not birthday:
-            # No user info → moderate suspicion for new-feeling accounts
-            # We can use the commenter's level as proxy
+            estimated_year = _mid_to_approx_year(mid)
+            if estimated_year:
+                account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
+                return _account_age_score(account_days, len(user_comms))
+
             level = user_comms[0].get("level", 3)
             if level <= 1:
                 return 0.6
@@ -204,17 +208,20 @@ class FeatureExtractor:
             elif isinstance(birthday, int):
                 reg_date = datetime.fromtimestamp(birthday)
             else:
+                estimated_year = _mid_to_approx_year(mid)
+                if estimated_year:
+                    account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
+                    return _account_age_score(account_days, len(user_comms))
                 return 0.3
         except (ValueError, TypeError):
+            estimated_year = _mid_to_approx_year(mid)
+            if estimated_year:
+                account_days = (datetime.now() - datetime(estimated_year, 1, 1)).days
+                return _account_age_score(account_days, len(user_comms))
             return 0.3
 
-        days_since_reg = (datetime.now() - reg_date).days
-        comment_count = len(user_comms)
-
-        # Score: newer + more comments = more suspicious
-        age_score = max(0, 1 - days_since_reg / 365)  # 0→1, 1y→0
-        volume_score = min(1, comment_count / 10)       # 0→0, 10→1
-        return age_score * volume_score
+        account_days = (datetime.now() - reg_date).days
+        return _account_age_score(account_days, len(user_comms))
 
     # ================================================================
     #  Feature 2: Follow Ratio
@@ -1041,3 +1048,52 @@ class FeatureExtractor:
         distance = prev[len2]
         max_len = max(len1, len2)
         return 1.0 - (distance / max_len) if max_len > 0 else 1.0
+
+
+# ================================================================
+#  F1 辅助函数: MID 号段 → 近似注册年份
+# ================================================================
+
+def _mid_to_approx_year(mid: int) -> int:
+    """根据 B站 UID 号段反推大致注册年份，精度 ±1 年（B站 API regtime 恒为 0 的兜底方案）。"""
+    if mid < 1000000:
+        return 2010
+    elif mid < 10000000:
+        return 2011
+    elif mid < 100000000:
+        return 2013
+    elif mid < 200000000:
+        return 2015
+    elif mid < 300000000:
+        return 2017
+    elif mid < 400000000:
+        return 2018
+    elif mid < 500000000:
+        return 2019
+    elif mid < 600000000:
+        return 2020
+    elif mid < 700000000:
+        return 2021
+    elif mid < 800000000:
+        return 2022
+    elif mid < 1000000000:
+        return 2023
+    elif mid < 1200000000:
+        return 2024
+    else:
+        return 2025  # 12 亿+ = 最近注册
+
+
+def _account_age_score(account_days: int, comment_count: int) -> float:
+    """根据账号天数+评论数计算 F1 分数。新号+多评论=高风险。"""
+    if account_days < 30:
+        return 0.9 if comment_count >= 5 else 0.7
+    elif account_days < 90:
+        return 0.6 if comment_count >= 5 else 0.4
+    elif account_days < 180:
+        return max(0.3, comment_count * 0.03)
+    elif account_days < 365:
+        return max(0.15, comment_count * 0.02)
+    elif account_days < 730:
+        return max(0.05, comment_count * 0.01)
+    return 0.0

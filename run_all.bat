@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.20
+title Bilibili Sentinel v2.21
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
@@ -15,7 +15,7 @@ set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.20
+echo   Bilibili Sentinel v2.21
 echo ============================================================
 echo.
 
@@ -166,7 +166,7 @@ echo ============================================================
 echo.
 echo   Dashboard pages:
 echo     Home:     http://localhost:5001\
-echo     Crawler:  http://localhost:5001\crawler   ^(5 spiders: video/comment/user/danmaku/up_videos^)
+echo     Crawler:  http://localhost:5001\crawler   ^(4 spiders: video/comment/user/up_videos^)
 echo     Video:    http://localhost:5001\video\[bvid]
 echo     Settings: http://localhost:5001\settings   ^(LLM多Provider + AICU深度分析 + 代理^)
 echo     WaterArmy: http://localhost:5001\water-army  ^(水军账号管理^)
@@ -187,8 +187,8 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.20: Playwright兜底+串行爬虫+LlmScreenTracker+F4/F12刷新+调试控制台
-echo   5爬虫联动: video/comment → auto user spider, 全自动种子联动
+echo   v2.21: card API用户采集+一键链式刷新+LLM标准Prompt+Playwright禁用
+echo   全链路: 视频+评论 → 用户爬虫 → 分析+LLM初筛, 全自动
 echo.
 echo ============================================================
 echo.

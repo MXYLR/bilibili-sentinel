@@ -2157,10 +2157,12 @@ def _run_single_llm_bg(bvid, mid, report, user, analyzer, task_key):
              f"分析完成: type={llm_type_name} confidence={llm_conf}%")
 
         # 写回报告
+        llm_reasoning = enhanced.get("llm_reasoning", "")
         user["llm_analyzed"] = True
         user["llm_confidence"] = llm_conf
         user["llm_type_id"] = llm_type_id
         user["llm_type_name"] = llm_type_name
+        user["llm_reasoning"] = llm_reasoning
         user["score"] = enhanced.get("suspicious_score", user.get("score", 0))
 
         report_path = Path(DATA_DIR) / "reports" / f"{bvid}_report.json"

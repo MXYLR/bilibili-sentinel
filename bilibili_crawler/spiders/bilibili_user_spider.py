@@ -102,6 +102,11 @@ class BilibiliUserSpider(scrapy.Spider):
             )
         return self._redis
 
+    def _get_redis(self):
+        if not hasattr(self, '_redis') or self._redis is None:
+            self._redis = redis.Redis(host=_REDIS_HOST, port=_REDIS_PORT, db=_REDIS_DB, decode_responses=True)
+        return self._redis
+
     def _pop_seed(self):
         """从 Redis 队列弹出一个 MID 种子。返回 MID int 或 None。"""
         r = self._get_redis()

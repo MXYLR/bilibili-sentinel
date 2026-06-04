@@ -527,11 +527,28 @@ class BilibiliUserSpider(scrapy.Spider):
                 f"[mid={mid}] Posts done: {posts_collected} collected "
                 f"(pages={page_num}, has_more={has_more})"
             )
+            # ★ 更新用户JSON中的post_count
+            _update_user_post_count(mid, posts_collected)
             self._fetch_next_user()
 
     # ================================================================
     #  辅助方法
     # ================================================================
+
+def _update_user_post_count(mid, count):
+    """更新 data/users/{mid}.json 中的 post_count 字段。"""
+    import json as _json
+    user_file = os.path.join(DATA_DIR, "users", f"{mid}.json")
+    if not os.path.exists(user_file):
+        return
+    try:
+        with open(user_file, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        data["post_count"] = count
+        with open(user_file, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
     def _fetch_next_user(self):
         """从 Redis 取下一个 MID，批量跳过已采集。"""

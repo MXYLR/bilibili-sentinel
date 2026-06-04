@@ -103,7 +103,7 @@ if not LLM_API_KEY and _cfg.get("enabled") and _cfg.get("api_key"):
 # 成本控制
 MAX_USERS_PER_BATCH = 5       # 每批最多 5 个用户
 MAX_BATCHES_PER_RUN = 10      # 单次分析最多 10 批
-LLM_TIMEOUT = 60              # API 超时
+LLM_TIMEOUT = 180             # API 超时（秒）- v2.29 增加至3分钟
 LLM_RETRY = 2                 # 重试次数
 
 # 融合权重
@@ -733,6 +733,7 @@ class LLMAnalyzer:
                     ],
                     temperature=0.3,
                     max_tokens=4000,
+                    timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
                 )
 
                 self._total_calls += 1
@@ -859,6 +860,7 @@ class LLMAnalyzer:
                     ],
                     temperature=0.1 if len(users_data) == 1 else 0.3,
                     max_tokens=2000,
+                    timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
                 )
 
                 self._total_calls += 1

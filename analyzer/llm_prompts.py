@@ -213,12 +213,16 @@ def build_user_prompt(users_data: list) -> str:
         sign = user.get("sign", "")
         sign_line = f"- 个性签名: {sign[:100]}\n" if sign else ""
 
+        # v2.29: 限制 raw_profile 长度，避免 prompt 过长导致超时
+        raw_profile = user.get('raw_profile', '')
+        if raw_profile:
+            raw_profile = raw_profile[:500] + ("...(截断)" if len(raw_profile) > 500 else "")
         prompt += f"""### 用户 {i}
 - MID: {user.get('mid', 'unknown')}
 - 用户名: {user.get('uname', 'unknown')}
 - 等级: Lv{user.get('level', 0)}
 - 评论数(此视频): {len(comments)}{sign_line}
-{user.get('raw_profile', '')}
+{raw_profile}
 - ⚠️ 引擎综合可疑分: {user.get('suspicious_score', 0):.2f} / 1.0 {'(高度可疑!!)' if user.get('suspicious_score', 0) >= 0.5 else '(中度可疑)' if user.get('suspicious_score', 0) >= 0.3 else '(低可疑)'}
 - 13维特征(0-1):
   ·高: f12_骨架={features.get('f12_account_skeleton', 0):.2f} f3_等级={features.get('f3_level_score', 0):.2f} f5_雷同={features.get('f5_content_similarity', 0):.2f} f6_爆发={features.get('f6_time_burst', 0):.2f} f1_年龄={features.get('f1_account_age', 0):.2f} f4_头像={features.get('f4_avatar_verify', 0):.2f}

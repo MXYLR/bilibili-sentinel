@@ -732,7 +732,7 @@ class LLMAnalyzer:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0.3,
-                    max_tokens=4000,
+                    max_tokens=1500,  # v2.29 减少输出token加速响应
                     timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
                 )
 
@@ -859,7 +859,7 @@ class LLMAnalyzer:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0.1 if len(users_data) == 1 else 0.3,
-                    max_tokens=2000,
+                    max_tokens=600 if len(users_data) == 1 else 2000,  # v2.29 单用户减半输出
                     timeout=LLM_TIMEOUT,  # v2.29 添加请求级别超时
                 )
 

@@ -69,103 +69,31 @@ WATER_ARMY_TYPES = {
 #  System Prompt
 # ============================================================
 
-SYSTEM_PROMPT = """你是B站水军识别引擎的语义分析层。引擎已对13个维度完成量化评分(0-1)，你的任务是**结合引擎分数+评论内容语义+用户画像**做最终判定。
+SYSTEM_PROMPT = """你是B站水军识别引擎的语义分析层。引擎已完成13维量化评分，你需结合分数+评论语义+用户画像做最终判定。
 
-## 核心判断原则
+## 原则
+1. 谨慎判断，避免误报。分数高但评论正常→判正常
+2. 内容为主，分数为辅。必须有评论证据才能判水军
+3. 必须引用特征值+评论原文，不能只说"分数高"
 
-1. **谨慎判断，避免误报**：引擎分数是参考，不是判决。分数高但评论正常 → 应判为正常或低置信度
-2. **内容为主，分数为辅**：评论内容自然、有个人观点、互动真实 → 即使引擎分高也要慎重
-3. **证据充分再判定**：必须有明确的水军特征（模板化、引流、引战、账号异常）才能判为水军
-4. **reasoning必须具体**：必须引用具体特征值+评论原文片段，不能只说分数高
+## 关键特征速查
+- f12 账号骨架: 1.0=5/5全中, 0.8=4/5, 0.6=3/5, 0.4=2/5(轻度), 0.2=1/5。**f12=0.4不是四无号**
+- f5 内容雷同: ≥0.6→模板刷评  f6 时间爆发: ≥0.7→批量操控
+- f15 商业引流: ≥0.3→广告  f14 敏感内容: ≥0.3→敏感
+- f1 新号(<30天), f3 低等级(Lv0-2)+高活跃, f4 无头像→轻度可疑
 
-## 13维特征解读指南（重要！）
+## 8类型
+1.模板刷评 2.情绪引导 3.AI生成 4.引流广告 5.批量操控 6.黑产养号(f12≥0.8) 7.对立引战 8.敏感内容
 
-### 高权重 (w≥0.08)
-- **f12_account_skeleton (0.23)**：账号骨架检测
-  * 1.0 = 5/5全中（无头像+ID乱码+无动态+无投稿+默认签名）→ 铁证
-  * 0.8 = 4/5命中 → 高度可疑
-  * 0.6 = 3/5命中 → 中等可疑
-  * 0.4 = 2/5命中 → 轻度可疑（不是空壳号！）
-  * 0.2 = 1/5命中 → 基本正常
-  * 0.0 = 0/5命中 → 正常账号
-  * **注意：f12=0.4 只命中2项，不是四无账号，不应直接判水军**
-
-- **f3_level_score (0.13)**：等级异常
-  * Lv0-2 + 高活跃 → 可疑
-  * Lv3+ → 正常
-
-- **f5_content_similarity (0.11)**：内容雷同
-  * >0.6 → 模板化刷评
-  * <0.3 → 正常
-
-- **f6_time_burst (0.11)**：时间爆发
-  * >0.7 → 批量操控
-  * <0.4 → 正常
-
-- **f1_account_age (0.08)**：账号年龄
-  * <30天 → 新号可疑
-  * >1年 → 正常
-
-- **f4_avatar_verify (0.08)**：头像/认证
-  * 无头像+无认证 → 轻度可疑
-
-### 中权重 (0.04-0.06)
-- **f2_follow_ratio (0.06)**：粉丝/关注比异常
-- **f8_like_ratio (0.06)**：评论零赞 → 无人认同
-- **f15_commercial_spam (0.04)**：含赌博/色情/联系方式
-
-### 低权重 (w≤0.03)
-- **f14_sensitive_content (0.03)**：动态含敏感词
-- **f18_signature_troll (0.03)**：签名引战
-- **f7_sentiment_extreme (0.02)**：情感极端
-- **f16_time_regularity (0.02)**：时间规律（机器人）
-
-## 8种水军类型定义
-
-1. **模板刷评型(type 1)**：评论内容高度雷同，明显复制粘贴
-2. **情绪引导型(type 2)**：刻意煽动情绪、带节奏
-3. **AI生成型(type 3)**：评论语句不通、逻辑断裂、AI味重
-4. **引流广告型(type 4)**：含联系方式、推广信息
-5. **批量操控型(type 5)**：多账号同时间集中发评
-6. **黑产养号型(type 6)**：f12≥0.8（4-5/5命中）+ 其他可疑特征
-7. **对立引战型(type 7)**：刻意制造对立、激怒他人
-8. **敏感内容型(type 8)**：动态含女拳/政治/造谣内容
-
-## 判定流程（按顺序判断）
-
-1. **明确水军**：f12≥0.8（4-5/5命中）+ 评论有异常 → type 6, confidence 85-95
-2. **引流广告**：f15≥0.3 或 评论含联系方式 → type 4, confidence 80-95
-3. **敏感内容**：f14≥0.3 或 动态有敏感词 → type 8, confidence 90-100
-4. **模板刷评**：f5≥0.6 → type 1, confidence 70-85
-5. **轻度可疑**：有2-3个特征≥0.5，但评论基本正常 → type 0, confidence 0（判正常但标注可疑）
-6. **正常用户**：全特征≤0.3 且评论自然 → type 0, confidence 0
-
-## 重要提醒
-
-- f12=0.4（2/5命中）**不是**四无账号，不应直接判水军
-- 新注册账号（f1高）但评论正常 → 可能是真实新用户
-- 低等级账号（f3高）但评论有实质内容 → 可能是真实用户
-- **必须有评论内容证据才能判水军，不能只看分数**
+## 判定
+- f12≥0.8+评论异常→type6,conf85-95 | f15≥0.3→type4 | f14≥0.3→type8
+- f5≥0.6→type1,conf70-85 | 2-3特征≥0.5但评论正常→type0,conf0(可疑)
+- type0=正常用户, type1-8=水军
 
 ## 输出格式
+每个用户输出 JSON。reasoning 80-120字，含特征解读+1条评论原文引用+判定逻辑。
 
-每个用户的分析结果必须包含 detailed reasoning（150-200字），结构如下：
-
-**reasoning 写作框架（必须遵循）：**
-1. **【特征值解读】**（约40字）逐条列出高分特征的含义，如"f12=0.4表示命中2/5项（无头像、无动态），属于轻度可疑，不是四无账号"
-2. **【评论内容分析】**（约60字）引用1-2条评论原文片段，分析是否有模板化/引流/引战等实质性证据
-3. **【综合判定逻辑】**（约50字）说明最终判定的依据，解释为什么判为水军/正常/可疑
-4. **【风险说明】**（约30字）如判为正常，说明可能存在的风险点；如判为水军，说明置信度依据
-
-**reasoning 质量要求：**
-- 必须 150-200 字，不能少于120字
-- 必须引用具体特征值（如 f12=0.4）并解释其含义
-- 必须引用评论原文片段（用引号括起来）
-- 不能只说"分数高"或"疑似水军"，必须给出具体分析过程
-- 如判定为正常用户，必须说明"为什么不是水军"
-
-示例（约180字）：
-reasoning: "该用户引擎评分0.65，主要贡献来自f12=0.4（账号骨架轻度可疑，命中2/5项：无头像、无动态，但ID正常且有投稿，不是四无账号）和f5=0.6（评论内容相似度较高）。评论原文："这视频讲得不错"、"我也遇到过类似情况"，内容自然且有个人观点，无明显模板化特征。综合判断：账号虽有一定可疑点，但评论内容真实，判定为正常用户（type 0），建议持续关注。"
+示例 reasoning(90字): "f12=0.4命中2/5项(无头像、无动态)，非四无号。评论'讲的还行吧'自然有观点，无模板化。虽有轻度骨架可疑但内容真实，判为正常(type0)。"
 """
 
 # ============================================================
@@ -185,18 +113,7 @@ def build_user_prompt(users_data: list) -> str:
     if not users_data:
         return ""
 
-    # 简要说明水军类型
-    type_desc = "\n".join(
-        f"  {tid}. {info['name']}: {info['description']}"
-        for tid, info in WATER_ARMY_TYPES.items()
-    )
-
-    prompt = f"""请分析以下 B站评论用户，判断他们是否属于水军账号。
-
-## 背景
-- 视频: B站评论区
-- 水军类型参考:
-{type_desc}
+    prompt = f"""请分析以下 B站评论用户，判断是否属于水军（类型定义见系统提示）。
 
 ## 用户数据
 
@@ -206,42 +123,45 @@ def build_user_prompt(users_data: list) -> str:
         features = user.get("features", {})
         comments = user.get("comments", [])
 
-        # v2.29: 使用智能压缩器（保留语义，减少 token）
+        # v2.29: 智能压缩评论
         comments_summary = compress_comments_for_prompt(comments, max_examples=3)
-        comments_str = comments_summary
         
-        # v2.16: 个性签名加入分析
-        sign = user.get("sign", "")
-        sign_line = f"- 个性签名: {sign[:100]}\n" if sign else ""
+        # v2.29: 只展示 f≥0.3 的特征（精简一行）
+        active_features = []
+        feature_names = {
+            "f1_account_age": "f1年龄", "f2_follow_ratio": "f2粉关", "f3_level_score": "f3等级",
+            "f4_avatar_verify": "f4头像", "f5_content_similarity": "f5雷同", "f6_time_burst": "f6爆发",
+            "f7_sentiment_extreme": "f7情感", "f8_like_ratio": "f8赞比",
+            "f12_account_skeleton": "f12骨架", "f14_sensitive_content": "f14敏感",
+            "f15_commercial_spam": "f15引流", "f16_time_regularity": "f16规律",
+            "f18_signature_troll": "f18签名",
+        }
+        for fk, fshort in feature_names.items():
+            fv = features.get(fk, 0)
+            if fv >= 0.3:
+                active_features.append(f"{fshort}={fv:.2f}")
+        feat_line = "、".join(active_features) if active_features else "无显著异常特征"
+        
+        # v2.29: 压缩用户画像
+        raw_profile = compress_user_profile(user.get('raw_profile', ''), max_chars=200)
 
-        # v2.29: 使用智能压缩器压缩 raw_profile
-        raw_profile = compress_user_profile(user.get('raw_profile', ''), max_chars=300)
-        prompt += f"""### 用户 {i}
-- MID: {user.get('mid', 'unknown')}
-- 用户名: {user.get('uname', 'unknown')}
-- 等级: Lv{user.get('level', 0)}
-- 评论数(此视频): {len(comments)}{sign_line}
+        score = user.get('suspicious_score', 0)
+        risk_tag = "高危" if score >= 0.5 else ("中危" if score >= 0.3 else "低危")
+        
+        sign = user.get("sign", "")
+        sign_txt = f" 签名:{sign[:30]}" if sign and sign != "这个人没有填简介啊~~~" else ""
+        
+        prompt += f"""### 用户{i} MID:{user.get('mid','?')} {user.get('uname','?')} Lv{user.get('level',0)} score={score:.2f}({risk_tag}){sign_txt}
 {raw_profile}
-- ⚠️ 引擎综合可疑分: {user.get('suspicious_score', 0):.2f} / 1.0 {'(高度可疑!!)' if user.get('suspicious_score', 0) >= 0.5 else '(中度可疑)' if user.get('suspicious_score', 0) >= 0.3 else '(低可疑)'}
-- 13维特征(0-1):
-  ·高: f12_骨架={features.get('f12_account_skeleton', 0):.2f} f3_等级={features.get('f3_level_score', 0):.2f} f5_雷同={features.get('f5_content_similarity', 0):.2f} f6_爆发={features.get('f6_time_burst', 0):.2f} f1_年龄={features.get('f1_account_age', 0):.2f} f4_头像={features.get('f4_avatar_verify', 0):.2f}
-  ·中: f2_粉关={features.get('f2_follow_ratio', 0):.2f} f8_赞比={features.get('f8_like_ratio', 0):.2f} f15_引流={features.get('f15_commercial_spam', 0):.2f}
-  ·低: f14_敏感={features.get('f14_sensitive_content', 0):.2f} f18_签名={features.get('f18_signature_troll', 0):.2f} f7_情感={features.get('f7_sentiment_extreme', 0):.2f} f16_规律={features.get('f16_time_regularity', 0):.2f}
-- 评论内容:
-    {comments_str if comments_str else '(无评论)'}
+特征(f≥0.3): {feat_line}
+评论: {comments_summary if comments_summary else '(无)'}
 
 """
 
-    prompt += """请分析以上用户，输出 JSON。
+    prompt += """请分析以上用户，只输出 JSON（不要markdown代码块）。
 
-**reasoning 字段要求（重要）：**
-1. 长度 150-200 字，少于120字视为不合格
-2. 必须包含【特征值解读】【评论内容分析】【综合判定逻辑】【风险说明】四个部分
-3. 必须引用至少1条评论原文（用中文引号括起来）
-4. 必须逐条解释每个高分特征（f值≥0.4）的含义，不能只写分数
-5. 如判定为正常用户，必须明确说明"为什么不是水军"
-
-只输出 JSON，不要输出其他内容。"""
+reasoning 要求: 80-120字，必须引用至少1条评论原文+解释特征值含义。
+只输出 JSON，不要其他内容。"""
     return prompt
 
 

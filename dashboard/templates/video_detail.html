@@ -1953,15 +1953,40 @@ async function refreshVideoData() {
     }
 }
 
-// ★ 刷新单个用户数据
+// ★ 刷新单个用户数据（注入种子 + 启动爬虫 + 等待文件生成后自动更新弹窗）
 async function refreshSingleUser(mid) {
+    const btn = document.getElementById('btn-refresh-user');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    showToast(`正在采集 MID ${mid} 的用户数据...`, 'info');
     try {
+        // 1. 注入单个种子
         const resp = await fetch('/api/user/' + mid + '/refresh', { method: 'POST' });
         const data = await resp.json();
-        showToast(data.message, data.success ? 'success' : 'error');
+        if (!data.success) { showToast(data.message, 'error'); return; }
+        showToast(data.message + '，等待采集完成...', 'info');
+
+        // 2. 轮询等待文件生成（最多等 30 秒）
+        let waited = 0;
+        while (waited < 30) {
+            await new Promise(r => setTimeout(r, 2000)); waited += 2;
+            try {
+                const cr = await fetch(`/api/video/{{ bvid }}/user/${mid}/detail`);
+                const cd = await cr.json();
+                if (cd.success && cd.data._user_data_available) {
+                    showToast('用户数据采集完成！', 'success');
+                    // 更新 scoredUsers 中的数据
+                    const idx = scoredUsers.findIndex(u => String(u.mid) === String(mid));
+                    if (idx >= 0) scoredUsers[idx] = Object.assign({}, scoredUsers[idx], cd.data);
+                    showUserDetail(idx);  // 重新渲染弹窗
+                    return;
+                }
+            } catch (e) {}
+        }
+        showToast('等待超时，请稍后手动查看', 'warning');
     } catch (err) {
         showToast('请求失败: ' + err.message, 'error');
     }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i>'; }
 }
 
 // ★ 刷新当前视频的用户数据

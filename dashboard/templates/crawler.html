@@ -112,23 +112,23 @@
         <!-- 一键操作 -->
         <div class="d-flex flex-wrap gap-2 mb-3">
             <button class="btn btn-success" onclick="fetch('/api/crawler/start-both',{method:'POST'}).then(()=>refresh())"
-                    title="一键启动视频+评论两个爬虫（最常用）">
+                    title="一键启动视频+评论爬虫 | 视频爬虫从Redis消费种子 → 爬取视频元信息 → 自动注入评论种子 | 评论爬虫消费评论种子 → 分页爬取评论+楼中楼 → 完成后自动启动用户爬虫">
                 <i class="bi bi-play-circle"></i> 启动全部
             </button>
             <button class="btn btn-danger" onclick="stopAll()"
-                    title="停止所有运行中的爬虫进程">
+                    title="停止所有运行中的爬虫进程 | 先检查是否有活动进程再发送SIGTERM | 包括视频/评论/用户三个爬虫">
                 <i class="bi bi-stop-circle"></i> 停止全部
             </button>
             <button class="btn btn-outline-warning" onclick="clearQueues()"
-                    title="清空Redis中所有爬虫种子和去重记录（谨慎操作）">
+                    title="⚠️ 清空Redis中所有爬虫队列和去重记录 | 警告: 操作不可逆 | 清空后需重新注入种子才能继续爬取">
                 <i class="bi bi-trash"></i> 清空队列
             </button>
             <button class="btn btn-outline-success" onclick="rescanCommentSeeds()"
-                    title="扫描已有视频数据，为有评论但未爬取的视频重新注入评论种子">
+                    title="扫描 data/videos/ 下所有已有视频数据 | 为有评论数的视频自动注入评论种子到Redis | 只注入未爬取评论的视频">
                 <i class="bi bi-search"></i> 补充评论种子
             </button>
             <button class="btn btn-outline-success" onclick="rescanUserSeeds()"
-                    title="扫描已有评论数据，提取所有评论者MID注入用户爬虫种子队列">
+                    title="扫描 data/comments/ 下所有已爬取评论 | 提取所有评论者的UID/MID | 去重后注入用户爬虫Redis队列 | 用户爬虫会跳过已采集的UID">
                 <i class="bi bi-person-plus"></i> 补充用户种子
             </button>
             <button class="btn btn-outline-info" onclick="refreshAll()"
@@ -625,5 +625,12 @@ function showLoginModal() {
 // 初始化
 refreshAll();
 setInterval(refreshAll, 5000);
+// ★ 启用 Bootstrap 工具提示 (鼠标悬停显示详细说明)
+document.querySelectorAll('[title]').forEach(el => {
+    el.setAttribute('data-bs-toggle', 'tooltip');
+    el.setAttribute('data-bs-placement', 'top');
+    el.setAttribute('data-bs-html', 'true');
+    new bootstrap.Tooltip(el, {delay: {show: 400, hide: 100}});
+});
 </script>
 {% endblock %}

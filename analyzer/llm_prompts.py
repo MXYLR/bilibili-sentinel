@@ -194,29 +194,16 @@ def build_user_prompt(users_data: list) -> str:
         features = user.get("features", {})
         comments = user.get("comments", [])
 
-        # 只取前 10 条评论用于分析，过滤图片URL，防止 LLM API 报 image_url 错误
-        _SKIP_PREFIXES = ("http://", "https://", "//", "data:")
-        comment_texts = []
-        for c in comments[:10]:
-            if isinstance(c, str):
-                t = c
-            else:
-                t = c.get("content", c.get("message", str(c)))
-            # 如果整条评论是一个 URL（图片），跳过
-            t_stripped = (t or "").strip()
-            if t_stripped and any(t_stripped.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-            comment_texts.append(t[:200])
-        comments_str = "\n    ".join(f"[{j+1}] {t}" for j, t in enumerate(comment_texts))
-
+        # v2.29: 使用智能压缩器（保留语义，减少 token）
+        comments_summary = compress_comments_for_prompt(comments, max_examples=3)
+        comments_str = comments_summary
+        
         # v2.16: 个性签名加入分析
         sign = user.get("sign", "")
         sign_line = f"- 个性签名: {sign[:100]}\n" if sign else ""
 
-        # v2.29: 限制 raw_profile 长度，避免 prompt 过长导致超时
-        raw_profile = user.get('raw_profile', '')
-        if raw_profile:
-            raw_profile = raw_profile[:500] + ("...(截断)" if len(raw_profile) > 500 else "")
+        # v2.29: 使用智能压缩器压缩 raw_profile
+        raw_profile = compress_user_profile(user.get('raw_profile', ''), max_chars=300)
         prompt += f"""### 用户 {i}
 - MID: {user.get('mid', 'unknown')}
 - 用户名: {user.get('uname', 'unknown')}

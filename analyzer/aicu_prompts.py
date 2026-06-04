@@ -5,6 +5,17 @@ AICU 深度分析 — 提示词模板
 分析维度: 跨视频行为模式、评论风格一致性、设备/昵称变更历史。
 """
 
+import sys
+from pathlib import Path
+
+# 导入智能压缩器
+try:
+    from .text_compressor import compress_comments_for_prompt as compress_fn
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).parent))
+    from text_compressor import compress_comments_for_prompt as compress_fn
+
+
 # ============================================================
 #  深度分析 System Prompt
 # ============================================================
@@ -180,22 +191,13 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
             if f12_val >= 0.60:
                 prompt += "直接判定水军 confidence≥85。AICU无历史数据恰恰印证新号。\n"
 
-    # 当前视频的样本评论（最多 3 条，v2.29 减少 token 消耗）
+    # v2.29: 使用智能压缩器（保留语义，减少 token）
     user_comments = user_data.get("comments", [])
     if user_comments:
-        sample_texts = []
-        for c in user_comments[:3]:
-            if isinstance(c, str):
-                sample_texts.append(c[:100])
-            elif isinstance(c, dict):
-                sample_texts.append(
-                    c.get("content", c.get("message", str(c)))[:100]
-                )
-        if sample_texts:
-            prompt += "- 当前视频评论样本:\n"
-            for j, t in enumerate(sample_texts, 1):
-                prompt += f"    [{j}] {t}\n"
-
+        comments_summary = compress_fn(user_comments, max_examples=3)
+        prompt += "- 当前视频评论分析:\n"
+        prompt += comments_summary.replace("\n", "\n    ") + "\n"
+    
     prompt += "\n**历史评论画像 (来自 AICU):**\n"
 
     # AICU 数据
@@ -217,14 +219,11 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
                 prompt += f"- 个人签名: {p['sign'][:80]}\n"
             prompt += f"- 粉丝: {p.get('fans', 0)}, 关注: {p.get('following', 0)}\n"
 
-        # 历史评论列表（最多 10 条，v2.29 避免 token 过大）
+        # v2.29: 使用智能压缩器（保留语义，减少 token）
         if aicu_data.comments:
-            prompt += "\n### 历史评论列表 (最近10条)\n"
-            for j, c in enumerate(aicu_data.comments[:10], 1):
-                msg = c.get("message", "")[:100]
-                t = c.get("readable_time", "?")
-                rank_mark = f" ★{c['rank']}" if c.get("rank", 0) > 0 else ""
-                prompt += f"[#{j}] {t}{rank_mark} | {msg}\n"
+            prompt += "\n### 历史评论分析（智能压缩）\n"
+            history_summary = compress_fn(aicu_data.comments, max_examples=5)
+            prompt += history_summary.replace("\n", "\n    ") + "\n"
     else:
         prompt += "- 无法获取历史数据（AICU 接口无数据或超时）\n"
         prompt += "- 请仅基于当前视频的评论行为进行深度判断\n"

@@ -2077,17 +2077,6 @@ def api_user_llm_analyze(bvid: str, mid: int):
     if not user:
         return jsonify({"success": False, "error": f"未找到 MID={mid} 的用户"}), 404
 
-    # ★ 兜底：检查该用户是否有数据，没有则自动注种+启动用户爬虫
-    user_file = Path(DATA_DIR) / "users" / f"{mid}.json"
-    if not user_file.exists():
-        logger.info(f"[LLM单用户] mid={mid} 无用户数据，自动注种+启动用户爬虫")
-        info = _auto_start_user_spider(start_now=True)
-        return jsonify({
-            "success": False, "error": "need_user_data",
-            "message": f"该用户数据未采集，已自动注入 {info.get('injected',0)} 个种子并启动用户爬虫。请等待采集完成后重试。",
-            "injected": info.get("injected", 0),
-        }), 409
-
     from analyzer.llm_analyzer import create_llm_analyzer
     analyzer = create_llm_analyzer()
     if not analyzer or not analyzer.is_available:
@@ -2189,26 +2178,6 @@ def api_video_llm_screen(bvid: str):
     report = _load_report(bvid)
     if not report:
         return jsonify({"success": False, "error": "报告不存在"}), 404
-
-    # ★ 兜底：检查用户数据覆盖，不足时自动注入种子+启动用户爬虫
-    _src = (report.get("scored_users_export") or report.get("scored_users") or report.get("top_suspects") or [])
-    mids_in_report = {u.get("mid") for u in _src if u.get("mid")}
-    users_dir = Path(DATA_DIR) / "users"
-    has_data = 0
-    if users_dir.exists():
-        for m in mids_in_report:
-            if (users_dir / f"{m}.json").exists():
-                has_data += 1
-    coverage = has_data / len(mids_in_report) if mids_in_report else 1.0
-    if coverage < 0.3 and len(mids_in_report) > 5:
-        logger.info(f"[LLM初筛] 用户数据覆盖仅 {has_data}/{len(mids_in_report)} ({coverage:.0%})，自动注种+启动用户爬虫")
-        info = _auto_start_user_spider(start_now=True)
-        return jsonify({
-            "success": False,
-            "error": "need_user_data",
-            "message": f"用户数据不足 ({has_data}/{len(mids_in_report)} 已采集)，已自动注入 {info.get('injected',0)} 个种子并启动用户爬虫。请等待用户爬虫完成后重试 LLM 初筛。",
-            "injected": info.get("injected", 0),
-        }), 409
 
     # 检查是否已在运行
     status = LlmScreenTracker.get_status(bvid)
@@ -3449,6 +3418,49 @@ def api_crawler_rescan_comment_seeds():
         "total_videos": skipped_has_comment + skipped_no_reply + injected,
         "message": f"已从 {injected + skipped_has_comment + skipped_no_reply} 个视频中注入 {injected} 条评论种子"
     })
+
+
+# ★ 刷新当前视频的用户数据 (仅扫描该视频的评论)
+@app.route("/api/video/<bvid>/refresh-users", methods=["POST"])
+def api_video_refresh_users(bvid: str):
+    """仅注入当前视频的评论者 MID 到用户爬虫种子队列，并启动用户爬虫。"""
+    comment_file = Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"
+    if not comment_file.exists():
+        return jsonify({"success": False, "message": f"评论数据不存在: {bvid}_comments.json"}), 404
+
+    try:
+        mids = set()
+        with open(comment_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        comments = data if isinstance(data, list) else data.get("comments", [])
+        for c in comments:
+            if isinstance(c, dict) and c.get("mid"):
+                mids.add(int(c["mid"]))
+
+        r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+        injected = 0
+        for m in mids:
+            r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": m}))
+            injected += 1
+
+        # 启动用户爬虫（如果未运行）
+        state = spider_mgr._read_state()
+        user_running = state.get("bilibili_user", {}).get("status") == "running"
+        pid = None
+        if not user_running:
+            start_result = spider_mgr.start_spider("bilibili_user")
+            if start_result.get("success"):
+                pid = start_result.get("pid")
+
+        logger.info(f"[RefreshUsers] {bvid}: {injected} mids injected, user spider {'running' if user_running else 'started (PID='+str(pid)+')'}")
+
+        return jsonify({
+            "success": True,
+            "injected": injected,
+            "message": f"已注入 {injected} 个用户种子 (来自 {bvid})" + ("，用户爬虫已启动" if pid else "，用户爬虫已在运行" if user_running else "")
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/api/crawler/rescan-user-seeds", methods=["POST"])

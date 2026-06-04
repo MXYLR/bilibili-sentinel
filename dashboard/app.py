@@ -3498,8 +3498,14 @@ def api_video_refresh_users(bvid: str):
 # ★ 注入单个用户种子
 @app.route("/api/user/<int:mid>/refresh", methods=["POST"])
 def api_user_refresh(mid: int):
-    """注入单个用户 MID 到种子队列并启动用户爬虫。"""
+    """注入单个用户 MID 到种子队列并启动用户爬虫。同时删除旧 JSON 确保前端轮询准确。"""
     try:
+        # ★ 删除旧数据文件，确保轮询能检测到新采集
+        old_file = Path(DATA_DIR) / "users" / f"{mid}.json"
+        if old_file.exists():
+            old_file.unlink()
+            logger.info(f"[RefreshUser] Deleted old data for mid={mid}")
+
         import redis
         r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
         r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))

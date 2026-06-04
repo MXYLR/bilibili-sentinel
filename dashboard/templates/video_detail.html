@@ -1918,8 +1918,15 @@ async function refreshVideoData() {
                 const spiders = sdata.data?.spiders || {};
                 const videoRunning = spiders.bilibili_video?.status === 'running';
                 const commentRunning = spiders.bilibili_comment?.status === 'running';
+                const userRunning = spiders.bilibili_user?.status === 'running';
 
-                if (!videoRunning && !commentRunning) {
+                // 提示用户爬虫已自动启动
+                if (userRunning && !window._userSpiderToastShown) {
+                    window._userSpiderToastShown = true;
+                    showToast('用户数据爬虫已自动启动，正在采集评论者空间数据', 'info');
+                }
+
+                if (!videoRunning && !commentRunning && !userRunning) {
                     // 爬虫已停止，刷新页面
                     status.textContent = '爬虫已完成，正在刷新页面...';
                     setTimeout(() => location.reload(), 500);

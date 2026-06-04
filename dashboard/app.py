@@ -909,9 +909,10 @@ class SpiderManager:
             r.lpush("bilibili_crawler:up_video_seeds", json.dumps({"mid": mid}))
             return {"success": True, "message": f"已注入 UP主种子: UID={mid} (爬取其所有投稿视频)"}
         elif seed_type == "rescan_users":
-            # ★ 从评论数据重新扫描并注入用户种子 (用于自动联动)
+            # ★ 从评论数据重新扫描并注入用户种子 (跳过16位已注销MID)
             comment_dir = Path(DATA_DIR) / "comments"
             all_mids = set()
+            skipped_bad = 0
             if comment_dir.exists():
                 for cf in comment_dir.glob("*_comments.json"):
                     try:
@@ -920,7 +921,11 @@ class SpiderManager:
                         comments = data if isinstance(data, list) else data.get("comments", [])
                         for c in comments:
                             if isinstance(c, dict) and c.get("mid"):
-                                all_mids.add(int(c["mid"]))
+                                mid = int(c["mid"])
+                                if mid > 10000000000:
+                                    skipped_bad += 1
+                                    continue
+                                all_mids.add(mid)
                     except Exception:
                         continue
             injected = 0
@@ -2689,12 +2694,17 @@ def _inject_seeds_from_video(bvid: str) -> dict:
             data = json.load(f)
         comments = data if isinstance(data, list) else data.get("comments", [])
         mids = set()
+        skipped_bad = 0
         for c in comments:
             if isinstance(c, dict) and c.get("mid"):
-                mids.add(int(c["mid"]))
+                mid = int(c["mid"])
+                if mid > 10000000000:  # ★ 超过10位=已注销/系统生成ID，跳过
+                    skipped_bad += 1
+                    continue
+                mids.add(mid)
         for m in mids:
             r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": m}))
-        logger.info(f"[InjectUsers] {bvid}: {len(mids)} mids from {len(comments)} comments")
+        logger.info(f"[InjectUsers] {bvid}: {len(mids)} mids from {len(comments)} comments (skipped {skipped_bad} invalid)")
         return {"success": True, "injected": len(mids)}
     except Exception as e:
         return {"success": False, "injected": 0, "message": str(e)}
@@ -3498,7 +3508,10 @@ def api_video_refresh_users(bvid: str):
         comments = data if isinstance(data, list) else data.get("comments", [])
         for c in comments:
             if isinstance(c, dict) and c.get("mid"):
-                mids.add(int(c["mid"]))
+                mid = int(c["mid"])
+                if mid > 10000000000:
+                    continue  # ★ 跳过16位已注销MID
+                mids.add(mid)
 
         r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
         injected = 0

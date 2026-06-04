@@ -302,10 +302,13 @@ class BilibiliUserSpider(scrapy.Spider):
             user_data = {
                 "mid": mid, "name": card.get("name", ""), "face": card.get("face", ""),
                 "sign": card.get("sign", ""), "level": card.get("level_info", {}).get("current_level", 0),
-                "sex": card.get("sex", ""), "birthday": "", "archive_count": int(card.get("archives", 0)),
-                "follower": int(card.get("fans", 0)), "following": 0,
+                "sex": card.get("sex", ""), "birthday": card.get("birthday", ""),
+                "archive_count": int(card.get("archives", 0)),
+                "follower": int(card.get("fans", 0)),
+                "following": int(card.get("attention", 0)),  # card API 有此字段
                 "vip": {"status": card.get("vip", {}).get("status", 0)},
-                "official": card.get("official", {}), "post_count": -1,  # card API不返回动态数
+                "official": card.get("official") or {},
+                "post_count": -1,
                 "upload_count": int(card.get("archives", 0)),
             }
             logger.info(f"[mid={mid}] card API OK: name={user_data['name']} Lv{user_data['level']}")

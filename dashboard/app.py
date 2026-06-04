@@ -2669,12 +2669,35 @@ def api_video_refresh(bvid: str):
     result = spider_mgr.refresh_video(bvid)
     if not result.get("success"):
         return jsonify(result)
-    # Step2: 注入用户种子（评论完成后自动启动用户爬虫）
-    user_info = _auto_start_user_spider()
+    # Step2: 注入当前视频的评论者MID作为种子
+    user_info = _auto_start_user_spider(bvid=bvid)
     result["user_spider"] = user_info
     # Step3: 后台线程监控全链条
     threading.Thread(target=_chain_refresh, args=(bvid,), daemon=True).start()
     return jsonify(result)
+
+
+def _inject_seeds_from_video(bvid: str) -> dict:
+    """从单个视频的评论文件提取所有 MID，注入 Redis 用户种子队列。"""
+    import redis as redis_mod
+    try:
+        r = redis_mod.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+        comment_file = Path(DATA_DIR) / "comments" / f"{bvid}_comments.json"
+        if not comment_file.exists():
+            return {"success": True, "injected": 0, "message": "无评论数据"}
+        with open(comment_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        comments = data if isinstance(data, list) else data.get("comments", [])
+        mids = set()
+        for c in comments:
+            if isinstance(c, dict) and c.get("mid"):
+                mids.add(int(c["mid"]))
+        for m in mids:
+            r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": m}))
+        logger.info(f"[InjectUsers] {bvid}: {len(mids)} mids from {len(comments)} comments")
+        return {"success": True, "injected": len(mids)}
+    except Exception as e:
+        return {"success": False, "injected": 0, "message": str(e)}
 
 
 def _chain_refresh(bvid: str):
@@ -3666,11 +3689,15 @@ def _build_raw_profile_line(user_data: dict) -> str:
     return "- 原始数据: " + " | ".join(parts)
 
 
-def _auto_start_user_spider(start_now: bool = False) -> dict:
-    """注入用户种子。start_now=True 时立即启动用户爬虫（LLM兜底），否则仅标记等待评论完成。
-    始终包含 message 字段供前端展示。"""
+def _auto_start_user_spider(start_now: bool = False, bvid: str = None) -> dict:
+    """注入用户种子。bvid 指定时仅扫描该视频评论，否则扫描全部。
+    start_now=True 时立即启动用户爬虫，否则仅标记等待评论完成。"""
     try:
-        result = spider_mgr.inject_seeds("rescan_users")
+        if bvid:
+            # ★ 仅扫描当前视频的评论
+            result = _inject_seeds_from_video(bvid)
+        else:
+            result = spider_mgr.inject_seeds("rescan_users")
         injected = result.get("injected", 0)
 
         if start_now:

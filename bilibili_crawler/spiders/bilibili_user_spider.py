@@ -143,7 +143,7 @@ class BilibiliUserSpider(scrapy.Spider):
         prewarm_wbi_cache()
 
         seeds = []
-        for _ in range(50):  # 预读最多 50 个种子
+        for _ in range(50):
             mid = self._pop_seed()
             if mid is None:
                 break
@@ -155,7 +155,7 @@ class BilibiliUserSpider(scrapy.Spider):
             logger.info("No user seeds in Redis. Entering idle mode, waiting for seeds...")
             return
 
-        logger.info(f"Starting with {len(seeds)} user seed(s)")
+        logger.info(f"Starting with {len(seeds)} user seed(s): {seeds}")
         for mid in seeds:
             self._seen_mids.add(mid)
             yield self._request_user_info(mid)

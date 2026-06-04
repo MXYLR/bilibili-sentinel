@@ -325,7 +325,7 @@ def get_user_posts_url(mid: int, offset: str = "") -> str:
     返回用户最近发布的动态（文本/转发/图片/视频），
     用于 F13(转发抽奖) 和 F14(敏感内容) 检测。
 
-    注意: 此 API 不需要 WBI 签名，但需要有效的登录 Cookie。
+    注意: 此 API 需要 platform/web/timezone_offset 参数 + WBI 签名 + 登录 Cookie。
     """
     params = {
         "host_mid": mid,

@@ -941,147 +941,94 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 {% if report %}
-<script>
-console.log('[Charts v25d54cf] Script block executing...');
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const resp = await fetch('/api/score-distribution/{{ bvid }}');
+        const { data } = await resp.json();
+        const buckets = data.buckets;
+        const labels = Object.keys(buckets);
+        const values = Object.values(buckets);
+        new Chart(document.getElementById('scoreChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels, datasets: [{
+                    label: '账号数量', data: values,
+                    backgroundColor: labels.map(l => {
+                        const mid = parseInt(l.split('-')[0]);
+                        if (mid >= 70) return 'rgba(220,53,69,0.7)';
+                        if (mid >= 40) return 'rgba(255,193,7,0.7)';
+                        return 'rgba(40,167,69,0.7)';
+                    }),
+                    borderColor: labels.map(l => {
+                        const mid = parseInt(l.split('-')[0]);
+                        if (mid >= 70) return '#dc3545';
+                        if (mid >= 40) return '#ffc107';
+                        return '#28a745';
+                    }),
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    } catch(e) { console.error('Score chart failed:', e); }
 
-// 通用：无数据时显示占位文字
-function showNoData(canvasId) {
-    var canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-    var parent = canvas.parentElement;
-    canvas.style.display = 'none';
-    var ph = document.createElement('div');
-    ph.className = 'text-muted text-center pt-5';
-    ph.textContent = '暂无数据';
-    parent.appendChild(ph);
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('[Charts v25d54cf] DOMContentLoaded fired');
-    console.log('[Charts v25d54cf] Chart defined:', typeof Chart !== 'undefined');
-    console.log('[Charts v25d54cf] scoreChart canvas:', !!document.getElementById('scoreChart'));
-    console.log('[Charts v25d54cf] timelineChart canvas:', !!document.getElementById('timelineChart'));
-    console.log('[Charts v25d54cf] featuresChart canvas:', !!document.getElementById('featuresChart'));
-
-    if (typeof Chart === 'undefined') {
-        console.error('[Charts v25d54cf] Chart.js NOT loaded — all charts will fail');
-        showNoData('scoreChart');
-        showNoData('timelineChart');
-        showNoData('featuresChart');
-        return;
-    }
-
-    // 1. 水军评分分布
-    fetch('/api/score-distribution/{{ bvid }}')
-        .then(function(r) { return r.json(); })
-        .then(function(resp) {
-            var data = resp.data || {};
-            var buckets = data.buckets || {};
-            var labels = Object.keys(buckets);
-            var values = Object.values(buckets);
-            console.log('[Charts] score-distribution API:', {labels: labels, values: values});
-            if (!labels.length || values.every(function(v) { return v === 0; })) { showNoData('scoreChart'); return; }
-            new Chart(document.getElementById('scoreChart').getContext('2d'), {
-                type: 'bar',
+    try {
+        const resp = await fetch('/api/timeline/{{ bvid }}');
+        const { data } = await resp.json();
+        if (data && data.length > 0) {
+            new Chart(document.getElementById('timelineChart').getContext('2d'), {
+                type: 'line',
                 data: {
-                    labels: labels, datasets: [{
-                        label: '账号数量', data: values,
-                        backgroundColor: labels.map(function(l) {
-                            var mid = parseInt(l.split('-')[0]);
-                            if (mid >= 70) return 'rgba(220,53,69,0.7)';
-                            if (mid >= 40) return 'rgba(255,193,7,0.7)';
-                            return 'rgba(40,167,69,0.7)';
-                        }),
-                        borderColor: labels.map(function(l) {
-                            var mid = parseInt(l.split('-')[0]);
-                            if (mid >= 70) return '#dc3545';
-                            if (mid >= 40) return '#ffc107';
-                            return '#28a745';
-                        }),
-                        borderWidth: 1
+                    labels: data.map(d => d.time || d.slot || ''),
+                    datasets: [{
+                        label: '评论数',
+                        data: data.map(d => d.count || d.total || 0),
+                        borderColor: '#0d6efd',
+                        backgroundColor: 'rgba(13,110,253,0.1)',
+                        fill: true, tension: 0.3,
+                        pointRadius: 3, pointHoverRadius: 6,
                     }]
                 },
                 options: {
                     responsive: true,
                     plugins: { legend: { display: false } },
-                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                    scales: { y: { beginAtZero: true } }
                 }
             });
-            console.log('[Charts] scoreChart rendered');
-        })
-        .catch(function(e) { console.error('[Charts] Score chart failed:', e); showNoData('scoreChart'); });
+        }
+    } catch(e) { console.error('Timeline failed:', e); }
 
-    // 2. 评论时间线
-    fetch('/api/timeline/{{ bvid }}')
-        .then(function(r) { return r.json(); })
-        .then(function(resp) {
-            var data = resp.data;
-            console.log('[Charts] timeline API:', {count: data ? data.length : 0});
-            if (data && data.length > 0) {
-                new Chart(document.getElementById('timelineChart').getContext('2d'), {
-                    type: 'line',
-                    data: {
-                        labels: data.map(function(d) { return d.time || d.slot || ''; }),
-                        datasets: [{
-                            label: '评论数',
-                            data: data.map(function(d) { return d.count || d.total || 0; }),
-                            borderColor: '#0d6efd',
-                            backgroundColor: 'rgba(13,110,253,0.1)',
-                            fill: true, tension: 0.3,
-                            pointRadius: 3, pointHoverRadius: 6,
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: true } }
-                    }
-                });
-                console.log('[Charts] timelineChart rendered');
-            } else {
-                showNoData('timelineChart');
-            }
-        })
-        .catch(function(e) { console.error('[Charts] Timeline failed:', e); showNoData('timelineChart'); });
-
-    // 3. 13大水军特征触发比例
     try {
-        var topSuspects = {{ report.top_suspects | tojson_lite | safe }};
-        var featureCounts = {};
-        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','账号骨架','敏感内容','商业引流','时间规律性','签名引战'].forEach(function(n) { featureCounts[n] = 0; });
-        console.log('[Charts] topSuspects count:', (topSuspects || []).length);
-        (topSuspects || []).forEach(function(user) {
-            (user.top_features || []).forEach(function(f) {
+        const topSuspects = {{ report.top_suspects | tojson | safe }};
+        const featureCounts = {};
+        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','账号骨架','敏感内容','商业引流','时间规律性','签名引战'].forEach(n => featureCounts[n] = 0);
+        topSuspects.forEach(user => {
+            user.top_features.forEach(f => {
                 if (featureCounts[f.name] !== undefined) featureCounts[f.name]++;
             });
         });
-        console.log('[Charts] featureCounts:', featureCounts);
-        var hasAny = false;
-        for (var k in featureCounts) { if (featureCounts[k] > 0) { hasAny = true; break; } }
-        if (hasAny) {
-            new Chart(document.getElementById('featuresChart').getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: Object.keys(featureCounts),
-                    datasets: [{
-                        label: '触发次数', data: Object.values(featureCounts),
-                        backgroundColor: 'rgba(13,110,253,0.7)',
-                        borderColor: '#0d6efd', borderWidth: 1
-                    }]
-                },
-                options: {
-                    indexAxis: 'y', responsive: true,
-                    plugins: { legend: { display: false } },
-                    scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }
-                }
-            });
-            console.log('[Charts] featuresChart rendered');
-        } else {
-            showNoData('featuresChart');
-        }
-    } catch(e) { console.error('[Charts] Features chart failed:', e); showNoData('featuresChart'); }
+        new Chart(document.getElementById('featuresChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: Object.keys(featureCounts),
+                datasets: [{
+                    label: '触发次数', data: Object.values(featureCounts),
+                    backgroundColor: 'rgba(13,110,253,0.7)',
+                    borderColor: '#0d6efd', borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y', responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    } catch(e) { console.error('Features chart failed:', e); }
 });
-</script>
 {% endif %}
 
 async function runAnalysis() {
@@ -1237,9 +1184,8 @@ function openLlmScreenModal() {
         llmScreenModal = new bootstrap.Modal(document.getElementById('llmScreenModal'));
     }
 
-    // ★ 修复：计算候选人数（评分 >= 阈值的用户数）
-    const threshold = parseInt(document.getElementById('llm-threshold-slider').value);
-    const total = scoredUsers.filter(u => (u.score || 0) >= threshold).length;
+    // 计算统计
+    const total = scoredUsers.length;
     const done = scoredUsers.filter(u => u.llm_type_id && u.llm_type_id > 0).length;
     const maxScore = scoredUsers.length > 0
         ? Math.max(...scoredUsers.map(u => u.score || 0)).toFixed(1)
@@ -1263,15 +1209,11 @@ function openLlmScreenModal() {
     llmScreenModal.show();
 }
 
-// 滑块更新阈值显示 + 实时计算候选人数
+// 滑块更新阈值显示
 document.getElementById('llm-threshold-slider').addEventListener('input', function() {
     const v = this.value;
     document.getElementById('llm-threshold-val').textContent = v;
     document.getElementById('llm-threshold-display').textContent = v;
-    
-    // ★ 实时重新计算候选人数（评分 >= 阈值的用户数）
-    const candidateCount = scoredUsers.filter(u => (u.score || 0) >= parseInt(v)).length;
-    document.getElementById('llm-candidate-count').textContent = candidateCount;
 });
 
 async function startLlmScreen() {
@@ -1394,9 +1336,8 @@ function openDeepAnalyzeModal() {
         deepAnalyzeModal = new bootstrap.Modal(document.getElementById('deepAnalyzeModal'));
     }
 
-    // ★ 修复：计算候选人数（评分 >= 阈值的用户数）
-    const threshold = parseInt(document.getElementById('deep-threshold-slider').value);
-    const total = scoredUsers.filter(u => (u.score || 0) >= threshold).length;
+    // 计算统计
+    const total = scoredUsers.length;
     const done = scoredUsers.filter(u => u.deep_analyzed).length;
     const maxScore = scoredUsers.length > 0
         ? Math.max(...scoredUsers.map(u => u.score || 0)).toFixed(1)
@@ -1420,15 +1361,11 @@ function openDeepAnalyzeModal() {
     deepAnalyzeModal.show();
 }
 
-// 滑块更新阈值显示 + 实时计算候选人数
+// 滑块更新阈值显示
 document.getElementById('deep-threshold-slider').addEventListener('input', function() {
     const v = this.value;
     document.getElementById('deep-threshold-val').textContent = v;
     document.getElementById('deep-threshold-display').textContent = v;
-    
-    // ★ 实时重新计算候选人数（评分 >= 阈值的用户数）
-    const candidateCount = scoredUsers.filter(u => (u.score || 0) >= parseInt(v)).length;
-    document.getElementById('deep-candidate-count').textContent = candidateCount;
 });
 
 async function startDeepAnalyze() {

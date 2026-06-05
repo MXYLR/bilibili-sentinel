@@ -2,7 +2,7 @@
 {% block title %}{{ video.get('title', '视频详情') }}{% endblock %}
 
 {% block extra_head %}
-<script src="/static/js/chart.umd.min.js"></script>
+<script src="/static/js/chart.umd.min.js" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -942,73 +942,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
 {% if report %}
 <script>
-(function() {
-    if (typeof Chart === 'undefined') {
-        console.error('Chart.js not loaded');
-        return;
-    }
+// 通用：无数据时显示占位文字
+function showNoData(canvasId) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    var parent = canvas.parentElement;
+    canvas.style.display = 'none';
+    var ph = document.createElement('div');
+    ph.className = 'text-muted text-center pt-5';
+    ph.textContent = '暂无数据';
+    parent.appendChild(ph);
+}
 
-    // 通用：无数据时显示占位文字
-    function showNoData(canvasId) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-        const parent = canvas.parentElement;
-        canvas.style.display = 'none';
-        const ph = document.createElement('div');
-        ph.className = 'text-muted text-center pt-5';
-        ph.textContent = '暂无数据';
-        parent.appendChild(ph);
-    }
-
+document.addEventListener('DOMContentLoaded', async () => {
     // 1. 水军评分分布
-    fetch('/api/score-distribution/{{ bvid }}')
-        .then(r => r.json())
-        .then(({ data }) => {
-            const buckets = data && data.buckets ? data.buckets : {};
-            const labels = Object.keys(buckets);
-            const values = Object.values(buckets);
-            if (!labels.length || values.every(v => v === 0)) { showNoData('scoreChart'); return; }
-            new Chart(document.getElementById('scoreChart').getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels, datasets: [{
-                        label: '账号数量', data: values,
-                        backgroundColor: labels.map(l => {
-                            const mid = parseInt(l.split('-')[0]);
-                            if (mid >= 70) return 'rgba(220,53,69,0.7)';
-                            if (mid >= 40) return 'rgba(255,193,7,0.7)';
-                            return 'rgba(40,167,69,0.7)';
-                        }),
-                        borderColor: labels.map(l => {
-                            const mid = parseInt(l.split('-')[0]);
-                            if (mid >= 70) return '#dc3545';
-                            if (mid >= 40) return '#ffc107';
-                            return '#28a745';
-                        }),
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: { legend: { display: false } },
-                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
-                }
-            });
-        })
-        .catch(e => { console.error('Score chart failed:', e); showNoData('scoreChart'); });
+    try {
+        const resp = await fetch('/api/score-distribution/{{ bvid }}');
+        const { data } = await resp.json();
+        const buckets = data && data.buckets ? data.buckets : {};
+        const labels = Object.keys(buckets);
+        const values = Object.values(buckets);
+        if (!labels.length || values.every(function(v) { return v === 0; })) { showNoData('scoreChart'); return; }
+        new Chart(document.getElementById('scoreChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: labels, datasets: [{
+                    label: '账号数量', data: values,
+                    backgroundColor: labels.map(function(l) {
+                        var mid = parseInt(l.split('-')[0]);
+                        if (mid >= 70) return 'rgba(220,53,69,0.7)';
+                        if (mid >= 40) return 'rgba(255,193,7,0.7)';
+                        return 'rgba(40,167,69,0.7)';
+                    }),
+                    borderColor: labels.map(function(l) {
+                        var mid = parseInt(l.split('-')[0]);
+                        if (mid >= 70) return '#dc3545';
+                        if (mid >= 40) return '#ffc107';
+                        return '#28a745';
+                    }),
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    } catch(e) { console.error('Score chart failed:', e); showNoData('scoreChart'); }
 
     // 2. 评论时间线
-    fetch('/api/timeline/{{ bvid }}')
-        .then(r => r.json())
-        .then(({ data }) => {
-            if (!data || !data.length) { showNoData('timelineChart'); return; }
+    try {
+        const resp = await fetch('/api/timeline/{{ bvid }}');
+        const { data } = await resp.json();
+        if (data && data.length > 0) {
             new Chart(document.getElementById('timelineChart').getContext('2d'), {
                 type: 'line',
                 data: {
-                    labels: data.map(d => d.time || d.slot || ''),
+                    labels: data.map(function(d) { return d.time || d.slot || ''; }),
                     datasets: [{
                         label: '评论数',
-                        data: data.map(d => d.count || d.total || 0),
+                        data: data.map(function(d) { return d.count || d.total || 0; }),
                         borderColor: '#0d6efd',
                         backgroundColor: 'rgba(13,110,253,0.1)',
                         fill: true, tension: 0.3,
@@ -1021,20 +1015,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     scales: { y: { beginAtZero: true } }
                 }
             });
-        })
-        .catch(e => { console.error('Timeline failed:', e); showNoData('timelineChart'); });
+        } else {
+            showNoData('timelineChart');
+        }
+    } catch(e) { console.error('Timeline failed:', e); showNoData('timelineChart'); }
 
     // 3. 13大水军特征触发比例
     try {
         const topSuspects = {{ report.top_suspects | tojson_lite | safe }};
         const featureCounts = {};
-        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','账号骨架','敏感内容','商业引流','时间规律性','签名引战'].forEach(n => featureCounts[n] = 0);
-        (topSuspects || []).forEach(user => {
-            (user.top_features || []).forEach(f => {
+        ['账号年龄','粉丝/关注比','用户等级','头像/认证','内容相似度','时间爆发','情感极端','赞评比异常','账号骨架','敏感内容','商业引流','时间规律性','签名引战'].forEach(function(n) { featureCounts[n] = 0; });
+        (topSuspects || []).forEach(function(user) {
+            (user.top_features || []).forEach(function(f) {
                 if (featureCounts[f.name] !== undefined) featureCounts[f.name]++;
             });
         });
-        const hasAny = Object.values(featureCounts).some(v => v > 0);
+        var hasAny = false;
+        for (var k in featureCounts) { if (featureCounts[k] > 0) { hasAny = true; break; } }
         if (hasAny) {
             new Chart(document.getElementById('featuresChart').getContext('2d'), {
                 type: 'bar',
@@ -1056,7 +1053,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showNoData('featuresChart');
         }
     } catch(e) { console.error('Features chart failed:', e); showNoData('featuresChart'); }
-})();
+});
 </script>
 {% endif %}
 

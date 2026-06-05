@@ -1597,15 +1597,42 @@ def video_detail(bvid: str):
             mid = u.get("mid", 0)
             u["_user_data_available"] = (Path(DATA_DIR) / "users" / f"{mid}.json").exists()
 
+    # ★ v2.31 性能优化: top_suspects 内联到页面时限制为前 300 名（按 suspicious_score 降序）
+    # 避免大视频（1000+ 评论用户）导致页面 HTML 超过 5MB，浏览器 JS 冻结
+    PAGE_TOP_SUSPECTS_LIMIT = 300
+    if report and report.get("top_suspects") and len(report["top_suspects"]) > PAGE_TOP_SUSPECTS_LIMIT:
+        top_suspects_for_page = sorted(
+            report["top_suspects"],
+            key=lambda u: u.get("suspicious_score", u.get("score", 0)),
+            reverse=True
+        )[:PAGE_TOP_SUSPECTS_LIMIT]
+        # 构造一个用于渲染的临时 report 副本（不修改原始 report）
+        import copy
+        report_for_page = copy.copy(report)
+        report_for_page["top_suspects"] = top_suspects_for_page
+        report_for_page["_truncated"] = True
+        report_for_page["_total_users"] = len(report["top_suspects"])
+    else:
+        report_for_page = report
+
+    # ★ v2.31 性能优化: user_scores 只传前 500 个（按 score 降序）
+    USER_SCORES_LIMIT = 500
+    if len(user_scores) > USER_SCORES_LIMIT:
+        user_scores_for_page = dict(
+            sorted(user_scores.items(), key=lambda x: x[1].get("score", 0), reverse=True)[:USER_SCORES_LIMIT]
+        )
+    else:
+        user_scores_for_page = user_scores
+
     resp = make_response(render_template(
         "video_detail.html",
         bvid=bvid,
         video=video_info,
-        report=report,
+        report=report_for_page,
         comments=comments,
         comment_count=comment_count,
         ai_summary_html=ai_summary_html,
-        user_scores=user_scores,
+        user_scores=user_scores_for_page,
     ))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'

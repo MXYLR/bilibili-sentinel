@@ -81,6 +81,7 @@ class BilibiliUserSpider(scrapy.Spider):
 
     从 Redis 队列获取 MID 列表，依次采集:
     - 用户画像 (UserInfoItem)
+    - 投稿视频 (data/up_videos/{mid}_videos.json)  ★ v2.35
     - 用户动态 (UserPostItem)
     """
 
@@ -281,9 +282,21 @@ class BilibiliUserSpider(scrapy.Spider):
             logger.error(f"BUG: following={data.get('following')} lost! item={user_item['following']}")
 
         meta["user_info_item"] = user_item
-        # ★ card API 已有 archive_count，直接产出 + 抓取动态
+        # ★ card API 已有 archive_count，直接产出
         yield user_item
         self._user_count += 1
+
+        # ★ v2.35: 并行请求视频投稿 + 动态（独立 API，互不依赖）
+        # 视频投稿: /x/space/wbi/arc/search
+        videos_url = get_user_videos_url(mid, page=1, ps=50)
+        yield scrapy.Request(
+            videos_url,
+            callback=self._parse_user_videos_api,
+            meta={"mid": mid, "page": 1, "videos_collected": []},
+            errback=self._videos_error,
+            dont_filter=True,
+        )
+        # 动态: /x/polymer/web-dynamic/v1/feed/space
         posts_url = get_user_posts_url(mid)
         yield scrapy.Request(
             posts_url,
@@ -658,12 +671,107 @@ class BilibiliUserSpider(scrapy.Spider):
         return []
 
     # ================================================================
-    #  Step B: 投稿列表 → 补充 UserInfoItem
+    #  Step B: 投稿列表 → 保存到 data/up_videos/ (v2.35)
     # ================================================================
 
-    # ================================================================
-    #  Step B: 投稿列表 → 补充 UserInfoItem
-    # ================================================================
+    def _parse_user_videos_api(self, response):
+        """解析 /x/space/wbi/arc/search 响应，保存视频列表到本地 JSON，处理翻页。
+
+        v2.35 新增: 从 _build_user_info_item 并行发起，与动态抓取独立。
+        保存路径: data/up_videos/{mid}_videos.json
+        """
+        mid = response.meta["mid"]
+        page = response.meta.get("page", 1)
+        prev_collected = response.meta.get("videos_collected", [])
+
+        import json as _json
+        result = parse_bilibili_response(_json.loads(response.text))
+
+        if result is None:
+            logger.warning(f"[mid={mid}] Video API page {page} returned error/empty")
+            # 即使当前页失败，也把之前收集的保存
+            self._flush_videos_to_file(mid, prev_collected)
+            return
+
+        data = result.get("data", {})
+        page_info = data.get("page", {})
+        total_count = page_info.get("count", 0)
+        vlist = data.get("list", {}).get("vlist", [])
+
+        if not vlist:
+            logger.debug(f"[mid={mid}] Page {page} no videos (total={total_count}), saving {len(prev_collected)}")
+            self._flush_videos_to_file(mid, prev_collected)
+            return
+
+        # 提取视频核心字段
+        for v in vlist:
+            bvid = v.get("bvid", "")
+            if not bvid:
+                continue
+            prev_collected.append({
+                "bvid": bvid,
+                "aid": v.get("aid", 0),
+                "title": v.get("title", ""),
+                "cover": v.get("pic", ""),
+                "play": v.get("play", 0),
+                "comment": v.get("comment", 0),
+                "created": v.get("created", 0),
+                "length": v.get("length", ""),
+                "description": v.get("description", ""),
+                "typeid": v.get("typeid", 0),
+                "tname": v.get("tname", ""),
+            })
+
+        logger.info(f"[mid={mid}] Video page {page}: +{len(vlist)} videos (total_so_far={len(prev_collected)}/{total_count})")
+
+        # 翻页逻辑
+        page_size = page_info.get("ps", 50)
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+        max_pages = min(total_pages, 10)  # 最多翻 10 页 (500 条视频)
+
+        if page < max_pages:
+            next_page = page + 1
+            next_url = get_user_videos_url(mid, page=next_page, ps=50)
+            yield scrapy.Request(
+                next_url,
+                callback=self._parse_user_videos_api,
+                meta={"mid": mid, "page": next_page, "videos_collected": prev_collected},
+                errback=self._videos_error,
+                dont_filter=True,
+            )
+        else:
+            # 最后一页 or 达到上限 → 保存
+            self._flush_videos_to_file(mid, prev_collected)
+
+    def _flush_videos_to_file(self, mid, videos):
+        """原子写入视频列表到 data/up_videos/{mid}_videos.json"""
+        if not videos:
+            return
+        import json as _json
+        vid_dir = os.path.join(DATA_DIR, "up_videos")
+        os.makedirs(vid_dir, exist_ok=True)
+        vid_file = os.path.join(vid_dir, f"{mid}_videos.json")
+        tmp_file = vid_file + ".tmp"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                _json.dump(videos, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file, vid_file)
+            logger.info(f"[mid={mid}] ✅ 投稿视频已保存: {len(videos)} 条 → {vid_file}")
+        except Exception as e:
+            logger.warning(f"[mid={mid}] 投稿视频保存失败: {e}")
+            try:
+                os.remove(tmp_file)
+            except OSError:
+                pass
+
+    def _videos_error(self, failure):
+        """视频 API 请求失败的回调"""
+        request = failure.request
+        mid = request.meta.get("mid", "?")
+        prev_collected = request.meta.get("videos_collected", [])
+        logger.warning(f"[mid={mid}] Video API errback: {failure.value}, saving {len(prev_collected)} collected")
+        if prev_collected:
+            self._flush_videos_to_file(mid, prev_collected)
 
     def parse_user_videos(self, response):
         """解析 /x/space/wbi/arc/search 响应，补充统计信息。"""

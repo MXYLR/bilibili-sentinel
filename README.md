@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.34。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.35。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -321,6 +321,25 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 **Q: 412 风控频繁出现？**
 系统已内置三层对抗。可尝试：降低并发（`crawler_config.py` 中调大 `DOWNLOAD_DELAY`）、增加 Cookie 池账号、启用 Playwright 兜底。
+
+---
+
+## v2.35 更新 (2026-06-07)
+
+### 用户爬虫 API 路径新增投稿视频抓取
+
+**问题**: 用户爬虫 (`bilibili_user_spider`) 的 API 路径（card API 成功时，占 95%+ 流量）只抓取了**画像**和**动态**，从未抓取**投稿视频**。投稿视频数据仅来自 Playwright 兜底路径（<5% 流量），导致 `data/up_videos/` 目录只有 28 个文件。
+
+**根因**: `_build_user_info_item()` 中仅请求了动态 API (`get_user_posts_url`)，没有请求视频 API。
+
+**修复** (`bilibili_user_spider.py`):
+- `_build_user_info_item()`: 新增并行请求 `get_user_videos_url(mid)` → 与动态抓取同时进行
+- 新增 `_parse_user_videos_api()`: 解析 `/x/space/wbi/arc/search` 响应，提取视频核心字段 (bvid/aid/title/cover/play/comment/created/length/description)
+- 新增 `_flush_videos_to_file()`: 原子写入 `data/up_videos/{mid}_videos.json`
+- 自动翻页: 最多翻 10 页 (500 条视频)，翻页过程中累加收集
+- 新增 `_videos_error()`: 失败时保存已收集数据，避免前功尽弃
+
+**效果**: 每个通过用户爬虫的用户，都会自动获取投稿视频列表，无需手动注入 UP 主种子。
 
 ---
 

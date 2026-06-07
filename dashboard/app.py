@@ -3687,6 +3687,11 @@ def api_crawler_rescan_user_seeds():
 
     扫描 data/comments/*_comments.json，提取每个评论的 mid，
     去重后注入 Redis user_seeds 队列。
+
+    v2.34 去重增强:
+      - 排除 data/users/{mid}.json 已存在的用户（已爬过画像）
+      - 排除 data/users/{mid}_posts.json 已存在的用户（已爬过动态）
+      - 排除 Redis 队列中已有的 MID（避免重复注入）
     """
     import redis as redis_mod
     try:
@@ -3695,6 +3700,41 @@ def api_crawler_rescan_user_seeds():
     except Exception:
         return jsonify({"success": False, "message": "Redis 连接失败"}), 503
 
+    # ── 1. 扫描 data/users/ 获取已爬取过的 MID ──
+    users_dir = Path(DATA_DIR) / "users"
+    already_crawled = set()
+    users_scanned = 0
+    if users_dir.exists():
+        for uf in users_dir.glob("*.json"):
+            try:
+                # 文件名格式: {mid}.json 或 {mid}_posts.json 或 unique_mids.json
+                fname = uf.stem  # 不含 .json 后缀
+                if fname == "unique_mids":
+                    continue
+                # 处理 _posts 后缀: 100466950_posts → 100466950
+                if fname.endswith("_posts"):
+                    fname = fname[:-6]
+                mid = int(fname)
+                already_crawled.add(mid)
+                users_scanned += 1
+            except (ValueError, OSError):
+                continue
+
+    # ── 2. 获取 Redis 队列中已有的 MID ──
+    already_queued = set()
+    try:
+        queue_items = r.lrange("bilibili_crawler:user_seeds", 0, -1)
+        for item in queue_items:
+            try:
+                data = json.loads(item)
+                if isinstance(data, dict) and data.get("mid"):
+                    already_queued.add(int(data["mid"]))
+            except (json.JSONDecodeError, ValueError):
+                continue
+    except Exception:
+        pass
+
+    # ── 3. 扫描 data/comments/ 提取评论者 MID ──
     comment_dir = Path(DATA_DIR) / "comments"
     all_mids = set()
     scanned = 0
@@ -3711,17 +3751,31 @@ def api_crawler_rescan_user_seeds():
         except Exception:
             continue
 
+    # ── 4. 过滤: 排除已爬取 + 已在队列中的 MID ──
+    filtered_mids = all_mids - already_crawled - already_queued
+    skipped_crawled = len(all_mids & already_crawled)
+    skipped_queued = len(all_mids & already_queued)
+
+    # ── 5. 注入 Redis ──
     injected = 0
-    for mid in all_mids:
+    for mid in filtered_mids:
         r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))
         injected += 1
 
     return jsonify({
         "success": True,
         "scanned_comments": scanned,
-        "unique_mids": len(all_mids),
+        "users_existing": users_scanned,
+        "unique_mids_from_comments": len(all_mids),
+        "skipped_already_crawled": skipped_crawled,
+        "skipped_already_queued": skipped_queued,
         "injected": injected,
-        "message": f"从 {scanned} 个评论文件中提取 {injected} 个唯一 MID，已注入用户爬虫种子队列"
+        "message": (
+            f"从 {scanned} 个评论文件提取 {len(all_mids)} 个唯一 MID，"
+            f"已爬取 {skipped_crawled} 个跳过，"
+            f"已在队列 {skipped_queued} 个跳过，"
+            f"实际注入 {injected} 个"
+        )
     })
 
 

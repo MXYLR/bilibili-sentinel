@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.33。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.34。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -321,6 +321,27 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 **Q: 412 风控频繁出现？**
 系统已内置三层对抗。可尝试：降低并发（`crawler_config.py` 中调大 `DOWNLOAD_DELAY`）、增加 Cookie 池账号、启用 Playwright 兜底。
+
+---
+
+## v2.34 更新 (2026-06-07)
+
+### 用户种子去重增强 — 扫描 data/users/ 目录
+
+**问题**: `rescan-user-seeds` API 之前只从 `data/comments/` 提取 MID 后直接注入 Redis，没有检查 `data/users/` 目录下已爬取过的用户。导致已爬过的用户被重复注入种子队列，浪费资源。
+
+**修复** (`dashboard/app.py`):
+- **新增扫描 `data/users/`**: 扫描目录下所有 `{mid}.json` 和 `{mid}_posts.json` 文件，提取已爬取过的 MID（当前已有 8503 个文件）
+- **新增检查 Redis 队列**: 读取 `bilibili_crawler:user_seeds` 队列中已有的 MID，避免重复注入
+- **三级过滤**: 从评论提取的 MIDs → 减去已爬取 MIDs → 减去队列中已有 MIDs → 最终注入
+- **详细报告**: 返回新增字段 `users_existing`（已爬取用户数）、`skipped_already_crawled`（跳过：已爬取）、`skipped_already_queued`（跳过：已在队列）
+
+**效果对比**:
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| 扫描源 | `data/comments/` 仅 | `data/comments/` + `data/users/` + Redis queue |
+| 去重范围 | 评论间去重 | 评论间去重 + 已爬取跳过 + 队列跳过 |
+| 重复注入 | 每次全部注入 | 只注入真正需要爬取的用户 |
 
 ---
 

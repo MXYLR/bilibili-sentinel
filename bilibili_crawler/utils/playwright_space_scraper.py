@@ -785,23 +785,21 @@ class SpacePageScraper:
                     
                     if dyn_tab.count() > 0:
                         # 先移除遮罩
-                        page.evaluate('() => document.querySelectorAll(".bili-mini-mask, .login-panel-popover").forEach(m => m.remove())')
+                        page.evaluate('() => document.querySelectorAll(".bili-mini-mask, .login-panel-popover, .geetest_table_box").forEach(m => m.remove())')
                         page.wait_for_timeout(500)
                         
-                        # 点击
-                        try:
-                            dyn_tab.click(timeout=5000)
-                        except Exception:
-                            dyn_tab.evaluate('el => el.click()')
+                        # JS 强制点击（绕过 Playwright 的 actionability 检查，后者在 SPA 场景下常失败）
+                        dyn_tab.evaluate('el => el.click()')
                         
-                        # 等待动态内容加载（等待 .bili-dyn-list 或 .bili-dyn-card 出现）
-                        try:
-                            page.wait_for_selector('.bili-dyn-list, .bili-dyn-card, [class*="dyn"]', timeout=15000)
-                            tab_clicked = True
-                            logger.info(f"[SpaceScraper] ✅ 动态 tab 点击成功 (尝试 {attempt+1}/3)")
-                            break
-                        except Exception as e:
-                            logger.warning(f"[SpaceScraper] 动态内容未加载 (尝试 {attempt+1}/3): {e}")
+                        # ★ 等待实际动态卡片加载（B站惰性加载，需等待 API 请求完成）
+                        # 使用 'attached' 状态 + 宽泛选择器避免 geetest 覆盖层误判
+                        page.wait_for_selector('[class*="dyn-card"], .bili-rich-text', timeout=20000, state='attached')
+                        page.wait_for_timeout(2000)  # 额外等待渲染
+                        _close_geetest(page)
+                        _dismiss_login_popover(page)
+                        tab_clicked = True
+                        logger.info(f"[SpaceScraper] ✅ 动态 tab 点击成功 (尝试 {attempt+1}/3)")
+                        break
                     
                 except Exception as e:
                     logger.warning(f"[SpaceScraper] 动态 tab 点击失败 (尝试 {attempt+1}/3): {e}")
@@ -813,30 +811,82 @@ class SpacePageScraper:
                 logger.warning(f"[SpaceScraper] uid={uid} 动态 SPA 点击失败，跳过动态爬取")
                 return posts  # 立即返回空列表
             
-            # 滚动加载
+            # 滚动加载更多动态
             for _ in range(max_scroll):
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(1500)
 
-            # 提取动态（临时选择器，可能需要更新）
+            # ★ 提取动态 — 适配 B站 2026-06 DOM 结构
+            # 三种卡片类型：视频 (.bili-dyn-card-video)、图文 (.dyn-card-opus)、UGC (.bili-dyn-card-ugc)
             items = page.evaluate(r"""() => {
                 var items = [];
-                document.querySelectorAll(
-                    '.bili-dyn-card, .dyn-card, [class*="dyn-item"], [class*="feed-card"]'
-                ).forEach(function(card) {
-                    var contentEl = card.querySelector('[class*="content"]');
-                    var timeEl = card.querySelector('[class*="time"]');
-                    var text = '';
-                    if (contentEl) {
-                        var clone = contentEl.cloneNode(true);
-                        clone.querySelectorAll('[class*="card"], [class*="btn"], [class*="button"], [class*="stat"]').forEach(function(n) { n.remove(); });
-                        text = clone.textContent.trim().slice(0, 500);
+                var seen = new Set();  // 去重（同一内容可能同时匹配多个选择器）
+                
+                // 1. 视频动态卡片
+                document.querySelectorAll('.bili-dyn-card-video').forEach(function(card) {
+                    var titleEl = card.querySelector('.bili-dyn-card-video__title');
+                    var title = titleEl ? titleEl.textContent.trim() : '';
+                    var link = card.getAttribute('href') || '';
+                    var bvid = (link.match(/BV[a-zA-Z0-9]{10}/) || [''])[0];
+                    
+                    var key = title || bvid;
+                    if (key && !seen.has(key)) {
+                        seen.add(key);
+                        items.push({
+                            type: 'video',
+                            title: title,
+                            bvid: bvid,
+                            content: title,
+                            time: ''
+                        });
                     }
-                    items.push({
-                        content: text,
-                        time: timeEl ? timeEl.textContent.trim() : '',
-                    });
                 });
+                
+                // 2. 图文动态卡片 (.dyn-card-opus)
+                document.querySelectorAll('.dyn-card-opus').forEach(function(card) {
+                    var summaryEl = card.querySelector('.dyn-card-opus__summary');
+                    var textEl = card.querySelector('.bili-rich-text__content');
+                    var text = '';
+                    if (textEl) {
+                        // 排除统计/按钮区域的文字
+                        var clone = textEl.cloneNode(true);
+                        clone.querySelectorAll('[class*="stat"], [class*="btn"], [class*="button"], [class*="action"]').forEach(function(n) { n.remove(); });
+                        text = clone.textContent.trim().slice(0, 500);
+                    } else if (summaryEl) {
+                        text = summaryEl.textContent.trim().slice(0, 500);
+                    }
+                    
+                    var key = text.slice(0, 50);
+                    if (key && !seen.has(key)) {
+                        seen.add(key);
+                        items.push({
+                            type: 'opus',
+                            title: '',
+                            content: text,
+                            time: ''
+                        });
+                    }
+                });
+                
+                // 3. UGC 动态卡片（转发/分享的稿件等）
+                document.querySelectorAll('.bili-dyn-card-ugc').forEach(function(card) {
+                    var titleEl = card.querySelector('.bili-dyn-card-ugc__detail__title');
+                    var descEl = card.querySelector('.bili-dyn-card-ugc__detail__desc');
+                    var title = titleEl ? titleEl.textContent.trim() : '';
+                    var desc = descEl ? descEl.textContent.trim() : '';
+                    
+                    var key = title || desc.slice(0, 50);
+                    if (key && !seen.has(key)) {
+                        seen.add(key);
+                        items.push({
+                            type: 'ugc',
+                            title: title,
+                            content: desc || title,
+                            time: ''
+                        });
+                    }
+                });
+                
                 return items;
             }""")
             posts = items

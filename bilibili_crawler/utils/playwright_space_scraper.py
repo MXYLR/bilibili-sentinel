@@ -75,7 +75,13 @@ def _ensure_browser(headless: bool = True, cookie_str: str = ""):
     if cookie_str:
         _inject_cookies(ctx, cookie_str)
     _set_thread_browser(browser_obj, ctx)
-    return browser_obj, ctx, ctx.new_page()
+    page = ctx.new_page()
+
+    # ★ 背景模式：启动后立即最小化窗口，避免干扰用户前台操作
+    if not headless:
+        _set_window_state(page, minimized=True)
+
+    return browser_obj, ctx, page
 
 
 def _inject_cookies(context, cookie_str: str):
@@ -96,6 +102,41 @@ def _inject_cookies(context, cookie_str: str):
             context.add_cookies(cookies)
         except Exception as e:
             logger.warning(f"[SpaceScraper] cookie inject failed: {e}")
+
+
+# ============================================================
+#  CDP 窗口管理（后台运行 + 必要时弹到前台）
+# ============================================================
+
+_window_minimized = False  # 模块级标记，跟踪窗口是否已最小化
+
+
+def _set_window_state(page, minimized: bool = True):
+    """通过 CDP 最小化/恢复 Chromium 浏览器窗口，避免干扰用户前台操作。"""
+    global _window_minimized
+    try:
+        cdp = page.context.new_cdp_session(page)
+        result = cdp.send("Browser.getWindowForTarget")
+        window_id = result.get("windowId")
+        if not window_id:
+            return
+        state = "minimized" if minimized else "normal"
+        cdp.send("Browser.setWindowBounds", {
+            "windowId": window_id,
+            "bounds": {"windowState": state}
+        })
+        _window_minimized = minimized
+        logger.info(f"[SpaceScraper] Window {'minimized' if minimized else 'restored'}")
+    except Exception as e:
+        logger.debug(f"[SpaceScraper] CDP window state failed (non-critical): {e}")
+
+
+def _focus_window(page):
+    """将浏览器窗口恢复到前台（仅在检测到 CAPTCHA/登录墙时调用）。"""
+    global _window_minimized
+    if not _window_minimized:
+        return  # 窗口已在前台，无需操作
+    _set_window_state(page, minimized=False)
 
 
 def _close_geetest(page):
@@ -188,7 +229,10 @@ def _wait_for_manual_bypass(page, headless: bool = False, max_wait_sec: int = 30
         logger.warning(f"[SpaceScraper] ⚠️ 检测到阻碍但 headless=True，无法手动操作: {reason}")
         return False
     
-    # 可见模式：提示用户手动操作
+    # ★ 可见模式：检测到阻拦时，将浏览器窗口恢复到前台，方便用户操作
+    _focus_window(page)
+    
+    # 提示用户手动操作
     import sys
     wait_min = max_wait_sec // 60
     
@@ -274,6 +318,9 @@ def _wait_for_manual_bypass(page, headless: bool = False, max_wait_sec: int = 30
                 except Exception:
                     pass
                 
+                # ★ 操作完成后最小化窗口，回到后台
+                _set_window_state(page, minimized=True)
+                
                 return True
         
         # 更新覆盖层状态
@@ -301,6 +348,8 @@ def _wait_for_manual_bypass(page, headless: bool = False, max_wait_sec: int = 30
         }""")
     except Exception:
         pass
+    # ★ 超时后也最小化窗口
+    _set_window_state(page, minimized=True)
     return False
 
 

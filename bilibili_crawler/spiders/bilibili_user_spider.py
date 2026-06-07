@@ -471,18 +471,20 @@ class BilibiliUserSpider(scrapy.Spider):
                 logger.error(f"[mid={mid}] run_pw_scraper.py not found: {script_path}")
                 return
 
+            proc = None
             try:
-                result = subprocess.run(
+                proc = subprocess.Popen(
                     [sys.executable, script_path],
-                    input=params.encode("utf-8"),
-                    capture_output=True,
-                    timeout=120
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                 )
-                if result.returncode != 0:
-                    err = result.stderr.decode("utf-8", errors="replace")[:500]
-                    logger.error(f"[mid={mid}] PW subprocess failed (code={result.returncode}): {err}")
+                stdout, stderr = proc.communicate(input=params.encode("utf-8"), timeout=120)
+                if proc.returncode != 0:
+                    err = stderr.decode("utf-8", errors="replace")[:500]
+                    logger.error(f"[mid={mid}] PW subprocess failed (code={proc.returncode}): {err}")
                     return
-                output = result.stdout.decode("utf-8", errors="replace").strip()
+                output = stdout.decode("utf-8", errors="replace").strip()
                 if not output:
                     logger.warning(f"[mid={mid}] PW subprocess returned empty output")
                     return
@@ -493,7 +495,13 @@ class BilibiliUserSpider(scrapy.Spider):
                 logger.info(f"[mid={mid}] PW subprocess success: {len(str(profile))} bytes")
                 return profile
             except subprocess.TimeoutExpired:
-                logger.error(f"[mid={mid}] PW subprocess timeout (120s)")
+                # ★ 超时后强制杀子进程，防止浏览器窗口残留
+                logger.error(f"[mid={mid}] PW subprocess timeout (120s), killing child process")
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
                 return
             except Exception as e:
                 logger.error(f"[mid={mid}] PW subprocess exception: {type(e).__name__}: {e}")

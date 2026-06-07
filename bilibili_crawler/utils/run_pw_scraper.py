@@ -43,6 +43,7 @@ def main():
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+    scraper = None  # ★ 在 try 块外初始化，确保 finally 可引用
     try:
         from bilibili_crawler.utils.playwright_space_scraper import SpacePageScraper
         scraper = SpacePageScraper(cookie=cookie_str, headless=headless, timeout=30000)
@@ -75,6 +76,13 @@ def main():
             "_error": str(e),
             "_traceback": traceback.format_exc()
         }))
+    finally:
+        # ★ 确保浏览器窗口关闭，不残留在用户桌面
+        if scraper is not None:
+            try:
+                scraper.close()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     main()

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _thread_local = threading.local()
 
-_DEFAULT_VIEWPORT = {"width": 1920, "height": 1080}
+_DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
 _DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -59,6 +59,7 @@ def _ensure_browser(headless: bool = True, cookie_str: str = ""):
             viewport=_DEFAULT_VIEWPORT,
             user_agent=_DEFAULT_UA,
             locale="zh-CN",
+            device_scale_factor=1.0,
         )
         if cookie_str:
             _inject_cookies(ctx, cookie_str)
@@ -79,12 +80,14 @@ def _ensure_browser(headless: bool = True, cookie_str: str = ""):
         "--no-sandbox",
         "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
+        "--force-device-scale-factor=1",
     ]
     browser_obj = pw.chromium.launch(headless=headless, args=launch_args)
     ctx = browser_obj.new_context(
         viewport=_DEFAULT_VIEWPORT,
         user_agent=_DEFAULT_UA,
         locale="zh-CN",
+        device_scale_factor=1.0,
     )
     if cookie_str:
         _inject_cookies(ctx, cookie_str)

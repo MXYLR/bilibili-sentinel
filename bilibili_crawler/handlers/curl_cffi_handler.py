@@ -133,13 +133,29 @@ class BilibiliCurlCffiMiddleware:
 
     def __init__(self):
         self._session = None
+        self._session_proxy_url = None  # 记录 session 创建时使用的代理地址
 
     @classmethod
     def from_crawler(cls, crawler):
         return cls()
 
     def _get_session(self):
-        """延迟创建 curl_cffi Session"""
+        """延迟创建 curl_cffi Session；若代理地址变更则自动重建。"""
+        # 读取当前配置
+        try:
+            from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
+            current_proxy = CLASH_PROXY_URL if (CLASH_PROXY_ENABLED and CLASH_PROXY_URL) else None
+        except ImportError:
+            current_proxy = None
+
+        # 如果代理地址变更（或首次创建），重建 session
+        if self._session is not None and self._session_proxy_url != current_proxy:
+            logger.info(
+                f"[CurlCffi] Proxy changed: {self._session_proxy_url} → {current_proxy}, "
+                f"recreating session"
+            )
+            self._session = None
+
         if self._session is not None:
             return self._session
 
@@ -152,9 +168,6 @@ class BilibiliCurlCffiMiddleware:
 
         self._session = cffi_requests.Session(
             impersonate="chrome124",
-            # Windows 中文路径下 libcurl 无法正确读取 certifi 的 CA bundle，
-            # 设置 verify=False 绕过 SSL 验证（爬虫场景可接受）。
-            # 如需启用验证：将 cacert.pem 复制到纯 ASCII 路径并设 CURL_CA_BUNDLE 环境变量。
             verify=False,
         )
 
@@ -165,32 +178,31 @@ class BilibiliCurlCffiMiddleware:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         })
 
-        # Clash 代理 — curl_cffi BoringSSL 模式不支持 SOCKS5，自动降级为 HTTP CONNECT
-        try:
-            from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
-            if CLASH_PROXY_ENABLED and CLASH_PROXY_URL:
-                proxy_url = CLASH_PROXY_URL
-                # ★ 自动修正：socks5:// → http://（BoringSSL TLS 指纹模式与 SOCKS5 不兼容）
-                if proxy_url.startswith("socks5://") or proxy_url.startswith("socks4://"):
-                    fixed_url = "http://" + proxy_url.split("://", 1)[1]
-                    logger.warning(
-                        f"[CurlCffi] SOCKS5 proxy is incompatible with BoringSSL TLS fingerprint mode. "
-                        f"Auto-correcting: {proxy_url} → {fixed_url}"
-                    )
-                    proxy_url = fixed_url
-                self._session.proxies = {
-                    "http": proxy_url,
-                    "https": proxy_url,
-                }
-                logger.info(
-                    f"[CurlCffi] Clash proxy: {proxy_url}"
+        # ★ 代理配置（优先使用 CLASH_PROXY_URL，禁用时显式清空以屏蔽系统环境变量）
+        self._session_proxy_url = current_proxy   # 记录，用于后续热更新检测
+        if current_proxy:
+            proxy_url = current_proxy
+            # 自动修正：socks5:// → http://（BoringSSL TLS 指纹模式与 SOCKS5 不兼容）
+            if proxy_url.startswith("socks5://") or proxy_url.startswith("socks4://"):
+                fixed_url = "http://" + proxy_url.split("://", 1)[1]
+                logger.warning(
+                    f"[CurlCffi] SOCKS5 proxy is incompatible with BoringSSL TLS fingerprint mode. "
+                    f"Auto-correcting: {proxy_url} → {fixed_url}"
                 )
-        except ImportError:
-            pass
+                proxy_url = fixed_url
+            self._session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+            logger.info(f"[CurlCffi] Clash proxy: {proxy_url}")
+        else:
+            # ★ 关键：显式设为空字典，阻止 curl_cffi 自动读取 HTTP_PROXY/HTTPS_PROXY 环境变量
+            self._session.proxies = {}
+            logger.info("[CurlCffi] Proxy disabled (CLASH_PROXY_ENABLED=False or URL empty)")
 
         logger.info(
             "[CurlCffi] Session ready "
-            "(TLS=chrome124, proxy=HTTP-CONNECT)"
+            f"(TLS=chrome124, proxy={'ON' if current_proxy else 'OFF'})"
         )
         return self._session
 

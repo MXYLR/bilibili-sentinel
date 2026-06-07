@@ -657,18 +657,29 @@ function saveClashConfig() {
     const status = document.getElementById('clash-save-status');
     status.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 保存中...';
 
-    // 先保存代理地址
-    fetch('/api/config/update', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({key: 'CLASH_PROXY_URL', value: url})
-    }).then(r=>r.json()).then(d=>{
-        if (d.success) {
-            status.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + d.message + '</span>';
+    // ★ 同时保存 CLASH_PROXY_ENABLED=true，确保代理生效
+    Promise.all([
+        fetch('/api/config/update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({key: 'CLASH_PROXY_ENABLED', value: true})
+        }),
+        fetch('/api/config/update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({key: 'CLASH_PROXY_URL', value: url})
+        })
+    ]).then(([r1, r2]) => Promise.all([r1.json(), r2.json()]))
+      .then(([d1, d2]) => {
+        if (d1.success && d2.success) {
+            status.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> 代理已启用，地址已保存（爬虫下次请求自动应用，无需重启）</span>';
             loadSettings();
         } else {
-            status.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.message + '</span>';
+            const msg = !d1.success ? d1.message : d2.message;
+            status.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + msg + '</span>';
         }
+    }).catch(err => {
+        status.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> 保存失败: ' + err + '</span>';
     });
 }
 

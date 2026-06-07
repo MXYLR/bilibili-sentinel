@@ -164,6 +164,30 @@ def _close_geetest(page):
         pass
 
 
+def _dismiss_login_popover(page):
+    """尝试通过 JS 移除 B站 可关闭的登录弹窗/遮罩。
+    返回 True 表示至少移除了一个元素。"""
+    try:
+        removed = page.evaluate("""() => {
+            var selectors = [".login-panel-popover", ".bili-mini-mask", ".bili-mini-close-icon"];
+            var count = 0;
+            selectors.forEach(function(sel) {
+                document.querySelectorAll(sel).forEach(function(el) {
+                    el.remove();
+                    count++;
+                });
+            });
+            return count;
+        }""")
+        if removed > 0:
+            logger.info(f"[SpaceScraper] Auto-dismissed {removed} login popover element(s)")
+            page.wait_for_timeout(1000)
+            return True
+    except Exception as e:
+        logger.debug(f"[SpaceScraper] Auto-dismiss login popover failed: {e}")
+    return False
+
+
 def _detect_blockers(page) -> dict:
     """
     检测 B站 是否弹出登录墙/CAPTCHA.
@@ -174,22 +198,32 @@ def _detect_blockers(page) -> dict:
     
     try:
         url = page.url
-        # 1. URL 跳转到 passport（登录页）
+        # 1. URL 跳转到 passport（硬登录墙 — 无法通过 DOM 操作绕过）
         if "passport.bilibili.com" in url or "login" in url:
             result["login_wall"] = True
             result["reason"] = f"URL 跳转到登录页: {url}"
             return result
         
-        # 2. DOM 检测登录弹窗
-        login_selectors = [
-            ".login-panel", ".login-panel-popover",
-            ".bili-login", "[class*='login-modal']",
-            ".bili-mini-mask",  # 登录遮罩
+        # 2. DOM 检测可关闭的登录弹窗（轻量级 — 优先尝试 JS 移除）
+        dismissible_popups = [
+            ".login-panel-popover",   # B站 通用登录浮层
+            ".bili-mini-mask",        # 登录遮罩
         ]
-        for sel in login_selectors:
+        for sel in dismissible_popups:
             if page.locator(sel).count() > 0:
                 result["login_wall"] = True
-                result["reason"] = f"检测到登录弹窗: {sel}"
+                result["reason"] = f"检测到可关闭登录弹窗: {sel}"
+                return result
+        
+        # 3. DOM 检测硬登录面板（可能无法通过 JS 移除）
+        hard_login_selectors = [
+            ".login-panel", ".bili-login",
+            "[class*='login-modal']",
+        ]
+        for sel in hard_login_selectors:
+            if page.locator(sel).count() > 0:
+                result["login_wall"] = True
+                result["reason"] = f"检测到硬登录面板: {sel}"
                 return result
         
         # 3. DOM 检测 CAPTCHA
@@ -413,10 +447,14 @@ class SpacePageScraper:
             page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
             page.wait_for_timeout(4000)
             _close_geetest(page)
-            page.wait_for_timeout(500)
+            
+            # ★ 尝试自动关闭 B站 可关闭登录弹窗（很多情况下页面内容在弹窗下面已渲染）
+            _dismiss_login_popover(page)
             
             # ★ 检测登录墙/CAPTCHA，提示用户手动操作
-            _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=300)
+            # 注意：仅保留硬登录墙（URL 跳转/硬面板）触发手动等待
+            # 可关闭弹窗已在上面通过 _dismiss_login_popover 处理
+            _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=120)
 
             profile = page.evaluate(r"""() => {
                 var data = {};
@@ -553,10 +591,16 @@ class SpacePageScraper:
             page.wait_for_timeout(4000)
             _close_geetest(page)
             
+            # ★ 尝试自动关闭 B站 可关闭登录弹窗
+            _dismiss_login_popover(page)
+            
             # ★ 检测登录墙/CAPTCHA，提示用户手动操作
-            if not _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=300):
+            if not _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=120):
                 logger.warning(f"[SpaceScraper] uid={uid} 手动操作等待超时/失败，跳过视频爬取")
                 return videos
+
+            # 再次尝试关闭可能重新出现的弹窗（B站 SPA 导航后可能重新渲染）
+            _dismiss_login_popover(page)
 
             # 点击 "投稿" tab（SPA 导航，重试 3 次）
             tab_clicked = False
@@ -712,10 +756,16 @@ class SpacePageScraper:
             page.wait_for_timeout(4000)
             _close_geetest(page)
             
+            # ★ 尝试自动关闭 B站 可关闭登录弹窗
+            _dismiss_login_popover(page)
+            
             # ★ 检测登录墙/CAPTCHA，提示用户手动操作
-            if not _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=300):
+            if not _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=120):
                 logger.warning(f"[SpaceScraper] uid={uid} 手动操作等待超时/失败，跳过动态爬取")
                 return posts
+
+            # 再次尝试关闭可能重新出现的弹窗
+            _dismiss_login_popover(page)
 
             # 点击 "动态" tab（使用重试逻辑，和 videos 一致）
             tab_clicked = False

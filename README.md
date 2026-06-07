@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.35。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.37。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -389,6 +389,27 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
   - 视频保存到 `data/up_videos/{mid}_videos.json`
   - 动态保存到 `data/users/{mid}_posts.json`
   - Profile 数据 yield `UserInfoItem`
+
+### Playwright 浏览器后台运行 + 自动关闭 (v2.37)
+
+**问题 1**: `run_pw_scraper.py` 从未调用 `scraper.close()`，导致 Chromium 浏览器窗口残留在用户桌面。
+
+**问题 2**: `headless=False` 时浏览器窗口抢占前台焦点，干扰用户其他操作。
+
+**问题 3**: 子进程 `subprocess.run(timeout=120)` 超时时不杀进程，导致孤儿 Chromium 窗口。
+
+**修复**:
+- **CDP 窗口管理**: 新增 `_set_window_state(page, minimized)` 和 `_focus_window(page)` 函数，通过 Chrome DevTools Protocol 控制浏览器窗口最小化/恢复
+- **后台启动**: `_ensure_browser()` 创建新页面后立即最小化（`headless=False` → 后台模式）
+- **按需弹窗**: `_wait_for_manual_bypass()` 检测到 CAPTCHA/登录墙时先 `_focus_window()` 恢复前台，用户完成后 `_set_window_state(minimized=True)` 回到后台
+- **自动关闭**: `run_pw_scraper.py` 新增 `finally` 块调用 `scraper.close()`
+- **超时清理**: 爬虫改用 `subprocess.Popen` + `proc.kill()`，确保超时时杀掉子进程
+
+**窗口生命周期**:
+```
+launch → minimize (后台) → CAPTCHA 检测到 → restore (前台)
+→ 用户完成操作 → minimize (后台) → 抓取完成 → close browser
+```
 
 ### Scrapy 2.16.0 API 兼容性修复
 

@@ -617,7 +617,7 @@ class SpacePageScraper:
                     
                     if upload_tab.count() > 0:
                         # 先移除遮罩（可能遮挡点击）
-                        page.evaluate('() => document.querySelectorAll(".bili-mini-mask, .login-panel-popover").forEach(m => m.remove())')
+                        page.evaluate('() => document.querySelectorAll(".bili-mini-mask, .login-panel-popover, .geetest_table_box").forEach(m => m.remove())')
                         page.wait_for_timeout(500)
                         
                         # JS 强制点击（绕过 Playwright 的 PointerEvent 检查）
@@ -626,8 +626,12 @@ class SpacePageScraper:
                         except Exception:
                             upload_tab.evaluate('el => el.click()')
                         
-                        # 等待视频卡片出现（证明 SPA 导航成功）
-                        page.wait_for_selector('.upload-video-card', timeout=15000)  # 改成 15 秒（和 test_video_click_only.py 一致）
+                        # ★ 等待 SPA 导航完成，宽松策略：只检查元素出现在 DOM 中即可
+                        # （不要求 visible，因为 B站可能有 geetest/overlay 遮挡）
+                        page.wait_for_selector('.upload-video-card', timeout=15000, state='attached')
+                        page.wait_for_timeout(1000)  # 等卡片渲染
+                        _close_geetest(page)          # geetest 可能在导航后弹出
+                        _dismiss_login_popover(page)   # 弹窗也可能重新出现
                         tab_clicked = True
                         logger.info(f"[SpaceScraper] ✅ 投稿 tab 点击成功 (尝试 {attempt+1}/3)")
                         break

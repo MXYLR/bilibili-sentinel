@@ -47,7 +47,28 @@ def main():
         from bilibili_crawler.utils.playwright_space_scraper import SpacePageScraper
         scraper = SpacePageScraper(cookie=cookie_str, headless=headless, timeout=30000)
         profile = scraper.scrape_user_profile(mid)
-        print(json.dumps(profile if profile else {}))
+
+        # ★ 同时爬取投稿视频和动态（会点击 tab，用户可在可见模式下观察）
+        videos = []
+        posts = []
+        try:
+            videos = scraper.scrape_user_videos(mid, max_pages=5)
+        except Exception as e:
+            import traceback
+            print(json.dumps({"_videos_error": str(e), "_videos_traceback": traceback.format_exc()}), file=sys.stderr)
+
+        try:
+            posts = scraper.scrape_user_posts(mid, max_scroll=10)
+        except Exception as e:
+            import traceback
+            print(json.dumps({"_posts_error": str(e), "_posts_traceback": traceback.format_exc()}), file=sys.stderr)
+
+        result = {
+            "profile": profile if profile else {},
+            "videos": videos,
+            "posts": posts,
+        }
+        print(json.dumps(result))
     except Exception as e:
         import traceback
         print(json.dumps({

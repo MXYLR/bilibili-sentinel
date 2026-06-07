@@ -587,19 +587,48 @@ class BilibiliUserSpider(scrapy.Spider):
             logger.warning(f"[CookieLoader] failed: {e}")
             return ""
 
-    def _pw_profile_callback(self, profile, mid, meta):
-        """Playwright 爬取成功的回调"""
+    def _pw_profile_callback(self, result, mid, meta):
+        """Playwright 爬取成功的回调 (v2.33: 处理扩展后的返回数据)"""
+        import json as _json, os as _os
+        # result 现在是 {"profile":..., "videos":..., "posts":...}
+        profile = result.get("profile", {}) if isinstance(result, dict) else {}
+        videos = result.get("videos", []) if isinstance(result, dict) else []
+        posts  = result.get("posts",  []) if isinstance(result, dict) else []
+
+        # ★ 保存投稿视频到 data/up_videos/
+        if videos:
+            _vid_dir = _os.path.join(DATA_DIR, "up_videos")
+            _os.makedirs(_vid_dir, exist_ok=True)
+            _vid_file = _os.path.join(_vid_dir, f"{mid}_videos.json")
+            try:
+                with open(_vid_file, "w", encoding="utf-8") as f:
+                    _json.dump(videos, f, ensure_ascii=False, indent=2)
+                logger.info(f"[mid={mid}] ✅ PW 投稿视频已保存: {len(videos)} 条 → {_vid_file}")
+            except Exception as e:
+                logger.warning(f"[mid={mid}] PW 投稿视频保存失败: {e}")
+
+        # ★ 保存动态到 data/users/{mid}_posts.json
+        if posts:
+            _user_dir = _os.path.join(DATA_DIR, "users")
+            _os.makedirs(_user_dir, exist_ok=True)
+            _post_file = _os.path.join(_user_dir, f"{mid}_posts.json")
+            try:
+                with open(_post_file, "w", encoding="utf-8") as f:
+                    _json.dump(posts, f, ensure_ascii=False, indent=2)
+                logger.info(f"[mid={mid}] ✅ PW 动态已保存: {len(posts)} 条 → {_post_file}")
+            except Exception as e:
+                logger.warning(f"[mid={mid}] PW 动态保存失败: {e}")
+
+        # 处理 profile（与原逻辑一致）
         if profile and profile.get("name"):
             logger.info(f"[mid={mid}] ✅ SpacePageScraper 成功: {profile['name']}")
             return list(self._build_user_info_item(mid, profile, meta))
         else:
-            # ★ 自动重试一次（B站偶发性限流/反爬）
             retried = meta.get("_pw_retried", 0)
             if retried < 1:
                 logger.warning(f"[mid={mid}] SpacePageScraper empty, auto-retry ({retried+1}/1)")
                 meta["_pw_retried"] = retried + 1
                 return self._fetch_user_info_via_pw_scraper(mid, meta)
-            # 重试后仍失败 → 记录到 Redis 失败集合
             logger.warning(f"[mid={mid}] SpacePageScraper failed after retry, recording to failed set")
             try:
                 import redis as _rd

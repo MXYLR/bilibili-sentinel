@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.31。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.33。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -324,7 +324,31 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 ---
 
-## v2.32 更新 (2026-06-07)
+## v2.33 更新 (2026-06-07)
+
+### B站登录墙/CAPTCHA 手动绕过机制
+
+**问题**: Playwright 爬取用户空间时，B站可能弹出登录墙或 geetest CAPTCHA，之前只能直接失败。
+
+**修复**: 在 `playwright_space_scraper.py` 新增两个函数：
+- `_detect_blockers(page)`: 自动检测登录墙（URL跳转/DOM弹窗/文字）和 CAPTCHA（geetest 面板/文字），返回 `{"login_wall": bool, "captcha": bool, "reason": str}`
+- `_wait_for_manual_bypass(page, headless, max_wait_sec=300)`: 
+  - `headless=False`（可见模式）：在浏览器上显示半透明提示覆盖层 + 终端打印醒目提示，等待用户手动完成登录/验证码
+  - `headless=True`（无头模式）：打印警告后跳过（无法看到浏览器）
+  - 轮询检查：每 3 秒检测一次障碍是否解除，最长等待 5 分钟
+  - 障碍解除后自动移除提示覆盖层，继续抓取
+- 已集成到 `scrape_user_profile()`、`scrape_user_videos()`、`scrape_user_posts()` 三个方法
+
+### Run_pw_scraper 扩展 — 视频/动态数据采集
+
+**问题**: Spider 调用 Playwright 子进程脚本（`run_pw_scraper.py`）时，只调用了 `scrape_user_profile()`，从未执行 tab 点击逻辑。
+
+**修复**:
+- `run_pw_scraper.py` 现在依次调用三个方法：`scrape_user_profile()` → `scrape_user_videos()` → `scrape_user_posts()`，返回完整 JSON `{"profile": {...}, "videos": [...], "posts": [...]}`
+- `bilibili_user_spider.py` 的 `_pw_profile_callback()` 更新为解析扩展后的结果：
+  - 视频保存到 `data/up_videos/{mid}_videos.json`
+  - 动态保存到 `data/users/{mid}_posts.json`
+  - Profile 数据 yield `UserInfoItem`
 
 ### Scrapy 2.16.0 API 兼容性修复
 
@@ -341,25 +365,16 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 #### 视频标题选择器修复
 **问题**: 爬取到 42 条视频，但所有视频的 `title` 字段为空字符串。
-
 **根因**: B站 2026 版 DOM 中视频标题容器从 `.bili-video-card__info__title` 改为 `.bili-video-card__title`，且标题存在 `title` 属性中。
-
-**修复**:
-- 选择器改为 `.bili-video-card__title, .bili-video-card__info__title, .video-name`（多选择器兜底）
-- 优先读 `getAttribute('title')`，其次用 `textContent.trim()`
-- 只有有 bvid 的才 push 到结果数组
+**修复**: 选择器改为 `.bili-video-card__title, .bili-video-card__info__title, .video-name`，优先读 `getAttribute('title')`。
 
 #### 签名提取改用 `<meta name="description">`
 **问题**: 画像提取中 `sign` 字段始终为空。
+**根因**: B站已移除 `.sign.header-sign .pure-text` DOM 节点。
+**修复**: 改为从 `<meta name="description">` 提取最后一个 `。` 后面的内容。
 
-**根因**: B站已移除 `.sign.header-sign .pure-text` DOM 节点，签名不再渲染在该位置。
-
-**修复**:
-- 改为从 `<meta name="description">` 提取
-- 解析最后一个 `。` 后面的内容（B站 SEO 标签格式固定）
-- 兜底：保留 DOM 选择器作为 fallback
-
-**验证**: `debug_sign.py` 验证通过 ✅
+#### 两个 tab 点击的视觉验证
+**验证**: `test_space_scraper.py` headless=False 测试确认：点击"投稿"tab → 42 条视频 ✅，点击"动态"tab → 136 条动态 ✅
 
 ### 其他修复
 - `_fetch_next_user()` 自调度修复：用户爬虫翻页逻辑修复

@@ -109,6 +109,201 @@ def _close_geetest(page):
         pass
 
 
+def _detect_blockers(page) -> dict:
+    """
+    检测 B站 是否弹出登录墙/CAPTCHA.
+    
+    返回: {"login_wall": bool, "captcha": bool, "reason": str}
+    """
+    result = {"login_wall": False, "captcha": False, "reason": ""}
+    
+    try:
+        url = page.url
+        # 1. URL 跳转到 passport（登录页）
+        if "passport.bilibili.com" in url or "login" in url:
+            result["login_wall"] = True
+            result["reason"] = f"URL 跳转到登录页: {url}"
+            return result
+        
+        # 2. DOM 检测登录弹窗
+        login_selectors = [
+            ".login-panel", ".login-panel-popover",
+            ".bili-login", "[class*='login-modal']",
+            ".bili-mini-mask",  # 登录遮罩
+        ]
+        for sel in login_selectors:
+            if page.locator(sel).count() > 0:
+                result["login_wall"] = True
+                result["reason"] = f"检测到登录弹窗: {sel}"
+                return result
+        
+        # 3. DOM 检测 CAPTCHA
+        captcha_selectors = [
+            ".geetest_panel", ".geetest_wind", ".captcha",
+            "[class*='captcha']", "[id*='captcha']",
+            ".bilibili-captcha", ".safety-verify",
+        ]
+        for sel in captcha_selectors:
+            if page.locator(sel).count() > 0:
+                result["captcha"] = True
+                result["reason"] = f"检测到验证码: {sel}"
+                return result
+        
+        # 4. 页面文字检测
+        page_text = page.evaluate("() => document.body.innerText")
+        if "请登录" in page_text and "space.bilibili.com" in page.url:
+            result["login_wall"] = True
+            result["reason"] = "页面文字检测到 '请登录'"
+            return result
+        if "验证码" in page_text and ("拖动" in page_text or "拼图" in page_text or "slide" in page_text.lower()):
+            result["captcha"] = True
+            result["reason"] = "页面文字检测到验证码提示"
+            return result
+        
+    except Exception as e:
+        logger.warning(f"[_detect_blockers] 检测异常: {e}")
+    
+    return result
+
+
+def _wait_for_manual_bypass(page, headless: bool = False, max_wait_sec: int = 300):
+    """
+    当检测到登录墙/CAPTCHA 时，提示用户手动操作，并等待解除.
+    
+    - headless=False: 弹窗可见，提示用户手动完成
+    - headless=True:  不可见，只能跳过（打印警告）
+    - max_wait_sec:   最长等待时间（默认 5 分钟）
+    
+    返回: True=已解除, False=超时或未解除
+    """
+    blockers = _detect_blockers(page)
+    
+    if not blockers["login_wall"] and not blockers["captcha"]:
+        return True  # 没有障碍，继续
+    
+    reason = blockers["reason"]
+    
+    if headless:
+        # 无头模式：看不到浏览器，只能跳过
+        logger.warning(f"[SpaceScraper] ⚠️ 检测到阻碍但 headless=True，无法手动操作: {reason}")
+        return False
+    
+    # 可见模式：提示用户手动操作
+    import sys
+    wait_min = max_wait_sec // 60
+    
+    # 在页面上显示提示（覆盖层）
+    try:
+        page.evaluate("""(reason) => {
+            // 创建全屏提示覆盖层
+            var overlay = document.createElement('div');
+            overlay.id = '__pw_manual_hint__';
+            overlay.style.cssText = [
+                'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
+                'background:rgba(0,0,0,0.85)', 'z-index:2147483647',
+                'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+                'color:#fff', 'font-size:20px', 'font-family:Microsoft YaHei,sans-serif',
+                'pointer-events:none', 'user-select:none',
+            ].join(';');
+            
+            var title = document.createElement('div');
+            title.style.cssText = 'font-size:28px;margin-bottom:20px;color:#00e5ff';
+            title.textContent = '⏸️ Playwright 需要您手动操作';
+            
+            var desc = document.createElement('div');
+            desc.style.cssText = 'font-size:16px;margin-bottom:30px;color:#ffcc02;max-width:600px;text-align:center;line-height:1.8';
+            desc.innerHTML = '检测到：' + reason + '<br>请手动完成登录 / 验证码，完成后关闭此提示。';
+            
+            var status = document.createElement('div');
+            status.id = '__pw_manual_status__';
+            status.style.cssText = 'font-size:14px;color:#aaa';
+            status.textContent = '等待中...（最多 ' + """ + """ + """ + str(wait_min) + """ + """ + """ + ' 分钟）';
+            
+            overlay.appendChild(title);
+            overlay.appendChild(desc);
+            overlay.appendChild(status);
+            
+            // 移除旧提示
+            var old = document.getElementById('__pw_manual_hint__');
+            if (old) old.remove();
+            document.body.appendChild(overlay);
+        }""")
+    except Exception:
+        pass
+    
+    # 在终端打印提示
+    hint = (
+        "\n" + "=" * 60 + "\n"
+        "⏸️  Playwright 爬虫暂停 — 需要您手动操作\n"
+        "=" * 60 + "\n"
+        f"原因: {reason}\n"
+        f"\n"
+        "请在弹出的浏览器窗口中手动完成以下操作之一：\n"
+        "  1. 登录 B站账号（如果弹出登录墙）\n"
+        "  2. 完成验证码拼图/滑动（如果弹出 CAPTCHA）\n"
+        "\n"
+        f"完成后，爬虫会在 {wait_min} 分钟内自动继续。\n"
+        "（或者手动关闭浏览器窗口以终止）\n"
+        "=" * 60 + "\n"
+    )
+    # 同时输出到 stderr（确保用户看到）和 logger
+    print(hint, file=sys.stderr)
+    logger.warning(f"[SpaceScraper] ⏸️  暂停，等待用户手动操作: {reason}")
+    
+    # 轮询等待障碍解除
+    import time
+    start_time = time.time()
+    check_interval = 3  # 每 3 秒检查一次
+    
+    while time.time() - start_time < max_wait_sec:
+        # 检查障碍是否解除
+        blockers_now = _detect_blockers(page)
+        if not blockers_now["login_wall"] and not blockers_now["captcha"]:
+            # 额外检查：页面是否已正常加载（URL 不再是登录页）
+            current_url = page.url
+            if "passport.bilibili.com" not in current_url and "login" not in current_url:
+                elapsed = int(time.time() - start_time)
+                logger.info(f"[SpaceScraper] ✅ 手动操作完成，继续执行（等待了 {elapsed} 秒）")
+                
+                # 移除提示覆盖层
+                try:
+                    page.evaluate("""() => {
+                        var el = document.getElementById('__pw_manual_hint__');
+                        if (el) el.remove();
+                    }""")
+                except Exception:
+                    pass
+                
+                return True
+        
+        # 更新覆盖层状态
+        try:
+            elapsed = int(time.time() - start_time)
+            remaining = max_wait_sec - elapsed
+            page.evaluate(
+                "((elapsed, remaining) => {" +
+                "  var s = document.getElementById('__pw_manual_status__');" +
+                "  if (s) s.textContent = '已等待 ' + elapsed + ' 秒，最多再等 ' + remaining + ' 秒...';" +
+                "})(arguments[0], arguments[1])",
+                elapsed, remaining
+            )
+        except Exception:
+            pass
+        
+        page.wait_for_timeout(check_interval * 1000)
+    
+    # 超时
+    logger.error(f"[SpaceScraper] ❌ 等待手动操作超时（{max_wait_sec} 秒），继续执行（可能失败）")
+    try:
+        page.evaluate("""() => {
+            var el = document.getElementById('__pw_manual_hint__');
+            if (el) el.remove();
+        }""")
+    except Exception:
+        pass
+    return False
+
+
 # ================================================================
 #  SpacePageScraper
 # ================================================================
@@ -156,6 +351,9 @@ class SpacePageScraper:
             page.wait_for_timeout(4000)
             _close_geetest(page)
             page.wait_for_timeout(500)
+            
+            # ★ 检测登录墙/CAPTCHA，提示用户手动操作
+            _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=300)
 
             profile = page.evaluate(r"""() => {
                 var data = {};
@@ -291,6 +489,11 @@ class SpacePageScraper:
             page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
             page.wait_for_timeout(4000)
             _close_geetest(page)
+            
+            # ★ 检测登录墙/CAPTCHA，提示用户手动操作
+            if not _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=300):
+                logger.warning(f"[SpaceScraper] uid={uid} 手动操作等待超时/失败，跳过视频爬取")
+                return videos
 
             # 点击 "投稿" tab（SPA 导航，重试 3 次）
             tab_clicked = False
@@ -445,6 +648,11 @@ class SpacePageScraper:
             page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
             page.wait_for_timeout(4000)
             _close_geetest(page)
+            
+            # ★ 检测登录墙/CAPTCHA，提示用户手动操作
+            if not _wait_for_manual_bypass(page, headless=self.headless, max_wait_sec=300):
+                logger.warning(f"[SpaceScraper] uid={uid} 手动操作等待超时/失败，跳过动态爬取")
+                return posts
 
             # 点击 "动态" tab（使用重试逻辑，和 videos 一致）
             tab_clicked = False

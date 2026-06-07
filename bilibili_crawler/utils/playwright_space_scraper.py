@@ -52,7 +52,21 @@ def _set_thread_browser(browser, context):
 def _ensure_browser(headless: bool = True, cookie_str: str = ""):
     browser, context = _get_thread_browser()
     if browser is not None:
-        return browser, context, context.new_page()
+        # ★ v2.37 BUGFIX: 每次创建新 context，防止 "last page closed → context auto-destroyed"
+        # Chromium 会在关闭 context 中最后一个 page 时自动销毁 context，
+        # 若不重建，下一个 scrape_*() 方法会因 context 已销毁而崩溃。
+        ctx = browser.new_context(
+            viewport=_DEFAULT_VIEWPORT,
+            user_agent=_DEFAULT_UA,
+            locale="zh-CN",
+        )
+        if cookie_str:
+            _inject_cookies(ctx, cookie_str)
+        _set_thread_browser(browser, ctx)
+        page = ctx.new_page()
+        if not headless:
+            _set_window_state(page, minimized=True)
+        return browser, ctx, page
 
     try:
         from playwright.sync_api import sync_playwright

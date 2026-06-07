@@ -1,3 +1,3 @@
 {
-  "CLASH_PROXY_URL": "socks5://192.168.1.105:7897"
+  "CLASH_PROXY_URL": "http://192.168.2.6:7897"
 }

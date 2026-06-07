@@ -88,6 +88,13 @@ class BilibiliVideoSpider(RedisSpider):
         # scrapy_redis 默认 MAX_IDLE_TIME=0（永不超时），这里设 120s
         self.max_idle_time = getattr(self, "max_idle_time", 0) or 120
 
+    # ★ Scrapy 2.16+ API fix: RedisSpider 的 start_requests() 已不被调用
+    # 需要显式覆盖 start() 来从 Redis 读取种子
+    async def start(self):
+        """从 Redis 队列读取种子，替代被弃用的 start_requests()。"""
+        for req in self.next_requests():
+            yield req
+
     def make_request_from_data(self, data):
         """
         覆盖 RedisSpider 默认行为。

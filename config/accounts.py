@@ -90,3 +90,20 @@ PLAYWRIGHT_HEADLESS = True
 
 # Playwright 请求超时（毫秒）
 PLAYWRIGHT_TIMEOUT = 30000
+
+# ============================================================
+# ★ 新增: Playwright 空间页爬取器兜底配置
+# ============================================================
+
+# 是否启用空间页爬取兜底（SpacePageScraper）
+# 当 card API / space page 都失败时，启动真实浏览器爬取 B站空间页 DOM 元素
+ENABLE_PW_SPACE_SCRAPER = True
+
+# 空间页爬取器超时（毫秒）
+PW_SPACE_SCRAPER_TIMEOUT = 30000
+
+# 空间页爬取器是否无头模式（True = 后台运行）
+PW_SPACE_SCRAPER_HEADLESS = True
+
+# 视频列表最大翻页数
+PW_SPACE_SCRAPER_VIDEO_MAX_PAGES = 5

@@ -37,6 +37,11 @@ from bilibili_crawler.utils.bilibili_api import (
     prewarm_wbi_cache,
 )
 
+# ★ 新增: 导入 Playwright 空间页爬取器
+from bilibili_crawler.utils.playwright_space_scraper import (
+    scrape_user_videos as pw_scrape_videos,
+)
+
 logger = logging.getLogger(__name__)
 
 # 种子 Redis key
@@ -81,7 +86,8 @@ class BilibiliUpVideosSpider(scrapy.Spider):
         except Exception:
             logger.debug("WBI prewarm skipped (offline or network issue)")
 
-    def start_requests(self):
+    # ★ Scrapy 2.16+ API: start_requests() 已弃用，改为 async start()
+    async def start(self):
         """从 Redis 队列读取 UP主 MID 种子，构造初始请求。"""
         seeds = []
         if self._redis:
@@ -269,13 +275,92 @@ class BilibiliUpVideosSpider(scrapy.Spider):
     # ================================================================
 
     def _handle_error(self, failure):
-        """请求失败回调: 记录并继续。"""
+        """请求失败回调: 记录并触发 Playwright 兜底。"""
         request = failure.request
         mid = request.meta.get("mid", "?")
         page = request.meta.get("page", "?")
         logger.error(f"[mid={mid}] Page {page} request failed: {failure.value}")
+        # ★ 新增: 触发 Playwright 兜底
+        if mid and mid != "?":
+            return self._fetch_videos_via_pw_scraper(int(mid))
+
+    
 
     # ================================================================
+    #  ★ 新增: Playwright 投稿视频爬取兜底
+    # ================================================================
+
+    def _fetch_videos_via_pw_scraper(self, mid):
+        """
+        最后兜底: 用 SpacePageScraper 直接爬取投稿视频列表。
+        在 API 调用失败时作为兜底。
+        """
+        from twisted.internet.threads import deferToThread
+        logger.warning(f"[mid={mid}] ★ Final fallback: Playwright scrape videos")
+        d = deferToThread(self._run_pw_video_scraper, mid)
+        d.addCallback(self._pw_video_callback, mid)
+        d.addErrback(self._pw_video_errback, mid)
+        return d
+
+    def _run_pw_video_scraper(self, mid):
+        """在线程中运行 Playwright 爬取（同步代码）"""
+        try:
+            from bilibili_crawler.utils.playwright_space_scraper import SpacePageScraper
+            from config.accounts import BILIBILI_ACCOUNTS
+            cookie_str = ""
+            if BILIBILI_ACCOUNTS:
+                cookie_str = BILIBILI_ACCOUNTS[0].get("cookie", "")
+            scraper = SpacePageScraper(cookie=cookie_str, headless=True, timeout=30000)
+            videos = scraper.scrape_user_videos(mid, max_pages=5)
+            return videos
+        except Exception as e:
+            logger.error(f"[mid={mid}] Playwright video scraper error: {e}")
+            return []
+
+    def _pw_video_callback(self, videos, mid):
+        """Playwright 爬取成功回调"""
+        if videos:
+            logger.info(f"[mid={mid}] ✅ Playwright scraped {len(videos)} videos")
+            # Yield UpVideoItem for each video
+            from bilibili_crawler.items import UpVideoItem
+            import time
+            from datetime import datetime, timezone
+            items = []
+            for v in videos:
+                items.append(UpVideoItem(
+                    up_mid=mid,
+                    up_name="",
+                    bvid=v.get("bvid", ""),
+                    aid=int(v.get("aid", 0) or 0),
+                    title=v.get("title", ""),
+                    description="",
+                    length=v.get("length", ""),
+                    created=int(v.get("created", 0) or 0),
+                    pic=v.get("cover", ""),
+                    is_union_video=0,
+                    is_steins_gate=0,
+                    is_pay=0,
+                    play=int(v.get("play", 0) or 0),
+                    video_review=0,
+                    comment=int(v.get("comment", 0) or 0),
+                    typeid=0,
+                    tname="",
+                    subtitle="",
+                    crawl_time=datetime.now(timezone.utc).isoformat(),
+                    page=1,
+                    source=f"up:{mid}_pw",
+                ))
+            return items
+        else:
+            logger.warning(f"[mid={mid}] Playwright scraped 0 videos")
+            return []
+
+    def _pw_video_errback(self, failure, mid):
+        """Playwright 爬取失败回调"""
+        logger.error(f"[mid={mid}] Playwright video scraper failed: {failure.value}")
+        return []
+
+# ================================================================
     #  生命周期
     # ================================================================
 
@@ -300,10 +385,26 @@ class BilibiliUpVideosSpider(scrapy.Spider):
             # 有种子: 重置空闲计时, 立即消费
             self._idle_start = None
             logger.info(f"Spider idle, but {remaining} seeds remain in queue. Continuing...")
-            from twisted.internet import reactor
-            for req in self.start_requests():
-                if req:
-                    reactor.callLater(0.5, self.crawler.engine.crawl, req, self)
+            # ★ v2.33 Scrapy 2.16+ fix: start_requests() 已弃用，直接读 Redis 构造请求
+            try:
+                while True:
+                    raw = self._redis.lpop(UP_VIDEO_SEEDS_KEY)
+                    if not raw:
+                        break
+                    seed = json.loads(raw) if isinstance(raw, str) else raw
+                    mid = seed.get("mid", 0)
+                    if mid and mid > 0:
+                        url = get_user_videos_url(mid, page=1)
+                        req = scrapy.Request(
+                            url=url,
+                            callback=self.parse_video_list,
+                            meta={"mid": mid, "page": 1, "up_name": ""},
+                            errback=self._handle_error,
+                            dont_filter=True,
+                        )
+                        self.crawler.engine.crawl(req, self)
+            except Exception as e:
+                logger.error(f"spider_idle seed consumption error: {e}")
             raise scrapy.exceptions.DontCloseSpider("waiting for seeds")
 
         # 无种子: 首次空闲时记录时间, 后续空闲时检查是否超时

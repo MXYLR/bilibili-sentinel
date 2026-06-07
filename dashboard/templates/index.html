@@ -4,6 +4,23 @@
 
 <style>
 .up-stat-card:hover { background: rgba(13,110,253,0.08); border-color: var(--bs-info) !important; }
+/* 左右分栏布局 */
+.up-sidebar {
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+    position: sticky;
+    top: 20px;
+}
+.up-sidebar .list-group-item.active {
+    background-color: var(--bs-info);
+    border-color: var(--bs-info);
+}
+.up-sidebar .list-group-item:hover:not(.active) {
+    background-color: rgba(13, 110, 253, 0.08);
+}
+#video-content-area {
+    min-height: 300px;
+}
 </style>
 
 <!-- 系统健康卡片 -->
@@ -119,20 +136,25 @@
     </div>
 </div>
 
-<!-- UP主分组统计 -->
-<div class="row mb-3" id="up-stats-row">
-    <small class="text-muted">加载UP主统计...</small>
-</div>
-
-<!-- 视频网格 -->
-<div class="row" id="video-grid">
-    <div class="col-12 text-center py-4 text-muted">加载中...</div>
-</div>
-
-<!-- 翻页 -->
-<div class="d-flex justify-content-between align-items-center mt-3" id="pagination-row" style="display:none">
-    <small class="text-muted" id="page-info"></small>
-    <div class="btn-group btn-group-sm" id="page-btns"></div>
+<!-- 左右分栏 -->
+<div class="row">
+    <!-- 左侧：UP主列表 -->
+    <div class="col-lg-3 col-md-4 mb-3">
+        <div class="up-sidebar" id="up-sidebar">
+            <div class="list-group list-group-flush" id="up-list">
+                <div class="text-center py-3 text-muted small">加载中...</div>
+            </div>
+        </div>
+    </div>
+    <!-- 右侧：视频内容 -->
+    <div class="col-lg-9 col-md-8">
+        <div id="video-content-area">
+            <div class="text-center py-5 text-muted">
+                <i class="bi bi-arrow-left display-4 d-block mb-2"></i>
+                请从左侧选择 UP主 或 热门榜
+            </div>
+        </div>
+    </div>
 </div>
 
 {% endblock %}
@@ -243,352 +265,6 @@ function updateHealthCards() {
         });
 }
 
-// ---- 视频列表 (UP主分组 + 桶内分页) ----
-const BUCKET_PAGE_SIZE = 12;
-const bucketPageStates = {};
-const upGroupSortMode = {};  // {collId: 'views'|'comments'|'time'}
-const RANGES = {
-    views: [
-        { key: 'v-high', label: '高播放 ≥1万',    min: 10000, max: Infinity },
-        { key: 'v-mid',  label: '中播放 1000~1万', min: 1000,  max: 9999 },
-        { key: 'v-low',  label: '低播放 100~999',  min: 100,   max: 999 },
-        { key: 'v-tiny', label: '极低 <100',       min: 0,     max: 99 },
-    ],
-    comments: [
-        { key: 'c-high', label: '高评论 ≥100',     min: 100,   max: Infinity },
-        { key: 'c-mid',  label: '中评论 20~99',    min: 20,    max: 99 },
-        { key: 'c-low',  label: '低评论 5~19',     min: 5,     max: 19 },
-        { key: 'c-tiny', label: '极少 <5',          min: 0,     max: 4 },
-    ],
-};
-
-function getTimeRanges() {
-    const now = Math.floor(Date.now() / 1000);
-    const DAY = 86400;
-    return [
-        { key: 't-today',   label: '今天',      min: now - DAY,       max: Infinity },
-        { key: 't-yesterday',label: '昨天',      min: now - 2*DAY,    max: now - DAY - 1 },
-        { key: 't-week',    label: '本周内',     min: now - 7*DAY,    max: now - 2*DAY - 1 },
-        { key: 't-month',   label: '本月内',     min: now - 30*DAY,   max: now - 7*DAY - 1 },
-        { key: 't-older',   label: '更早',       min: 0,              max: now - 30*DAY - 1 },
-    ];
-}
-
-function loadVideos() {
-    fetch('/api/videos?page=1&per_page=9999')
-        .then(r => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.json();
-        })
-        .then(d => {
-            if (!d.success) return;
-            const grid = document.getElementById('video-grid');
-            if (!d.data || d.data.length === 0) {
-                grid.innerHTML = '<div class="col-12 text-center py-5 text-muted"><i class="bi bi-inbox display-4 d-block mb-2"></i>暂无监控视频<br><small>请前往爬虫控制台采集数据</small></div>';
-                document.getElementById('pagination-row').style.display = 'none';
-                document.getElementById('up-stats-row').innerHTML = '';
-                return;
-            }
-
-            // 分离热门榜视频 vs 其他视频
-            const hotVideos = (_analyzedFilter ? d.data.filter(v => v.has_report && v.source === 'hot') : d.data.filter(v => v.source === 'hot'));
-            const restVideos = (_analyzedFilter ? d.data.filter(v => v.has_report && v.source !== 'hot') : d.data.filter(v => v.source !== 'hot'));
-
-            // 帮函: 构建视频分组 HTML（按UP主归组 + 桶内分页）
-            // sortModes: ['views','comments'] 默认; 热榜加 'time'
-            const buildGroupHtml = (group, collId, showFirst, icon, sortModes = ['views','comments']) => {
-                const totalVideos = group.videos.length;
-                const totalViews = group.videos.reduce((s, v) => s + (v.view_count || 0), 0);
-                const totalComments = group.videos.reduce((s, v) => s + (v.comment_count || 0), 0);
-                if (!(collId in upGroupSortMode)) upGroupSortMode[collId] = sortModes[0];
-
-                const buildBuckets = (mode) => {
-                    const rs = mode === 'time' ? getTimeRanges() : RANGES[mode];
-                    const valFn = mode === 'views' ? (v => v.view_count || 0)
-                                : mode === 'time' ? (v => v.pubdate || 0)
-                                : (v => v.comment_count || 0);
-                    return rs.map(r => {
-                        const vids = group.videos.filter(v => {
-                            const val = valFn(v);
-                            return val >= r.min && val <= r.max;
-                        });
-                        vids.sort((a, b) => valFn(b) - valFn(a));
-                        const bucketKey = `${collId}-${r.key}`;
-                        const totalPages = Math.max(1, Math.ceil(vids.length / BUCKET_PAGE_SIZE));
-                        bucketPageStates[bucketKey] = { page: 1, totalPages, videos: vids, label: r.label };
-                        return { ...r, bucketKey, count: vids.length, totalPages };
-                    }).filter(b => b.count > 0);
-                };
-
-                const buckets = buildBuckets(sortModes[0]);
-
-                const sortBtns = sortModes.map(m => {
-                    const labels = { views: '播放量', comments: '评论数', time: '时间' };
-                    const actives = { views: 'btn-outline-info', comments: 'btn-outline-info', time: 'btn-outline-warning' };
-                    return `<button class="btn btn-sm ${actives[m]}${m===sortModes[0]?' active':''}" id="${collId}-sort-${m}" onclick="switchSortMode('${collId}','${m}')">${labels[m]}</button>`;
-                }).join('');
-
-                return `<div class="col-12 mb-3">
-    <div class="card" id="${collId}-card">
-        <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#${collId}">
-            <div>
-                <strong><i class="${icon || 'bi bi-person-video'} me-1"></i>${group.ownerName}</strong>
-                <span class="text-muted ms-2">${group.mid ? 'MID: ' + group.mid : ''}</span>
-                <span class="badge bg-secondary ms-2">${totalVideos} 个视频</span>
-                <span class="badge bg-info ms-1">${formatNum(totalViews)} 总播放</span>
-                <span class="badge bg-success ms-1">${formatNum(totalComments)} 总评论</span>
-            </div>
-            <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation()">
-                <span class="small text-muted"${group.noMeta?'':' style="margin-right:4px"'}>排序:</span>
-                <div class="btn-group btn-group-sm">${sortBtns}</div>
-                ${group.noMeta ? `<button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteCategory('${collId}', '', '无视频源数据', ${totalVideos}, 'comment_only')" title="删除所有仅有评论数据条目">
-                    <i class="bi bi-trash"></i>
-                </button>` : `<button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteCategory('${collId}', '${group.mid || ''}', '${group.ownerName || ''}', ${totalVideos})" title="删除此分类下所有视频及相关数据">
-                    <i class="bi bi-trash"></i>
-                </button>`}
-                <i class="bi bi-chevron-down small" id="${collId}-icon"></i>
-            </div>
-        </div>
-        <div class="collapse${showFirst?' show':''}" id="${collId}">
-            <div class="card-body pt-2" id="${collId}-body">${buckets.map(b => `
-                <div class="mb-3">
-                    <small class="fw-bold text-muted"><i class="bi bi-bar-chart"></i> ${b.label} (${b.count}个)</small>
-                    <div class="row" id="${b.bucketKey}-body"></div>
-                    <div class="d-flex justify-content-between align-items-center mt-1" id="${b.bucketKey}-pager" style="display:none">
-                        <small class="text-muted" id="${b.bucketKey}-page-info"></small>
-                        <div class="btn-group btn-group-sm" id="${b.bucketKey}-page-btns"></div>
-                    </div>
-                </div>`).join('')}
-            </div>
-        </div>
-    </div>
-</div>`;
-            };
-
-            let html = '';
-
-            // ---- 热门榜（单独分组） ----
-            if (hotVideos.length > 0) {
-                html += buildGroupHtml(
-                    { mid: 0, ownerName: '热门榜', videos: hotVideos },
-                    'hot-group', false, 'bi bi-fire', ['views','comments','time']
-                );
-            }
-
-            // ---- UP主分组（排除热门视频） ----
-            const groups = {};
-            restVideos.forEach(v => {
-                const mid = v.owner_mid || 0;
-                const on = v.owner_name || '未知UP主';
-                const key = mid ? ('up_' + mid) : 'no_source';
-                if (!groups[key]) {
-                    groups[key] = {
-                        mid,
-                        ownerName: mid ? on : '无视频源数据',
-                        videos: [],
-                        noMeta: !mid  // 标记为仅评论/无元数据的条目
-                    };
-                }
-                groups[key].videos.push(v);
-            });
-
-            Object.values(groups).forEach((group, gi) => {
-                const collId = group.noMeta ? 'no-source-group' : 'up_' + group.mid;
-                const icon = group.noMeta ? 'bi bi-exclamation-circle' : undefined;
-                html += buildGroupHtml(group, collId, false, icon);
-            });
-            grid.innerHTML = html;
-
-            // 展开时渲染（懒加载）
-            document.querySelectorAll('[id^="hot-group"], [id^="up_"]').forEach(el => {
-                el.addEventListener('show.bs.collapse', function() {
-                    const cid = this.id;
-                    Object.keys(bucketPageStates).forEach(bk => {
-                        if (bk.startsWith(cid + '-')) renderBucketPage(bk);
-                    });
-                });
-            });
-
-            // 立即渲染已展开的分组
-            document.querySelectorAll('[id^="hot-group"].show, [id^="up_"].show').forEach(el => {
-                const cid = el.id;
-                Object.keys(bucketPageStates).forEach(bk => {
-                    if (bk.startsWith(cid + '-')) renderBucketPage(bk);
-                });
-            });
-
-            // 统计行——UP主列表 + 翻页
-            allUpGroups = d.up_groups || [];
-            const UP_PER_PAGE = 6;
-            window._upPage = 0;
-            window._upGroups = allUpGroups;
-            window._renderUpStats = () => {
-                const stats = document.getElementById('up-stats-row');
-                const start = window._upPage * UP_PER_PAGE;
-                const pageGroups = window._upGroups.slice(start, start + UP_PER_PAGE);
-                const totalPages = Math.ceil(window._upGroups.length / UP_PER_PAGE);
-                stats.innerHTML = pageGroups.map((g, i) =>
-                    `<div class="col-lg-2 col-md-4 col-6 mb-2"><div class="border rounded p-1 text-center small up-stat-card" style="cursor:pointer" onclick="scrollToUpGroup('up_${g.mid}')" title="点击定位到该UP主的视频列表">
-                    <strong>${g.name.substring(0,12)}${g.name.length>12?'..':''}</strong><br>
-                    <span class="text-muted">${g.count}视频 ${formatNum(g.total_views)}播放</span></div></div>`
-                ).join('');
-                if (totalPages > 1) {
-                    stats.innerHTML += '<div class="col-12 text-center small mt-1">' +
-                        '<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="window._upPage=Math.max(0,window._upPage-1);window._renderUpStats()" ' + (window._upPage===0?'disabled':'') + '>&laquo; 上一页</button>' +
-                        '<span class="mx-2 text-muted">' + (window._upPage+1) + '/' + totalPages + '</span>' +
-                        '<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="window._upPage=Math.min(' + (totalPages-1) + ',window._upPage+1);window._renderUpStats()" ' + (window._upPage>=totalPages-1?'disabled':'') + '>下一页 &raquo;</button>' +
-                        '</div>';
-                }
-            };
-            if (allUpGroups.length > 0) window._renderUpStats();
-
-            document.getElementById('pagination-row').style.display = 'none';
-            document.getElementById('stat-videos').textContent = d.total || d.data.length;
-            const analyzed = (d.data || []).filter(v => v.has_report).length;
-            document.getElementById('stat-analyzed').textContent = analyzed;
-            let monitored = 0;
-            (d.data || []).forEach(v => { monitored += v.comment_count || 0; });
-            document.getElementById('stat-monitored').textContent = formatNum(monitored);
-        })
-        .catch(e => {
-            console.error('Video list fetch failed:', e);
-            const grid = document.getElementById('video-grid');
-            grid.innerHTML = `<div class="col-12 text-center py-5">
-                <i class="bi bi-exclamation-triangle display-4 text-warning d-block mb-2"></i>
-                <p class="text-muted">无法连接到 Dashboard 后端</p>
-                <small class="text-secondary">请确保 Dashboard 服务已启动（端口 5001）</small>
-                <br><button class="btn btn-sm btn-outline-primary mt-2" onclick="loadVideos()"><i class="bi bi-arrow-clockwise"></i> 重试</button>
-            </div>`;
-            document.getElementById('pagination-row').style.display = 'none';
-            document.getElementById('up-stats-row').innerHTML = '';
-        });
-}
-
-function renderBucketPage(bucketKey, page = 1) {
-    const st = bucketPageStates[bucketKey];
-    if (!st) return;
-    st.page = page;
-    const { videos, totalPages } = st;
-    const start = (page - 1) * BUCKET_PAGE_SIZE;
-    const end = Math.min(start + BUCKET_PAGE_SIZE, videos.length);
-    const pageVideos = videos.slice(start, end);
-
-    const body = document.getElementById(bucketKey + '-body');
-    if (body) {
-        body.innerHTML = pageVideos.map(v => renderVideoCard(v)).join('');
-    }
-
-    // 省略号翻页
-    renderPagination(bucketKey, page, totalPages, videos.length);
-}
-
-function switchSortMode(collId, mode) {
-    upGroupSortMode[collId] = mode;
-    // 更新按钮状态
-    ['views','comments','time'].forEach(m => {
-        const btn = document.getElementById(collId + '-sort-' + m);
-        if (btn) btn.classList.toggle('active', mode === m);
-    });
-
-    // 重建桶数据
-    const rs = mode === 'time' ? getTimeRanges() : RANGES[mode];
-    // 从现有的 bucketPageStates 聚合视频
-    const allVids = [];
-    const seen = new Set();
-    Object.keys(bucketPageStates).forEach(bk => {
-        if (bk.startsWith(collId + '-')) {
-            const st = bucketPageStates[bk];
-            st.videos.forEach(v => {
-                if (!seen.has(v.bvid)) { seen.add(v.bvid); allVids.push(v); }
-            });
-        }
-    });
-    if (allVids.length === 0) return;
-
-    // 重建 bucketPageStates
-    const valFn = mode === 'views' ? (v => v.view_count || 0)
-                : mode === 'time' ? (v => v.pubdate || 0)
-                : (v => v.comment_count || 0);
-    const newBuckets = rs.map(r => {
-        const vids = allVids.filter(v => {
-            const val = valFn(v);
-            return val >= r.min && val <= r.max;
-        });
-        vids.sort((a, b) => valFn(b) - valFn(a));
-        const bucketKey = `${collId}-${r.key}`;
-        const totalPages = Math.max(1, Math.ceil(vids.length / BUCKET_PAGE_SIZE));
-        bucketPageStates[bucketKey] = { page: 1, totalPages, videos: vids, label: r.label };
-        return { bucketKey, count: vids.length, totalPages };
-    }).filter(b => b.count > 0);
-
-    // 重建 DOM
-    const body = document.getElementById(collId + '-body');
-    if (!body) return;
-    body.innerHTML = newBuckets.map(b => `
-        <div class="mb-3">
-            <small class="fw-bold text-muted"><i class="bi bi-bar-chart"></i> ${bucketPageStates[b.bucketKey].label} (${b.count}个)</small>
-            <div class="row" id="${b.bucketKey}-body"></div>
-            <div class="d-flex justify-content-between align-items-center mt-1" id="${b.bucketKey}-pager" style="display:none">
-                <small class="text-muted" id="${b.bucketKey}-page-info"></small>
-                <div class="btn-group btn-group-sm" id="${b.bucketKey}-page-btns"></div>
-            </div>
-        </div>`).join('') || '<div class="text-muted small">无视频</div>';
-
-    // 渲染所有新桶的第一页
-    newBuckets.forEach(b => renderBucketPage(b.bucketKey, 1));
-}
-
-// 省略号翻页: ≤7页全显示, >7页用省略号
-function renderPagination(bucketKey, page, totalPages, totalVideos) {
-    const pager = document.getElementById(bucketKey + '-pager');
-    const info = document.getElementById(bucketKey + '-page-info');
-    const btns = document.getElementById(bucketKey + '-page-btns');
-    if (totalPages <= 1) { pager.style.display = 'none'; return; }
-    pager.style.display = 'flex';
-    info.textContent = `${totalVideos}个 第${page}/${totalPages}页`;
-
-    const pageNums = [];
-    if (totalPages <= 7) {
-        for (let p = 1; p <= totalPages; p++) pageNums.push(p);
-    } else {
-        pageNums.push(1);
-        if (page > 4) pageNums.push('...');
-        const start = Math.max(2, page - 1);
-        const end = Math.min(totalPages - 1, page + 1);
-        for (let p = start; p <= end; p++) pageNums.push(p);
-        if (page < totalPages - 3) pageNums.push('...');
-        pageNums.push(totalPages);
-    }
-
-    let h = `<button class="btn btn-sm btn-outline-secondary" onclick="renderBucketPage('${bucketKey}',${page-1})" ${page<=1?'disabled':''}>&laquo;</button>`;
-    pageNums.forEach(p => {
-        if (p === '...') {
-            h += `<span class="btn btn-sm btn-outline-secondary disabled">...</span>`;
-        } else {
-            h += `<button class="btn btn-sm ${p===page?'btn-primary':'btn-outline-secondary'}" onclick="renderBucketPage('${bucketKey}',${p})">${p}</button>`;
-        }
-    });
-    h += `<button class="btn btn-sm btn-outline-secondary" onclick="renderBucketPage('${bucketKey}',${page+1})" ${page>=totalPages?'disabled':''}>&raquo;</button>`;
-    // 页码跳转输入框
-    h += `<span class="ms-2 d-inline-flex align-items-center gap-1">
-        <input type="number" class="form-control form-control-sm" id="${bucketKey}-jump-input"
-               min="1" max="${totalPages}" value="${page}" style="width:60px"
-               onkeydown="if(event.key==='Enter') jumpToPage('${bucketKey}', this.value, ${totalPages})">
-        <button class="btn btn-sm btn-outline-secondary" onclick="jumpToPage('${bucketKey}',
-               document.getElementById('${bucketKey}-jump-input').value, ${totalPages})">跳转</button>
-    </span>`;
-    btns.innerHTML = h;
-}
-
-function jumpToPage(bucketKey, rawValue, totalPages) {
-    const page = parseInt(rawValue);
-    if (isNaN(page) || page < 1 || page > totalPages) {
-        showToast(`请输入 1~${totalPages} 的页码`, 'warning');
-        return;
-    }
-    renderBucketPage(bucketKey, page);
-}
-
 function renderVideoCard(v) {
     return `<div class="col-6 col-md-4 col-lg-3 col-xl-2 mb-2">
         <div class="card video-card h-100" onclick="location.href='/video/${v.bvid}'" style="cursor:pointer">
@@ -692,7 +368,12 @@ function deleteVideo(bvid, title) {
             .then(d => {
                 if (d.success) {
                     showToast(d.message, 'success');
-                    loadVideos(); // 刷新列表
+                    // 刷新列表，并在完成后重新选中当前分组
+                    if (_selKey) {
+                        loadVideos(() => selectUpGroup(_selKey, _selLabel || _selKey));
+                    } else {
+                        loadVideos();
+                    }
                 } else {
                     showToast(d.message || '删除失败', 'error');
                     throw new Error(d.message);
@@ -704,17 +385,6 @@ function deleteVideo(bvid, title) {
 // ---- UP主定位 + 已分析筛选 ----
 let _analyzedFilter = false;
 
-function scrollToUpGroup(upKey) {
-    // 展开对应的 UP主分组卡片并滚动到
-    const el = document.getElementById(upKey);
-    if (el) {
-        const collapse = bootstrap.Collapse.getInstance(el);
-        if (!collapse || !el.classList.contains('show')) {
-            new bootstrap.Collapse(el, { toggle: true });
-        }
-        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
-    }
-}
 
 function filterAnalyzed() {
     _analyzedFilter = !_analyzedFilter;
@@ -729,66 +399,20 @@ function filterAnalyzed() {
         card.style.borderLeft = '';
         card.style.backgroundColor = '';
     }
-    // 重新加载视频列表（后端已返回 has_report 字段）
-    loadVideos();
+    // ★ v2.32 fix: 筛选后总是选中「全部」，展示所有筛选后的视频
+    // 根因：若保持之前选中的UP主，而该UP主下没有已分析视频，右侧会空白
+    loadVideos(() => {
+        _selKey = 'all';
+        _selLabel = _analyzedFilter ? '已分析视频' : '全部视频';
+        _selVideos = (window._allVideos || []).slice();
+        _selPage = 1;
+        // 清除侧边栏高亮（选中「全部」时不高亮任何UP主）
+        document.querySelectorAll('#up-list .list-group-item').forEach(el => el.classList.remove('active'));
+        renderSelContent(_selLabel);
+    });
 }
 
 // ---- 删除分类数据 ----
-let deletePollTimer = null;
-
-function deleteCategory(collId, mid, name, count, source) {
-    let label, body;
-    if (source) {
-        label = `「${name}」`;
-        body = { source: source };
-    } else if (mid) {
-        label = `UP主「${name}」`;
-        body = { owner_mid: parseInt(mid) };
-    } else {
-        label = '「热门榜」';
-        body = { source: 'hot' };
-    }
-    confirmDeleteWithProgress(
-        `正在删除 ${label} 下的全部数据...`,
-        () => {
-            // 1. 发起异步删除
-            return fetch('/api/data/category', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            })
-            .then(r => r.json())
-            .then(d => {
-                if (!d.success) throw new Error(d.message);
-                // 2. 轮询进度
-                const STATUS_URL = '/api/data/category-status/' + d.task_id;
-                const total = d.total || 0;
-                return new Promise((resolve, reject) => {
-                    deletePollTimer = setInterval(() => {
-                        fetch(STATUS_URL).then(r => r.json()).then(sd => {
-                            const st = sd.data || {};
-                            updateDeleteProgress(st.done || 0, total, st.progress || '');
-                            if (st.status === 'done') {
-                                clearInterval(deletePollTimer);
-                                deletePollTimer = null;
-                                showToast(st.result?.message || '删除完成', 'success');
-                                resolve();
-                            } else if (st.status === 'error') {
-                                clearInterval(deletePollTimer);
-                                deletePollTimer = null;
-                                reject(new Error(st.error || '删除失败'));
-                            }
-                        }).catch(() => {});  // 忽略轮询网络错误
-                    }, 500);
-                });
-            });
-        },
-        () => {
-            if (deletePollTimer) { clearInterval(deletePollTimer); deletePollTimer = null; }
-            loadVideos();
-        }
-    );
-}
 
 // ---- 清空所有数据 ----
 function clearAllData() {
@@ -809,5 +433,201 @@ function clearAllData() {
             })
     );
 }
+// ========== 左右分栏新逻辑 ==========
+
+// 渲染左侧 UP主列表（含热门榜）
+function renderUpSidebar(videos, upGroups) {
+    const list = document.getElementById('up-list');
+    if (!list) return;
+    const hotVideos = (videos || []).filter(v => v.source === 'hot');
+    let html = '';
+
+    // 热门榜
+    if (hotVideos.length > 0) {
+        html += '<a href="#" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" ' +
+                 'onclick="event.preventDefault();selectUpGroup(\'hot\',\'热门榜\')">' +
+                 '<span><i class="bi bi-fire me-2"></i>热门榜</span>' +
+                 '<span class="badge bg-danger rounded-pill">' + hotVideos.length + '</span></a>';
+    }
+
+    // UP主列表
+    (upGroups || []).forEach(g => {
+        const name = (g.name || '').substring(0, 12) + ((g.name || '').length > 12 ? '..' : '');
+        const safe = (g.name || '').replace(/'/g, "\\'");
+        html += '<a href="#" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" ' +
+                 'onclick="event.preventDefault();selectUpGroup(\'up_' + g.mid + '\',\'' + safe + '\')">' +
+                 '<span><i class="bi bi-person-video me-2"></i>' + name + '</span>' +
+                 '<span class="badge bg-primary rounded-pill">' + g.count + '</span></a>';
+    });
+
+    list.innerHTML = html || '<div class="text-center py-3 text-muted small">暂无数据</div>';
+}
+
+// 当前选中的分组状态
+let _selKey = null;
+let _selLabel = '';
+let _selVideos = [];
+let _selPage = 1;
+const _SEL_PAGE_SIZE = 24;
+
+// 点击左侧 UP主 → 右侧显示视频
+function selectUpGroup(key, label) {
+    // 更新侧边栏高亮
+    document.querySelectorAll('#up-list .list-group-item').forEach(el => el.classList.remove('active'));
+    if (event && event.currentTarget) {
+        event.currentTarget.classList.add('active');
+    } else {
+        // 兼容无 event 的调用场景
+        const items = document.querySelectorAll('#up-list .list-group-item');
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].getAttribute('onclick') && items[i].getAttribute('onclick').indexOf(key) >= 0) {
+                items[i].classList.add('active');
+                break;
+            }
+        }
+    }
+
+    _selKey = key;
+    _selLabel = label || '';
+    _selPage = 1;
+
+    // 筛选视频
+    if (key === 'hot') {
+        _selVideos = (window._allVideos || []).filter(v => v.source === 'hot');
+    } else if (key === 'all') {
+        _selVideos = (window._allVideos || []).slice();
+    } else {
+        const mid = key.replace('up_', '');
+        _selVideos = (window._allVideos || []).filter(v => String(v.owner_mid) === String(mid));
+    }
+
+    renderSelContent(label);
+}
+
+// 渲染右侧视频内容区
+function renderSelContent(label) {
+    const area = document.getElementById('video-content-area');
+    if (!area) return;
+
+    area.innerHTML = '' +
+        '<div class="d-flex justify-content-between align-items-center mb-3">' +
+            '<h6 class="mb-0"><i class="bi bi-collection-play me-2"></i>' + (label || '') + '（' + _selVideos.length + ' 个视频）</h6>' +
+        '</div>' +
+        '<div class="row" id="sel-video-grid"></div>' +
+        '<div class="d-flex justify-content-between align-items-center mt-3" id="sel-pagination"></div>';
+
+    renderSelPage();
+}
+
+// 渲染当前页视频卡片
+function renderSelPage() {
+    const grid = document.getElementById('sel-video-grid');
+    if (!grid) return;
+
+    const start = (_selPage - 1) * _SEL_PAGE_SIZE;
+    const end = Math.min(start + _SEL_PAGE_SIZE, _selVideos.length);
+    const pageVideos = _selVideos.slice(start, end);
+
+    grid.innerHTML = pageVideos.map(v => renderVideoCard(v)).join('');
+
+    renderSelPagination();
+}
+
+// 渲染翻页控件
+function renderSelPagination() {
+    const pager = document.getElementById('sel-pagination');
+    if (!pager) return;
+
+    const totalPages = Math.max(1, Math.ceil(_selVideos.length / _SEL_PAGE_SIZE));
+    if (totalPages <= 1) { pager.innerHTML = ''; return; }
+
+    let html = '<small class="text-muted me-2">第 ' + _selPage + ' / ' + totalPages + ' 页，共 ' + _selVideos.length + ' 个</small><div class="btn-group btn-group-sm">';
+    html += '<button class="btn btn-sm btn-outline-secondary" onclick="_selPage=Math.max(1,_selPage-1);renderSelPage()" ' + (_selPage <= 1 ? 'disabled' : '') + '>‹ 上一页</button>';
+
+    // 页码
+    const pages = [];
+    if (totalPages <= 7) {
+        for (let p = 1; p <= totalPages; p++) pages.push(p);
+    } else {
+        pages.push(1);
+        if (_selPage > 4) pages.push('...');
+        const ps = Math.max(2, _selPage - 1);
+        const pe = Math.min(totalPages - 1, _selPage + 1);
+        for (let p = ps; p <= pe; p++) pages.push(p);
+        if (_selPage < totalPages - 3) pages.push('...');
+        pages.push(totalPages);
+    }
+
+    pages.forEach(p => {
+        if (p === '...') {
+            html += '<span class="btn btn-sm btn-outline-secondary disabled">...</span>';
+        } else {
+            html += '<button class="btn btn-sm ' + (p === _selPage ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="_selPage=' + p + ';renderSelPage()">' + p + '</button>';
+        }
+    });
+
+    html += '<button class="btn btn-sm btn-outline-secondary" onclick="_selPage=Math.min(' + totalPages + ',_selPage+1);renderSelPage()" ' + (_selPage >= totalPages ? 'disabled' : '') + '>下一页 ›</button>';
+    html += '</div>';
+    pager.innerHTML = html;
+}
+
+function loadVideos(callback) {
+    fetch('/api/videos?page=1&per_page=9999')
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
+        .then(d => {
+            if (!d.success) return;
+
+            // 根据筛选标志过滤视频
+            let videos = d.data || [];
+            if (_analyzedFilter) {
+                videos = videos.filter(v => v.has_report);
+            }
+            window._allVideos = videos;
+
+            // 重新计算 upGroups（基于过滤后的 videos）
+            let upGroups = d.up_groups || [];
+            if (_analyzedFilter) {
+                const upMap = {};
+                videos.forEach(v => {
+                    if (!v.owner_mid) return;
+                    if (!upMap[v.owner_mid]) {
+                        upMap[v.owner_mid] = { mid: v.owner_mid, name: v.owner_name, count: 0 };
+                    }
+                    upMap[v.owner_mid].count++;
+                });
+                upGroups = Object.values(upMap);
+            }
+
+            // 更新顶部统计卡片（使用过滤后的 videos）
+            document.getElementById('stat-videos').textContent = videos.length;
+            const analyzed = _analyzedFilter ? videos.length : (d.data || []).filter(v => v.has_report).length;
+            document.getElementById('stat-analyzed').textContent = analyzed;
+            let monitored = 0;
+            videos.forEach(v => { monitored += v.comment_count || 0; });
+            document.getElementById('stat-monitored').textContent = formatNum(monitored);
+
+            // 渲染左侧 UP主列表（传入过滤后的 videos 和 upGroups）
+            if (typeof renderUpSidebar === 'function') {
+                renderUpSidebar(videos, upGroups);
+            }
+
+            // 更新高风险统计（使用过滤后的 videos）
+            if (typeof loadReportStats === 'function') {
+                loadReportStats(videos);
+            }
+
+            // 若有回调，执行回调（如：删除后重新选中分组）
+            if (typeof callback === 'function') callback();
+        })
+        .catch(e => {
+            console.error('Video list fetch failed:', e);
+            const list = document.getElementById('up-list');
+            if (list) list.innerHTML = '<div class="text-center py-3 text-danger small">加载失败<br><button class="btn btn-sm btn-outline-primary mt-1" onclick="loadVideos()">重试</button></div>';
+        });
+}
+
 </script>
 {% endblock %}

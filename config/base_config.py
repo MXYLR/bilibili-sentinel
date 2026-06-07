@@ -27,7 +27,7 @@ ENABLE_IP_PROXY = False              # 是否启用IP代理池 (proxy/ 模块使
 # Clash Verge 代理 (用于 requests 库直连 B站 API)
 # 运行时配置可覆盖此默认值 (通过 Dashboard 设置页面修改)
 CLASH_PROXY_ENABLED = True                  # 是否启用 Clash 代理
-CLASH_PROXY_URL = "socks5://192.168.1.104:7897"  # Clash Verge SOCKS5 代理地址
+CLASH_PROXY_URL = "http://192.168.1.104:7897"   # Clash Verge HTTP 代理地址 (curl_cffi BoringSSL 不支持 SOCKS5)
 
 # ★ 从运行时配置文件覆盖默认值 (Dashboard 设置页面写入)
 import json, os as _os

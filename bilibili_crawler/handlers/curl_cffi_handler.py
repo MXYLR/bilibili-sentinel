@@ -71,17 +71,20 @@ class CurlCffiDownloadHandler:
             verify=False,  # 中文路径下 libcurl 无法读取 CA bundle
         )
 
-        # 应用 Clash SOCKS5 代理
+        # 应用 Clash 代理 — 自动修正 SOCKS5 → HTTP CONNECT
         try:
             from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
             if CLASH_PROXY_ENABLED and CLASH_PROXY_URL:
+                proxy_url = CLASH_PROXY_URL
+                if proxy_url.startswith("socks5://") or proxy_url.startswith("socks4://"):
+                    proxy_url = "http://" + proxy_url.split("://", 1)[1]
                 self._proxies = {
-                    "http": CLASH_PROXY_URL,
-                    "https": CLASH_PROXY_URL,
+                    "http": proxy_url,
+                    "https": proxy_url,
                 }
                 self._session.proxies = self._proxies
                 logger.info(
-                    f"[curl_cffi] Proxy enabled: {CLASH_PROXY_URL}"
+                    f"[curl_cffi] Proxy enabled: {proxy_url}"
                 )
         except ImportError:
             pass
@@ -162,23 +165,32 @@ class BilibiliCurlCffiMiddleware:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         })
 
-        # Clash SOCKS5 代理
+        # Clash 代理 — curl_cffi BoringSSL 模式不支持 SOCKS5，自动降级为 HTTP CONNECT
         try:
             from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
             if CLASH_PROXY_ENABLED and CLASH_PROXY_URL:
+                proxy_url = CLASH_PROXY_URL
+                # ★ 自动修正：socks5:// → http://（BoringSSL TLS 指纹模式与 SOCKS5 不兼容）
+                if proxy_url.startswith("socks5://") or proxy_url.startswith("socks4://"):
+                    fixed_url = "http://" + proxy_url.split("://", 1)[1]
+                    logger.warning(
+                        f"[CurlCffi] SOCKS5 proxy is incompatible with BoringSSL TLS fingerprint mode. "
+                        f"Auto-correcting: {proxy_url} → {fixed_url}"
+                    )
+                    proxy_url = fixed_url
                 self._session.proxies = {
-                    "http": CLASH_PROXY_URL,
-                    "https": CLASH_PROXY_URL,
+                    "http": proxy_url,
+                    "https": proxy_url,
                 }
                 logger.info(
-                    f"[CurlCffi] Clash proxy: {CLASH_PROXY_URL}"
+                    f"[CurlCffi] Clash proxy: {proxy_url}"
                 )
         except ImportError:
             pass
 
         logger.info(
             "[CurlCffi] Session ready "
-            "(TLS=chrome124, PySocks OK)"
+            "(TLS=chrome124, proxy=HTTP-CONNECT)"
         )
         return self._session
 

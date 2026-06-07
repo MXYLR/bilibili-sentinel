@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.30。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.31。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -69,7 +69,7 @@ Video Spider       Comment Spider   User Spider        Flask Dashboard
 **用户爬虫例外** (v2.21): 用户爬虫只走 curl_cffi 直连 card API，不启用 Playwright 兜底。每次请求前强制重置 `_use_playwright=False`。
 
 ### Dashboard 控制台
-- **系统总览** `/`: 健康卡片 + 热门榜独立分类（按时间/播放量/评论数排序）+ UP主分组折叠面板 + 播放量/评论数分桶 + 桶内独立翻页 + 页码跳转 + 分类删除按钮
+- **系统总览** `/`: 健康卡片 + **左右分栏布局**（左侧 UP主/热门榜列表 + 右侧视频内容区）+ 点击侧边栏条目按 UP主/热门榜过滤视频 + 右侧分页展示（24条/页）+ 「已分析」筛选联动侧边栏 + 视频删除保持当前选中分组
 - **视频详情** `/video/<bvid>`: 评论展示 + 排行榜 + LLM初筛/AICU Modal 弹窗分析 + 特征触发图表 + 全屏用户详情弹窗（账号分析/评论/AICU数据）+ 刷新用户数据按钮（仅采集当前视频用户）+ UP主收录按钮
 - **爬虫控制** `/crawler`: 4 爬虫管理 (视频/评论/用户/UP主视频) + 一键启动全部 + 补充评论/用户种子（扫描全局数据） + 种子注入 (热门/BV/关键词/UID) + 代理池状态 + 登录面板 + 按钮悬停 tooltip 详细说明
 - **水军账号管理** `/water-army`: 收录水军库管理 + 搜索/筛选/排序 + 备注编辑 + CSV/JSON 导出 + B站主页直达链接
@@ -324,7 +324,108 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 ---
 
+## v2.32 更新 (2026-06-07)
+
+### Scrapy 2.16.0 API 兼容性修复
+
+**问题**: Scrapy 2.16.0 移除了 `Spider.start_requests()` 方法，旧方法名永不被调用，导致所有 spider 启动后无请求、立即关闭。
+
+**修复**: 所有 spider 必须使用 `async def start()` 替代 `def start_requests()`：
+- `bilibili_video_spider.py`
+- `bilibili_comment_spider.py`
+- `bilibili_user_spider.py`
+- `bilibili_up_videos_spider.py`
+- `bilibili_danmaku_spider.py`
+
+### Playwright 空间爬取器选择器修复
+
+#### 视频标题选择器修复
+**问题**: 爬取到 42 条视频，但所有视频的 `title` 字段为空字符串。
+
+**根因**: B站 2026 版 DOM 中视频标题容器从 `.bili-video-card__info__title` 改为 `.bili-video-card__title`，且标题存在 `title` 属性中。
+
+**修复**:
+- 选择器改为 `.bili-video-card__title, .bili-video-card__info__title, .video-name`（多选择器兜底）
+- 优先读 `getAttribute('title')`，其次用 `textContent.trim()`
+- 只有有 bvid 的才 push 到结果数组
+
+#### 签名提取改用 `<meta name="description">`
+**问题**: 画像提取中 `sign` 字段始终为空。
+
+**根因**: B站已移除 `.sign.header-sign .pure-text` DOM 节点，签名不再渲染在该位置。
+
+**修复**:
+- 改为从 `<meta name="description">` 提取
+- 解析最后一个 `。` 后面的内容（B站 SEO 标签格式固定）
+- 兜底：保留 DOM 选择器作为 fallback
+
+**验证**: `debug_sign.py` 验证通过 ✅
+
+### 其他修复
+- `_fetch_next_user()` 自调度修复：用户爬虫翻页逻辑修复
+- `run_pw_scraper.py` 路径修复：使用正确的项目根目录路径
+- 临时调试文件清理：`debug_card_html.py`、`debug_sign.py`、`test_space_scraper.py` 等
+
+---
+
+## v2.31 更新 (2026-06-06)
+
+### Dashboard 总览页 左右分栏布局重构
+
+#### 背景
+旧设计使用 UP主统计卡片行 + 视频分组折叠面板，存在两个问题：
+1. UP主按钮无法点击（事件绑定失效）
+2. 在热门榜中出现的 UP主 无法通过原有跳转逻辑定位到其视频
+
+#### 新设计
+**布局**: `col-lg-3` 左侧侧边栏 + `col-lg-9` 右侧内容区（Bootstrap Grid）
+
+**左侧侧边栏** (`#up-sidebar`):
+- 固定定位（sticky top），最大高度 `calc(100vh - 280px)`，超出滚动
+- 顶部「热门榜」条目（key=`'hot'`）
+- 下方全部 UP主条目（key=`'up_{mid}'`），含粉丝名+视频数角标
+- 点击高亮当前选中条目（Bootstrap `.active` 样式）
+
+**右侧内容区** (`#video-content-area`):
+- 点击侧边栏条目 → `selectUpGroup(key, label)` 过滤 `window._allVideos` → 渲染视频卡片
+- `renderSelPage()` 每页 24 条
+- `renderSelPagination()` 上/下页 + 页码按钮
+- 「已分析」筛选（`filterAnalyzed()`）同步更新侧边栏条目和右侧内容
+
+#### 核心 JS 架构
+| 函数 | 作用 |
+|------|------|
+| `renderUpSidebar(videos, upGroups)` | 渲染左侧 list-group 条目 |
+| `selectUpGroup(key, label)` | 点击侧边栏，过滤并渲染右侧 |
+| `renderSelContent(label)` | 设置右侧容器 HTML 骨架 |
+| `renderSelPage()` | 渲染当前页视频卡片 |
+| `renderSelPagination()` | 渲染分页控件 |
+| `loadVideos(callback)` | 拉取全量视频，支持回调（删除后重选） |
+
+**状态变量**: `_selKey` / `_selLabel` / `_selVideos` / `_selPage` / `_SEL_PAGE_SIZE=24`
+
+#### 修复的 Bug
+- `deleteVideo()`: 删除后调用 `loadVideos(() => selectUpGroup(_selKey, _selLabel))`，保持右侧选中状态
+- `filterAnalyzed()`: `_analyzedFilter=true` 时重新计算 `upGroups`，侧边栏只显示含已分析视频的 UP主
+- `loadVideos(callback)`: 支持可选回调参数，兼容旧版无参调用
+
+#### 代码精简
+- 删除约 330 行废弃代码：旧 `loadVideos`、`renderBucketPage`、`switchSortMode`、`renderPagination`、`jumpToPage`、`scrollToUpGroup`、`deleteCategory`
+- `index.html` 从 ~1000 行精简至 620 行
+
+---
+
+### Playwright 用户空间爬取器 v2 (2026-06-05)
+
+- `playwright_space_scraper.py` 完全重写，适配 B站 2026 新版 DOM 结构
+- 移除 `window.__INITIAL_STATE__` 提取，改用新版 DOM 选择器（`.nickname`、`.nav-statistics__item-num`、`.nav-tab__item-num` 等）
+- SPA 导航策略：画像页加载 → 移除遮罩 → JS 强制点击 nav-tab → 绕过 geetest 验证码
+- 无 Cookie 测试通过：画像 15 字段 ✅，视频 42 条 ✅，动态 132 条 ✅
+
+---
+
 ## v2.30 更新 (2026-06-05)
+
 
 ### 新增：时间模式分析（检测突然活跃的水军）
 

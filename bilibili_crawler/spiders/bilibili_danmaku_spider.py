@@ -188,7 +188,8 @@ class BilibiliDanmakuSpider(scrapy.Spider):
 
         logger.info(f"[__init__] 从 Redis 读取 {len(self._seeds)} 个视频种子")
 
-    def start_requests(self):
+    # ★ Scrapy 2.16+ API: start_requests() 已弃用，改为 async start()
+    async def start(self):
         for bvid in self._seeds:
             if bvid in self._processed_videos:
                 continue

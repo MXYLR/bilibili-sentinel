@@ -28,6 +28,7 @@ Desktop.ini
 # Project data (runtime)
 data/videos/
 data/comments/
+data/debug_screenshots/
 data/users/
 data/danmaku/
 data/reports/

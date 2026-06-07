@@ -596,6 +596,24 @@
         document.getElementById('delete-progress-bar').textContent = pct + '%';
         document.getElementById('delete-progress-count').textContent = done + ' / ' + total;
     }
+
+    // ★ v2.32: 后台标签页节流修复 — 全局生效
+    // 浏览器对后台标签页大幅降频 setInterval，导致切走后 UI 假死
+    // 切回前台时立即调用各页面的刷新函数（函数不存在则自动跳过）
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            // 依次尝试调用各页面定义的刷新函数
+            if (typeof refreshAll === 'function') refreshAll();
+            if (typeof loadVideos === 'function') loadVideos();
+            if (typeof updateHealthCards === 'function') updateHealthCards();
+            if (typeof loadSettings === 'function') loadSettings();
+            if (typeof loadLLMConfig === 'function') loadLLMConfig();
+            // 如果正在查看日志，也立即刷新
+            if (window._logAutoRefreshTimer && window._activeLogName) {
+                if (typeof fetchLog === 'function') fetchLog(window._activeLogName, true);
+            }
+        }
+    });
     </script>
     {% block extra_scripts %}{% endblock %}
 </body>

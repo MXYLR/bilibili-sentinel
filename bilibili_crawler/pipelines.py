@@ -16,7 +16,7 @@ import re
 from collections import OrderedDict
 from datetime import datetime
 
-from bilibili_crawler.items import VideoItem, CommentItem, UserInfoItem, UserPostItem, DanmakuItem
+from bilibili_crawler.items import VideoItem, CommentItem, UserInfoItem, UserPostItem, DanmakuItem, UpVideoItem
 
 
 class BilibiliDedupPipeline:
@@ -594,12 +594,16 @@ class UserCachePipeline:
             import redis as _redis
             r = _redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
             injected = 0
+            failed = 0
             for mid in mids:
                 try:
                     r.rpush("bilibili_crawler:user_seeds", json.dumps({"mid": mid}))
                     injected += 1
-                except Exception:
-                    break
+                except Exception as e:
+                    failed += 1
+                    logger.warning(f"Inject failed for mid={mid}: {e}")
+            if failed:
+                spider.logger.warning(f"Inject: {injected} OK, {failed} FAILED (redis may be down)")
             spider.logger.info(
                 f"Auto-injected {injected}/{len(mids)} user seeds into Redis "
                 f"(bilibili_crawler:user_seeds)"

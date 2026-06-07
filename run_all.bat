@@ -1,21 +1,21 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.28
+title Bilibili Sentinel v2.37
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
 set VENV_PYTHON=%ROOT%\venv\Scripts\python.exe
 set VENV_SCRAPY=%ROOT%\venv\Scripts\scrapy.exe
 set LLM_CONFIG=%ROOT%\config\llm_config.json
-set CLASH_PROXY_URL=socks5://192.168.1.104:7897
-set CLASH_PROXY_ENABLED=1
+set CLASH_PROXY_URL=socks5://127.0.0.1:7897
+set CLASH_PROXY_ENABLED=0
 
 :: Force unbuffered Python output (prevents log lag when stdout is redirected to file)
 set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.22
+echo   Bilibili Sentinel v2.37
 echo ============================================================
 echo.
 
@@ -102,12 +102,14 @@ if exist "%ROOT%\data\logs" (
     del /q "%ROOT%\data\logs\*.json" 2>nul
 )
 :: Create directories (recreate logs if it was removed)
-if not exist "%ROOT%\data\logs"     mkdir "%ROOT%\data\logs"
-if not exist "%ROOT%\data\videos"   mkdir "%ROOT%\data\videos"
-if not exist "%ROOT%\data\comments" mkdir "%ROOT%\data\comments"
-if not exist "%ROOT%\data\users"    mkdir "%ROOT%\data\users"
-if not exist "%ROOT%\data\danmaku"  mkdir "%ROOT%\data\danmaku"
-if not exist "%ROOT%\data\reports"  mkdir "%ROOT%\data\reports"
+if not exist "%ROOT%\data\logs"       mkdir "%ROOT%\data\logs"
+if not exist "%ROOT%\data\videos"     mkdir "%ROOT%\data\videos"
+if not exist "%ROOT%\data\comments"   mkdir "%ROOT%\data\comments"
+if not exist "%ROOT%\data\users"      mkdir "%ROOT%\data\users"
+if not exist "%ROOT%\data\up_videos"  mkdir "%ROOT%\data\up_videos"
+if not exist "%ROOT%\data\danmaku"    mkdir "%ROOT%\data\danmaku"
+if not exist "%ROOT%\data\reports"    mkdir "%ROOT%\data\reports"
+if not exist "%ROOT%\data\water_army" mkdir "%ROOT%\data\water_army"
 
 :: Module checks (quick existence only, no WMI scanning)
 if exist "%ROOT%\config\base_config.py"               (echo   [OK] Config)      else (echo   [WARN] config/ missing)
@@ -184,7 +186,7 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
-echo   v2.28: AICU网页抓取(Playwright)+评论DOM提取修正+LLM提示词优化+账号年龄/签名展示修复
+echo   v2.37: Playwright后台窗口(CDP最小化)+CAPTCHA自动弹窗+浏览器自动关闭+代理热更新+用户视频API抓取
 echo   全链路: 视频+评论 → 用户爬虫 → 分析+LLM初筛, 全自动
 echo.
 echo ============================================================

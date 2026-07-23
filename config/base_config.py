@@ -63,6 +63,7 @@ ENABLE_LLM_ANALYSIS = True          # 是否启用大语言模型语义分析
 # AICU 深度分析
 ENABLE_DEEP_ANALYSIS = False         # 是否启用 AICU 历史评论深度分析
 AICU_COOKIE = ""                     # AICU 登录 Cookie (可选, 提升数据质量)
+AICU_COMMENT_MAX_PAGES = 20          # AICU 评论翻页上限（每页~50条，20页≈1000条）
 
 # 用户数据采集 (v2.1: F12-F14 数据源)
 ENABLE_USER_CRAWL = True            # 是否启用用户空间数据采集 (画像+动态)

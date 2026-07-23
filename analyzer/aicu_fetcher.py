@@ -457,7 +457,7 @@ class AicuFetcher:
 
         return None
 
-    def _get_via_playwright_html(self, mid: int, max_pages: int = 50) -> Optional[list]:
+    def _get_via_playwright_html(self, mid: int, max_pages: int = 20) -> Optional[list]:
         """通过 Playwright 真实浏览器访问 AICU 评论查询页，提取评论数据。
 
         流程（v3 - 直接URL方案，绕过首页输入框）:
@@ -470,7 +470,7 @@ class AicuFetcher:
 
         Args:
             mid: B站用户 UID
-            max_pages: 最大翻页次数（默认50，测试时可设为1）
+            max_pages: 最大翻页次数（默认20，约1000条评论）
 
         Returns:
             [{time, message, readable_time, oid, type, rank}, ...] 或 None
@@ -561,7 +561,7 @@ class AicuFetcher:
 
             # 翻页逻辑
             current_page = 1
-            pages_limit = max_pages or 50
+            pages_limit = max_pages or 20
 
             while current_page <= pages_limit:
                 # 提取当前页评论
@@ -813,8 +813,9 @@ class AicuFetcher:
             if self._log:
                 self._log("info", f"  启动网页抓取: mid={mid}")
 
-        # 直接调用 Playwright 网页抓取（默认最多50页）
-        html_comments = self._get_via_playwright_html(mid, max_pages=50)
+        # 直接调用 Playwright 网页抓取（从配置读取上限，默认20页）
+        from config.base_config import AICU_COMMENT_MAX_PAGES
+        html_comments = self._get_via_playwright_html(mid, max_pages=AICU_COMMENT_MAX_PAGES)
 
         if not html_comments:
             logger.warning(f"[AICU] 网页抓取评论失败: mid={mid}")

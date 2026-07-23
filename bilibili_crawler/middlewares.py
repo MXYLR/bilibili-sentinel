@@ -463,27 +463,38 @@ class BilibiliRequestsFallbackMiddleware:
         return cls()
 
     def _get_session(self):
-        """延迟创建 requests.Session（线程安全），自动接入 Clash Verge 代理"""
+        """延迟创建 requests.Session（线程安全），自动接入 Clash Verge 代理。
+        
+        ★ 支持跨进程热更新：通过 setattr 修改的模块属性会在下次请求时生效。
+        """
         import requests as _requests
-        if self._session is None:
+        # 读取当前代理配置（使用模块属性访问，确保 Dashboard setattr 能生效）
+        try:
+            import config.base_config as _cfg
+            current_proxy = _cfg.CLASH_PROXY_URL if (_cfg.CLASH_PROXY_ENABLED and _cfg.CLASH_PROXY_URL) else None
+        except ImportError:
+            current_proxy = None
+
+        # 首次创建或代理变更时重建 session
+        if self._session is None or getattr(self, '_session_proxy_url', None) != current_proxy:
             self._session = _requests.Session()
             self._session.headers.update({
                 "Accept-Encoding": "gzip, deflate",
                 "Connection": "keep-alive",
             })
+            self._session_proxy_url = current_proxy
             # --- Clash Verge 代理配置 ---
-            try:
-                from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
-                if CLASH_PROXY_ENABLED and CLASH_PROXY_URL:
-                    self._session.proxies = {
-                        "http": CLASH_PROXY_URL,
-                        "https": CLASH_PROXY_URL,
-                    }
-                    logger.info(
-                        f"[RequestsFallback] 已启用 Clash 代理: {CLASH_PROXY_URL}"
-                    )
-            except ImportError:
-                pass
+            if current_proxy:
+                self._session.proxies = {
+                    "http": current_proxy,
+                    "https": current_proxy,
+                }
+                logger.info(
+                    f"[RequestsFallback] 已启用 Clash 代理: {current_proxy}"
+                )
+            else:
+                self._session.proxies = {}
+                logger.info("[RequestsFallback] 代理已禁用")
         return self._session
 
     @staticmethod

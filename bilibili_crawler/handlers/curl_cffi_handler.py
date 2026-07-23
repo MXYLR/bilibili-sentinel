@@ -16,6 +16,7 @@ curl_cffi 可以完美模拟 Chrome 的 TLS ClientHello，绕过指纹检测。
 """
 
 import logging
+import os
 from urllib.parse import urlparse
 
 from scrapy.http import HtmlResponse, Request
@@ -134,17 +135,43 @@ class BilibiliCurlCffiMiddleware:
     def __init__(self):
         self._session = None
         self._session_proxy_url = None  # 记录 session 创建时使用的代理地址
+        self._cfg_mtime = 0             # 记录 runtime_config.json 的修改时间
+        self._runtime_cfg_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "config", "runtime_config.json"
+        )
 
     @classmethod
     def from_crawler(cls, crawler):
         return cls()
 
     def _get_session(self):
-        """延迟创建 curl_cffi Session；若代理地址变更则自动重建。"""
-        # 读取当前配置
+        """延迟创建 curl_cffi Session；若代理地址变更则自动重建。
+
+        支持跨进程热更新：每次请求前检查 runtime_config.json 的 mtime，
+        如果 Dashboard 在另一个进程中修改了代理配置，爬虫能自动检测并重建 session。
+        """
+        # 读取当前配置（优先检查 runtime_config.json 文件变化，支持跨进程热更新）
         try:
-            from config.base_config import CLASH_PROXY_ENABLED, CLASH_PROXY_URL
-            current_proxy = CLASH_PROXY_URL if (CLASH_PROXY_ENABLED and CLASH_PROXY_URL) else None
+            import config.base_config as _cfg
+            import json as _json
+
+            # ★ 检查 runtime_config.json 是否被外部修改（Dashboard 跨进程写入）
+            if os.path.exists(self._runtime_cfg_path):
+                try:
+                    new_mtime = os.path.getmtime(self._runtime_cfg_path)
+                    if new_mtime > self._cfg_mtime:
+                        self._cfg_mtime = new_mtime
+                        with open(self._runtime_cfg_path, "r", encoding="utf-8") as _f:
+                            _overrides = _json.load(_f)
+                        for _k, _v in _overrides.items():
+                            if _k in ("CLASH_PROXY_URL", "CLASH_PROXY_ENABLED") and _v is not None:
+                                setattr(_cfg, _k, _v)
+                except Exception:
+                    pass
+
+            # 使用模块属性访问（而非 from-import），确保同进程 setattr 也能生效
+            current_proxy = _cfg.CLASH_PROXY_URL if (_cfg.CLASH_PROXY_ENABLED and _cfg.CLASH_PROXY_URL) else None
         except ImportError:
             current_proxy = None
 

@@ -27,7 +27,7 @@ ENABLE_IP_PROXY = False              # 是否启用IP代理池 (proxy/ 模块使
 # Clash Verge 代理 (用于 requests 库直连 B站 API)
 # 运行时配置可覆盖此默认值 (通过 Dashboard 设置页面修改)
 CLASH_PROXY_ENABLED = True                  # 是否启用 Clash 代理
-CLASH_PROXY_URL = "http://192.168.1.104:7897"   # Clash Verge HTTP 代理地址 (curl_cffi BoringSSL 不支持 SOCKS5)
+CLASH_PROXY_URL = "http://192.168.43.139:7897"   # Clash Verge HTTP 代理地址 (curl_cffi BoringSSL 不支持 SOCKS5)
 
 # ★ 从运行时配置文件覆盖默认值 (Dashboard 设置页面写入)
 import json, os as _os
@@ -64,6 +64,9 @@ ENABLE_LLM_ANALYSIS = True          # 是否启用大语言模型语义分析
 ENABLE_DEEP_ANALYSIS = False         # 是否启用 AICU 历史评论深度分析
 AICU_COOKIE = ""                     # AICU 登录 Cookie (可选, 提升数据质量)
 AICU_COMMENT_MAX_PAGES = 20          # AICU 评论翻页上限（每页~50条，20页≈1000条）
+AICU_DANMU_MAX_PAGES = 5             # AICU 视频弹幕网页抓取翻页上限（API 失败兜底时使用）
+AICU_LIVE_DANMU_MAX_PAGES = 3        # AICU 直播弹幕网页抓取翻页上限
+AICU_ENABLE_LIVE_DANMU = True        # 是否抓取直播弹幕（需网页抓取，每个用户额外耗时数秒）
 
 # 用户数据采集 (v2.1: F12-F14 数据源)
 ENABLE_USER_CRAWL = True            # 是否启用用户空间数据采集 (画像+动态)

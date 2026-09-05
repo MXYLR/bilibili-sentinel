@@ -1789,6 +1789,8 @@ function showUserDetail(index) {
             const aicuParts = [];
             if (user.aicu_comment_count != null && user.aicu_comment_count > 0) aicuParts.push(`历史评论: ${user.aicu_comment_count} 条`);
             else if (user.aicu_comment_count === 0) aicuParts.push(`历史评论: 0 条（无历史评论）`);
+            if (user.aicu_danmu_count) aicuParts.push(`视频弹幕: ${user.aicu_danmu_count} 条`);
+            if (user.aicu_live_danmu_count) aicuParts.push(`直播弹幕: ${user.aicu_live_danmu_count} 条`);
             if (user.aicu_device) aicuParts.push(`设备: ${user.aicu_device}`);
             if (user.aicu_names && user.aicu_names.length > 0) aicuParts.push(`曾用名: ${user.aicu_names.join(', ')}`);
             const stats = user.aicu_stats || {};
@@ -1824,6 +1826,8 @@ function showUserDetail(index) {
         if (user.deep_analyzed) {
             const aicuParts = [];
             if (user.aicu_comment_count) aicuParts.push(`历史评论: ${user.aicu_comment_count} 条`);
+            if (user.aicu_danmu_count) aicuParts.push(`视频弹幕: ${user.aicu_danmu_count} 条`);
+            if (user.aicu_live_danmu_count) aicuParts.push(`直播弹幕: ${user.aicu_live_danmu_count} 条`);
             if (user.aicu_device) aicuParts.push(`设备: ${user.aicu_device}`);
             if (user.aicu_names && user.aicu_names.length > 0) aicuParts.push(`曾用名: ${user.aicu_names.join(', ')}`);
             const stats = user.aicu_stats || {};

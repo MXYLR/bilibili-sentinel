@@ -1,21 +1,21 @@
 @echo off
 chcp 65001 >nul
-title Bilibili Sentinel v2.37
+title Bilibili Sentinel v2.39
 
 set ROOT=%~dp0
 set ROOT=%ROOT:~0,-1%
 set VENV_PYTHON=%ROOT%\venv\Scripts\python.exe
 set VENV_SCRAPY=%ROOT%\venv\Scripts\scrapy.exe
 set LLM_CONFIG=%ROOT%\config\llm_config.json
-set CLASH_PROXY_URL=socks5://127.0.0.1:7897
-set CLASH_PROXY_ENABLED=0
+set CLASH_PROXY_URL=http://192.168.43.139:7897
+set CLASH_PROXY_ENABLED=1
 
 :: Force unbuffered Python output (prevents log lag when stdout is redirected to file)
 set PYTHONUNBUFFERED=1
 
 echo.
 echo ============================================================
-echo   Bilibili Sentinel v2.37
+echo   Bilibili Sentinel v2.39
 echo ============================================================
 echo.
 
@@ -84,10 +84,10 @@ if "%AICU_ENABLED%"=="1" (
     echo   [INFO] AICU Deep Analysis disabled ^(Settings 页面启用^)
 )
 
-:: Clash Verge proxy check (SOCKS5 — TCP port check with 2s timeout)
+:: Clash Verge proxy check (HTTP — TCP port check with 2s timeout)
 if %CLASH_PROXY_ENABLED%==1 (
     echo   [TEST] Checking Clash Verge proxy: %CLASH_PROXY_URL%
-    powershell -Command "$u='%CLASH_PROXY_URL%' -replace '^socks5://','';$h,$p=$u -split ':',2;$p=[int]$p;try{$tcp=New-Object Net.Sockets.TcpClient;$r=$tcp.BeginConnect($h,$p,$null,$null);if($r.AsyncWaitHandle.WaitOne(2000)){$tcp.EndConnect($r);Write-Host 'CLASH_OK'}else{throw}}catch{}finally{$tcp.Close()}" > "%TEMP%\clash_check.tmp" 2>nul
+    powershell -Command "$u='%CLASH_PROXY_URL%' -replace '^socks5://','';$u=$u -replace '^socks4://','';$h,$p=$u -split ':',2;$p=[int]$p;try{$tcp=New-Object Net.Sockets.TcpClient;$r=$tcp.BeginConnect($h,$p,$null,$null);if($r.AsyncWaitHandle.WaitOne(2000)){$tcp.EndConnect($r);Write-Host 'CLASH_OK'}else{throw}}catch{}finally{$tcp.Close()}" > "%TEMP%\clash_check.tmp" 2>nul
     findstr /c:"CLASH_OK" "%TEMP%\clash_check.tmp" >nul 2>&1 && (echo   [OK] Clash proxy port reachable) || (echo   [WARN] Clash proxy port unreachable - B站 API requests may fail)
     del "%TEMP%\clash_check.tmp" 2>nul
 ) else (
@@ -186,8 +186,9 @@ if "%AICU_ENABLED%"=="1" (
     echo   AICU:  Deep Analysis Enabled ^(高风险账号历史数据回溯^)
 )
 echo.
+echo   v2.39: MUI新页面适配(评论/视频弹幕/直播弹幕tab)+弹幕深度分析+推理模型(max_tokens)支持+Google广告标注清理
 echo   v2.37: Playwright后台窗口(CDP最小化)+CAPTCHA自动弹窗+浏览器自动关闭+代理热更新+用户视频API抓取
-echo   全链路: 视频+评论 → 用户爬虫 → 分析+LLM初筛, 全自动
+echo   全链路: 视频+评论 → 用户爬虫 → 分析+LLM初筛+AICU深度(评论+视频弹幕+直播弹幕), 全自动
 echo.
 echo ============================================================
 echo.

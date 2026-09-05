@@ -89,6 +89,8 @@ class ReportGenerator:
                 "aicu_comment_count": user.get("aicu_comment_count"),
                 "aicu_stats": user.get("aicu_stats"),
                 "aicu_device": user.get("aicu_device", ""),
+                "aicu_danmu_count": user.get("aicu_danmu_count"),
+                "aicu_live_danmu_count": user.get("aicu_live_danmu_count"),
             })
 
         # Build similarity clusters (enriched with member details)

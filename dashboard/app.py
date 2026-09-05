@@ -96,7 +96,7 @@ def _tojson_lite(value):
     # 大字段（单条可达数十KB），剔除后页面 JS 显著缩小
     LARGE_FIELDS = {"features", "sample_comments", "llm_key_evidence", "deep_key_evidence",
                     "aicu_stats", "aicu_names", "aicu_device", "deep_reasoning", "llm_reasoning",
-                    "sign", "rank"}
+                    "aicu_danmu_stats", "aicu_live_danmu_stats", "sign", "rank"}
     # top_features 保留：每个用户只有 ~10 条小的 {name, score}，特征图表依赖它
     if isinstance(value, list):
         value = [{k: v for k, v in (u.items() if isinstance(u, dict) else {})
@@ -1711,7 +1711,7 @@ def api_scored_users(bvid: str):
     top = report.get("top_suspects", [])
     LARGE_FIELDS = {"features", "sample_comments", "llm_key_evidence", "deep_key_evidence",
                     "aicu_stats", "aicu_names", "aicu_device", "deep_reasoning", "llm_reasoning",
-                    "sign", "rank"}
+                    "aicu_danmu_stats", "aicu_live_danmu_stats", "sign", "rank"}
     lite = [{k: v for k, v in u.items() if k not in LARGE_FIELDS} for u in top]
     return jsonify({"success": True, "data": lite})
 
@@ -1916,6 +1916,10 @@ def _run_aicu_deep_analyze_bg(bvid, report, scored_users, comments, video_info, 
             u["aicu_stats"] = enhanced.get("aicu_stats")
             u["aicu_device"] = enhanced.get("aicu_device", "")
             u["aicu_names"] = enhanced.get("aicu_names", [])
+            u["aicu_danmu_count"] = enhanced.get("aicu_danmu_count")
+            u["aicu_live_danmu_count"] = enhanced.get("aicu_live_danmu_count")
+            u["aicu_danmu_stats"] = enhanced.get("aicu_danmu_stats")
+            u["aicu_live_danmu_stats"] = enhanced.get("aicu_live_danmu_stats")
 
     # ★ 恢复合并中被覆盖的 sample_comments
     restored_count = 0
@@ -2056,6 +2060,10 @@ def _run_single_aicu_bg(bvid, mid, report, user, comments, video_info, analyzer,
             user["aicu_names"] = enhanced.get("aicu_names", [])
             user["aicu_stats"] = enhanced.get("aicu_stats")
             user["aicu_waf_blocked"] = enhanced.get("aicu_waf_blocked", False)
+            user["aicu_danmu_count"] = enhanced.get("aicu_danmu_count")
+            user["aicu_live_danmu_count"] = enhanced.get("aicu_live_danmu_count")
+            user["aicu_danmu_stats"] = enhanced.get("aicu_danmu_stats")
+            user["aicu_live_danmu_stats"] = enhanced.get("aicu_live_danmu_stats")
             user["llm_confidence"] = deep_conf
             user["llm_type_id"] = deep_type_id
             user["llm_type_name"] = deep_type_name

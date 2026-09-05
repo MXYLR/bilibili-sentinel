@@ -1,6 +1,6 @@
 # Bilibili Sentinel
 
-B站水军评论智能检测与可视化分析系统 v2.37。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
+B站水军评论智能检测与可视化分析系统 v2.39。基于 Scrapy-Redis 分布式爬虫采集评论/用户数据，结合 13 维特征评分引擎 + LLM 多 Provider 语义分析 + AICU 深度回溯，实现水军账号的自动化识别、评分和报告生成，通过 Flask Dashboard 提供完整的 Web 操作界面。
 
 ---
 
@@ -321,6 +321,166 @@ AICU 为可选功能（`ENABLE_DEEP_ANALYSIS=False`），当前 API 端点可能
 
 **Q: 412 风控频繁出现？**
 系统已内置三层对抗。可尝试：降低并发（`crawler_config.py` 中调大 `DOWNLOAD_DELAY`）、增加 Cookie 池账号、启用 Playwright 兜底。
+
+---
+
+## v2.36 更新 (2026-07-24)
+
+### AICU 网页翻页按钮适配新版 MUI 分页组件
+
+**问题**: aicu.cc 网页更新后，评论页翻页组件从旧版分页（`<a>` 链接）改成了 **Material UI (MUI) 分页**，旧选择器（`a:has-text('>')`、`.pagination a` 等）匹配不到新按钮，Playwright 网页抓取只能拿到第一页评论。
+
+**新版结构样本**:
+```html
+<nav aria-label="pagination navigation" class="MuiPagination-root">
+  <ul class="MuiPagination-ul">
+    <li><button aria-label="page 1" aria-current="page">1</button></li>
+    <li><button aria-label="Go to page 2">2</button></li>
+    <li><button aria-label="Go to next page">›</button></li>
+  </ul>
+</nav>
+```
+
+**修改内容** (`analyzer/aicu_fetcher.py` 的 `_get_via_playwright_html()` 翻页逻辑):
+- 新增**策略1（MUI 优先）**:
+  - 1a: 点击 `nav[aria-label="pagination navigation"] button[aria-label="Go to next page"]`（下一页箭头，禁用状态自动跳过）
+  - 1b: 点击 `aria-label="Go to page N"` 的数字按钮，仅当 N = 当前页+1 时点击
+- 原选择器降级为**策略2/3 兜底**（兼容旧版页面）
+- 策略3 选择器扩展，同时兼容 `a` 和 `button` 标签
+
+### 评论卡片提取适配新版 MUI 结构
+
+**问题**: 新版页面的评论卡片从 `.card`（`.time`/`.message`/`.z`）改成了 Material UI 卡片，旧选择器提取不到评论。
+
+**新版结构样本**:
+```html
+<div class="MuiPaper-root ... MuiCard-root">
+  <div class="MuiCardContent-root">
+    <span class="MuiTypography-caption">2023/5/13 09:32:05 2</span>  <!-- 时间, 末尾=点赞数 -->
+    <p class="MuiTypography-body1">评论内容</p>
+    <span class="MuiTypography-alignRight">uid:684663 爱来自aicu.cc</span>  <!-- 作者uid -->
+    <div><a href="https://t.bilibili.com/...">方式0</a>
+         <a href="https://www.bilibili.com/h5/comment/sub?oid=...">方式2</a></div>
+  </div>
+</div>
+```
+
+**修改内容** (`_extract_aicu_comments_from_page()` 升级为精准版 v3):
+- 卡片容器: `.card, .MuiCard-root` 双结构兼容
+- 消息: 新版取 `p.MuiTypography-body1`，旧版取 `.message`
+- 时间: 新版取第一个 `span.MuiTypography-caption`，旧版取 `.time`（时间格式不变，`2023/5/13 09:32:05 2` 末尾数字=点赞数）
+- 过滤: 新版卡片时间 caption 必须匹配日期格式（排除用户信息等非评论卡）
+- oid: 链接正则新增 `t.bilibili.com/{id}` 动态ID兜底（`oid=` 参数仍可正常提取）
+- 新增 `author_uid` 字段: 从新版 `uid:xxx 爱来自aicu.cc` caption 提取评论作者 UID（旧版该字段为空）
+- 方法2 (Playwright locator 兜底) 同步双结构兼容
+
+**验证**: 用 Playwright + 真实样本 DOM 测试通过（新版 2 条评论含用户信息卡过滤、旧版 1 条评论含导航卡过滤）。
+
+### 网页抓取支持 tab 切换（评论 / 视频弹幕 / 直播弹幕）
+
+**问题**: 新版页面顶部有 MUI ButtonGroup 用于切换查询类型，但旧代码只会抓"评论"tab，弹幕只能依赖不稳定的 API。
+
+**新版结构样本**:
+```html
+<div role="group" class="MuiButtonGroup-root MuiButtonGroup-outlined ...">
+  <button class="...MuiButton-contained...">评论</button>      <!-- 当前选中 -->
+  <button class="...MuiButton-outlined...">视频弹幕</button>   <!-- 未选中 -->
+  <button class="...MuiButton-outlined...">直播弹幕</button>
+</div>
+```
+
+**修改内容** (`analyzer/aicu_fetcher.py`):
+- 新增 `_switch_aicu_tab(page, tab_name)`: 在 `div[role="group"]` 中按文本找到目标 tab 按钮，未激活（`MuiButton-outlined`）则点击切换，已激活（`MuiButton-contained`）直接返回
+- `_get_via_playwright_html()` 新增 `tab` 参数（默认 `"评论"`，可选 `"视频弹幕"`/`"直播弹幕"`），页面加载后自动切换并等待内容
+- 新增 `_fetch_danmu_via_web()`: API 弹幕不可用时，切到网页"视频弹幕"tab 抓取（最多 5 页），转换为弹幕格式
+- `fetch_user_danmu()` 三层兜底: API 探测失败 → 网页抓取；API 分页取不到数据 → 网页抓取
+- `fetch_all()`: 弹幕 API 探测失败时也调用 `fetch_user_danmu()`（触发网页兜底）
+
+**验证**: Playwright 真实 DOM 测试通过（切换/已激活/不存在 tab/无 group 四种场景）。
+
+**效果**: 弹幕在 API 被 WAF 拦截时仍可通过网页抓取；评论抓取行为不变。
+
+---
+
+## v2.37 更新 (2026-07-24)
+
+### AICU 深度分析加入视频弹幕 + 直播弹幕
+
+**问题**: 深度分析只使用历史评论，弹幕数据（尤其直播弹幕）完全未参与 LLM 判定；新版网页支持切换"评论/视频弹幕/直播弹幕"tab，数据获取能力已具备但未接入分析。
+
+**修改内容**:
+
+#### analyzer/aicu_fetcher.py
+- `AicuUserData` 新增字段: `live_danmus`、`live_danmu_count`、`danmu_stats`（视频弹幕统计）、`live_danmu_stats`（直播弹幕统计）
+- 新增 `_compute_danmu_stats()`: 计算弹幕统计（数量/平均长度/活跃时段/时段分布；API 条目无时间戳时只统计长度）
+- 新增 `fetch_user_live_danmu()`: 网页抓取直播弹幕（切"直播弹幕"tab，翻页上限 3 页，可用 `AICU_ENABLE_LIVE_DANMU` 关闭）
+- `fetch_user_danmu()`: API 与网页两条路径均返回弹幕统计
+- `fetch_all()`: 聚合时同步抓取直播弹幕，汇总到结果
+
+#### config/base_config.py
+- 新增 `AICU_DANMU_MAX_PAGES=5`、`AICU_LIVE_DANMU_MAX_PAGES=3`、`AICU_ENABLE_LIVE_DANMU=True`
+
+#### analyzer/aicu_prompts.py
+- `DEEP_SYSTEM_PROMPT` 新增「弹幕特征速查」: 刷屏重复弹幕→批量操控、模板化弹幕→type1/5、直播引流→type4、弹幕与评论活跃时段不一致→多设备协同嫌疑、无评论但弹幕活跃也可作判定依据
+- `build_deep_prompt()` 新增「弹幕历史」区块: 视频/直播弹幕数量、各自活跃时段、平均长度、内容示例（智能压缩各 2 条）
+- 顺手修复: 补充缺失的 `logger` 定义（时间分析异常路径会 NameError）
+
+#### analyzer/llm_analyzer.py + report_generator.py + dashboard/app.py
+- enhanced 与报告字段新增: `aicu_danmu_count`、`aicu_live_danmu_count`、`aicu_danmu_stats`、`aicu_live_danmu_stats`
+- 抓取日志显示"视频弹幕 N 条 / 直播弹幕 N 条"
+- 前端 `video_detail.html` AICU 数据行显示视频弹幕/直播弹幕条数
+
+**验证**: 单测通过（API/网页弹幕统计计算、prompt 弹幕区块出现/缺失场景），全文件 py_compile 通过。
+
+**效果**: LLM 深度分析可基于弹幕行为（刷屏/模板化/直播互动）补充判定证据；直播弹幕抓取可按配置关闭以节省时间。
+
+---
+
+## v2.38 更新 (2026-08-15)
+
+### 修复推理模型（deepseek-v4-pro）下 LLM 返回空响应
+
+**问题**: 实测 AICU 深度分析时，LLM 调用 HTTP 200 但 `content` 为空字符串，3 次重试后分析结果全空（`deep_analyzed=None`）。
+
+**根因**: 配置的模型 `deepseek-v4-pro` 是**推理模型**（响应含 `reasoning_content` 字段）。推理过程会消耗 `max_tokens` 配额：
+- 深度分析 `max_tokens=1500` → 实测推理消耗 1500 tokens（`finish_reason: length`），`content` 被挤空
+- 初筛单用户 `max_tokens=600` → 同样不够推理模型使用
+
+**修复** (`analyzer/llm_analyzer.py`):
+- `_call_deep_llm()`: `max_tokens` 1500 → **4000**，`timeout` 180s → **300s**
+- `_call_llm()`: 单用户 600 → **2000**，批量 2000 → **4000**，`timeout` → **240s**
+
+**验证**: 修复后深度分析端到端通过（61.7s）：deep_analyzed=True，LLM 深度判定正常用户，reasoning 正确引用弹幕数据（"弹幕'太好听了'及情感长文属玩梗"）。非推理模型（deepseek-chat 等）不受影响（max_tokens 只是上限）。
+
+---
+
+## v2.39 更新 (2026-08-15)
+
+### 修复 AICU 评论提取被 Google 广告标注污染
+
+**问题**: AICU 深度分析抓取到 "Linux 与 Unix" 等与评论无关的文本，污染评论内容和作者 uid。
+
+**根因**: aicu.cc 页面运行 Google Ads，其**广告标注元素** `<div class="google-anno-skip google-anno-sc">`（如 "Linux 与 Unix" 广告链接）会被动态**注入到评论卡片的文本元素内部**（`p.MuiTypography-body1`、uid span 等），`textContent`/`inner_text` 取文本时把广告文字一起抓了进来。
+
+**修改内容** (`analyzer/aicu_fetcher.py` 的 `_extract_aicu_comments_from_page()`):
+- 方法1 (JS 提取): 新增 `cleanText()` — 克隆节点后移除 `.google-anno-skip, .google-anno-sc, .google-anno` 再取文本，应用于评论内容/时间/作者 uid
+- 方法2 (locator 兜底): 提取前先从 DOM 移除全部 google-anno 广告元素，再读 `inner_text`
+
+**验证**: Playwright 真实页面测试 — 提取 16 条评论全部干净（广告注入在 uid span 内的卡片也正确剥离），`author_uid` 正常，每条时间有效。
+
+### LLM 初筛 + AICU 深度分析提示词加入弹幕分析
+
+**修改内容**:
+- `analyzer/llm_prompts.py` (LLM 初筛):
+  - `SYSTEM_PROMPT` 新增「弹幕特征速查」: 视频弹幕模板化/刷屏→type1/5、直播弹幕引流→type4、时段不一致→多账号嫌疑、无评论但弹幕活跃可作判定依据
+  - `build_user_prompt()` 支持可选弹幕数据: 用户数据含 `danmu_count`/`live_danmu_count`/`danmus`/`live_danmus`/`danmu_stats` 等字段时输出「弹幕历史」区块（数量/活跃时段/均长/示例各2条），无弹幕数据时行为不变
+- `analyzer/aicu_prompts.py` (AICU 深度分析):
+  - `DEEP_SYSTEM_PROMPT` 弹幕速查细化: 区分视频弹幕（模板化/刷屏）与直播弹幕（实时刷屏/引流），要求 reasoning 必须引用弹幕证据
+  - `build_deep_prompt()` 弹幕区块增强: 新增「⚠️ 活跃时段对比」（评论活跃时段 vs 视频/直播弹幕活跃时段，不一致→多设备/多账号协同操作嫌疑）+ 弹幕分析指令（模板化/刷屏/引流话术检查）
+
+**验证**: 单测通过 — build_user_prompt 弹幕区块正确出现/隐藏；build_deep_prompt 时段对比与分析指令正确输出；三个文件 py_compile 通过。
+
+**效果**: 新版页面可正常翻页抓取多页评论；旧版页面不受影响。
 
 ---
 

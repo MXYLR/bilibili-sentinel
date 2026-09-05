@@ -5,8 +5,11 @@ AICU 深度分析 — 提示词模板
 分析维度: 跨视频行为模式、评论风格一致性、设备/昵称变更历史。
 """
 
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 导入智能压缩器
 try:
@@ -35,7 +38,7 @@ DEEP_SYSTEM_PROMPT = """你是B站水军深度分析专家。基于当前视频�
 - 有评论时：以评论内容为主，特征为辅
 
 ## 分析维度
-跨视频行为一致性、时间模式、内容模板化、账号异常(设备/昵称变更)、证据链叠加
+跨视频行为一致性、时间模式、内容模板化、账号异常(设备/昵称变更)、弹幕行为(刷屏/模板化/直播互动)、证据链叠加
 
 ## 关键特征速查
 - f12 账号骨骼: 1.0=5/5全中, 0.8=4/5, 0.6=3/5, 0.4=2/5, 0.2=1/5
@@ -44,6 +47,15 @@ DEEP_SYSTEM_PROMPT = """你是B站水军深度分析专家。基于当前视频�
 - f14 敏感内容: ≥0.3=历史动态含敏感内容，职业水军强证据
 - f5 内容雷同: ≥0.6→模板刷评  f6 时间爆发: ≥0.7→批量操控
 - f15 商业引流: ≥0.3→广告
+
+## 弹幕特征速查（AICU 视频弹幕/直播弹幕）
+- **视频弹幕**: 数量异常多 + 内容重复刷屏（同话术刷多个视频）→ 批量操控/刷屏水军
+- **视频弹幕模板化**（同一话术刷多个视频）→ type1 模板刷评 / type5 批量操控
+- **直播弹幕**: 实时互动高频刷屏 + 引流话术（加群/私信/推广）→ type4 引流广告
+- 直播弹幕集中在同一场直播的短时间段 → 职业刷屏嫌疑
+- 弹幕活跃时段 vs 评论活跃时段不一致 → 多设备/多账号协同操作嫌疑
+- 无评论但弹幕活跃 → 弹幕行为本身可作为判定依据
+- reasoning 必须引用弹幕证据（数量/内容/时段），无弹幕数据时注明"无弹幕数据"
 
 ## 8类型
 1模板刷评 2情绪引导 3AI生成 4引流广告 5批量操控 6黑产养号(f12≥0.4) 7对立引战 8敏感内容(f14≥0.3)
@@ -178,10 +190,49 @@ def build_deep_prompt(user_data: dict, aicu_data) -> str:
         if aicu_data.comments:
             history_summary = compress_fn(aicu_data.comments, max_examples=3)
             prompt += f"\n{history_summary}"
+
+        # v2.37: 弹幕行为分析（视频弹幕 + 直播弹幕）
+        danmu_feats = []
+        if aicu_data.danmu_count > 0:
+            danmu_feats.append(f"视频弹幕{aicu_data.danmu_count}条")
+        if aicu_data.live_danmu_count > 0:
+            danmu_feats.append(f"直播弹幕{aicu_data.live_danmu_count}条")
+        if danmu_feats:
+            prompt += f"\n**弹幕历史:** {'、'.join(danmu_feats)}"
+            _ds = aicu_data.danmu_stats or {}
+            if _ds.get("active_hour") is not None:
+                prompt += f"，视频弹幕活跃{_ds['active_hour']}点"
+            if _ds.get("avg_length"):
+                prompt += f"，均长{_ds['avg_length']}字"
+            _lds = aicu_data.live_danmu_stats or {}
+            if _lds.get("active_hour") is not None:
+                prompt += f"，直播弹幕活跃{_lds['active_hour']}点"
+
+            # v2.39: 弹幕与评论活跃时段对比（不一致 → 多设备/多账号操作嫌疑）
+            if aicu_data.active_hour is not None and (
+                _ds.get("active_hour") is not None or _lds.get("active_hour") is not None
+            ):
+                prompt += f"\n⚠️ 活跃时段对比: 评论活跃{aicu_data.active_hour}点"
+                if _ds.get("active_hour") is not None:
+                    prompt += f"，视频弹幕活跃{_ds['active_hour']}点"
+                if _lds.get("active_hour") is not None:
+                    prompt += f"，直播弹幕活跃{_lds['active_hour']}点"
+                prompt += "（时段不一致→多设备/多账号协同操作嫌疑）"
+
+            if aicu_data.danmus:
+                danmu_summary = compress_fn(aicu_data.danmus, max_examples=2)
+                prompt += f"\n视频弹幕示例: {danmu_summary}"
+            if aicu_data.live_danmus:
+                live_summary = compress_fn(aicu_data.live_danmus, max_examples=2)
+                prompt += f"\n直播弹幕示例: {live_summary}"
+
+            # v2.39: 弹幕分析指令
+            prompt += "\n请分析弹幕行为: 内容是否模板化/重复刷屏、是否含引流话术、"
+            prompt += "视频弹幕与直播弹幕的差异，并作为判定依据写入 reasoning。"
     else:
         prompt += "\n**AICU:** 无历史数据"
 
-    prompt += """\n\n请输出深度分析 JSON。reasoning 80-120字，含特征解读+历史评论原文+判定逻辑。
+    prompt += """\n\n请输出深度分析 JSON。reasoning 80-120字，含特征解读+历史评论/弹幕原文+判定逻辑。
 
 输出格式:
 {"results": [{"mid": 123456, "deep_type_id": 0, "deep_type_name": "正常用户", "deep_confidence": 0, "deep_reasoning": "f12=0.8命中4/5项，历史评论引流，判黑产养号(type6)"}]}

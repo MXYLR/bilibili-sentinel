@@ -531,7 +531,9 @@ class LLMAnalyzer:
                     if data.comment_count > 0:
                         extra.append(f"评论{data.comment_count}条")
                     if data.danmu_count > 0:
-                        extra.append(f"弹幕{data.danmu_count}条")
+                        extra.append(f"视频弹幕{data.danmu_count}条")
+                    if data.live_danmu_count > 0:
+                        extra.append(f"直播弹幕{data.live_danmu_count}条")
                     if data.device_name:
                         extra.append(f"设备:{data.device_name}")
                     if data.history_names:
@@ -660,6 +662,10 @@ class LLMAnalyzer:
                     enhanced["aicu_stats"] = aicu_info.stats
                     enhanced["aicu_device"] = aicu_info.device_name
                     enhanced["aicu_names"] = aicu_info.history_names
+                    enhanced["aicu_danmu_count"] = aicu_info.danmu_count
+                    enhanced["aicu_live_danmu_count"] = aicu_info.live_danmu_count
+                    enhanced["aicu_danmu_stats"] = aicu_info.danmu_stats
+                    enhanced["aicu_live_danmu_stats"] = aicu_info.live_danmu_stats
                     if aicu_info.waf_blocked:
                         enhanced["aicu_waf_blocked"] = True
 
@@ -704,6 +710,10 @@ class LLMAnalyzer:
                 enhanced["aicu_stats"] = aicu_info.stats
                 enhanced["aicu_device"] = aicu_info.device_name
                 enhanced["aicu_names"] = aicu_info.history_names
+                enhanced["aicu_danmu_count"] = aicu_info.danmu_count
+                enhanced["aicu_live_danmu_count"] = aicu_info.live_danmu_count
+                enhanced["aicu_danmu_stats"] = aicu_info.danmu_stats
+                enhanced["aicu_live_danmu_stats"] = aicu_info.live_danmu_stats
             elif mid in aicu_data_map:
                 aicu_info = aicu_data_map[mid]
                 if aicu_info.waf_blocked:
@@ -756,8 +766,10 @@ class LLMAnalyzer:
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 1500,  # v2.29 减少输出token加速响应
-                    "timeout": LLM_TIMEOUT,  # v2.29 添加请求级别超时
+                    # v2.37: 推理模型（deepseek-v4-pro 等）的推理过程占用 token 配额，
+                    #        max_tokens=1500 会被 reasoning 耗尽导致 content 为空 → 提高配额并延长超时
+                    "max_tokens": 4000,
+                    "timeout": 300,
                 }
                 if self.provider == "openai":
                     call_kwargs["response_format"] = {"type": "json_object"}
@@ -890,8 +902,9 @@ class LLMAnalyzer:
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0.1 if len(users_data) == 1 else 0.3,
-                    "max_tokens": 600 if len(users_data) == 1 else 2000,  # v2.29 单用户减半输出
-                    "timeout": LLM_TIMEOUT,  # v2.29 添加请求级别超时
+                    # v2.37: 推理模型占用 token 配额，600/2000 不够 → 提高（非推理模型不受影响）
+                    "max_tokens": 2000 if len(users_data) == 1 else 4000,
+                    "timeout": 240,  # v2.37: 推理模型耗时更长
                 }
                 # v2.29: 仅 OpenAI 官方支持 json_object，DeepSeek 可能报错，条件添加
                 if self.provider == "openai":

@@ -91,6 +91,14 @@ SYSTEM_PROMPT = """你是B站水军识别引擎的语义分析层。引擎已完
 - f5 内容雷同: ≥0.6→模板刷评  f6 时间爆发: ≥0.7→批量操控
 - f15 商业引流: ≥0.3→广告  f1 新号(<30天), f3 低等级(Lv0-2)+高活跃
 
+## 弹幕特征速查（仅当用户数据中提供弹幕历史时使用）
+- **视频弹幕**: 内容模板化/重复刷屏（同话术刷多个视频）→ type1 模板刷评 / type5 批量操控
+- **直播弹幕**: 实时互动高频刷屏 + 引流话术（加群/私信/推广）→ type4 引流广告
+- 弹幕数量异常多、时间高度集中 → 批量操控
+- 弹幕活跃时段与评论活跃时段不一致 → 多设备/多账号协同操作嫌疑
+- 无评论但弹幕活跃时，弹幕行为本身可作为判定依据
+- 正常用户的弹幕通常自然口语化、内容多样；水军弹幕机械重复、模板化
+
 ## 8类型
 1模板刷评 2情绪引导 3AI生成 4引流广告 5批量操控 6黑产养号(f12≥0.4) 7对立引战 8敏感内容(f14≥0.3)
 
@@ -99,6 +107,7 @@ SYSTEM_PROMPT = """你是B站水军识别引擎的语义分析层。引擎已完
 - f14≥0.3 → type8(敏感型), conf80-95
 - f12≥0.4 + f14≥0.3 → type8, conf75-90（双重证据）
 - f5≥0.6→type1,conf70-85 | f15≥0.3→type4 | 评论正常→type0
+- 有弹幕证据时: 模板化/刷屏弹幕叠加评论特征可强化 type1/type5 判定；弹幕引流话术直接支持 type4
 - type0=正常用户, type1-8=水军
 
 ## 输出格式
@@ -168,9 +177,30 @@ def build_user_prompt(users_data: list) -> str:
 {raw_profile}
 特征(f≥0.3): {feat_line}
 评论: {comments_summary if comments_summary else '(无)'}
-
 """
 
+        # v2.39: 弹幕历史（视频弹幕 + 直播弹幕）— 仅当上游提供了弹幕数据时输出
+        danmu_feats = []
+        if user.get("danmu_count"):
+            danmu_feats.append(f"视频弹幕{user['danmu_count']}条")
+        if user.get("live_danmu_count"):
+            danmu_feats.append(f"直播弹幕{user['live_danmu_count']}条")
+        if danmu_feats:
+            prompt += f"弹幕历史: {'、'.join(danmu_feats)}"
+            _ds = user.get("danmu_stats") or {}
+            if _ds.get("active_hour") is not None:
+                prompt += f"，视频弹幕活跃{_ds['active_hour']}点"
+            if _ds.get("avg_length"):
+                prompt += f"，均长{_ds['avg_length']}字"
+            _lds = user.get("live_danmu_stats") or {}
+            if _lds.get("active_hour") is not None:
+                prompt += f"，直播弹幕活跃{_lds['active_hour']}点"
+            prompt += "\n"
+            if user.get("danmus"):
+                prompt += f"视频弹幕示例: {compress_comments_for_prompt(user['danmus'], max_examples=2)}\n"
+            if user.get("live_danmus"):
+                prompt += f"直播弹幕示例: {compress_comments_for_prompt(user['live_danmus'], max_examples=2)}\n"
+        prompt += "\n"
     prompt += """请分析以上用户，只输出 JSON（不要markdown代码块）。
 
 输出格式（每个用户一个对象，放在 results 数组中）：

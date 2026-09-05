@@ -20,6 +20,7 @@ AICU 数据抓取器 — 获取 B站用户的历史评论和弹幕
 
 import json
 import logging
+import re
 import threading
 import time
 from collections import Counter
@@ -84,46 +85,77 @@ def _detect_cloudflare(page) -> bool:
 
 
 def _extract_aicu_comments_from_page(page) -> list:
-    """从 AICU reply 页面 DOM 中提取评论数据（精准版 v2）。
+    """从 AICU reply 页面 DOM 中提取评论数据（精准版 v3，兼容新旧结构）。
 
-    真实结构（来自用户提供的样本）:
-        <div class="card">           ← 可能是导航/用户信息/评论
+    旧版结构（2026-06）:
+        <div class="card">
             <div class="time">2025/9/11 18:07:46 1</div>  ← 日期格式=评论
             <div class="message">评论内容</div>
-            <div class="z">当前查询uid:27683704 爱来自aicu.cc</div>  ← 每个card都有
+            <div class="z">当前查询uid:27683704 爱来自aicu.cc</div>
             <div class="buttons">...</div>
         </div>
 
+    新版结构（MUI, 2026-07）:
+        <div class="MuiPaper-root ... MuiCard-root">
+            <div class="MuiCardContent-root">
+                <span class="MuiTypography-caption">2023/5/13 09:32:05 2</span>  ← 时间(末尾数字=点赞)
+                <p class="MuiTypography-body1">评论内容</p>
+                <span class="MuiTypography-alignRight">uid:684663 爱来自aicu.cc</span>  ← 作者uid
+                <div>...<a href="https://t.bilibili.com/...">方式0</a>
+                    <a href="https://www.bilibili.com/h5/comment/sub?oid=...">方式2</a>...</div>
+            </div>
+        </div>
+
     过滤规则:
-        - 保留：有 .message + .time 匹配日期格式
+        - 保留：有消息元素 + 时间元素
         - 跳过：.time 含"相关链接"/"用户信息"（导航card）
-        - 注意：.z 元素每个 card 都有，不能作为过滤条件
+        - 新版卡片：时间 caption 必须匹配日期格式（排除用户信息等非评论卡）
+        - ★ Google 广告标注清理: 页面会注入 <div class="google-anno-skip google-anno-sc">
+          （如"Linux 与 Unix"广告链接）到卡片文本内部，提取前必须剥离，
+          否则评论内容/uid 会被广告文本污染（v2.39）
     """
     comments = []
     try:
-        # 方法1: 用 JS 直接遍历 .card 容器，精准提取
+        # 方法1: 用 JS 直接遍历卡片容器，精准提取（兼容新旧结构）
         result = page.evaluate("""() => {
+            // 清理 Google 广告标注: 广告元素会被注入到卡片文本内部（如 "Linux 与 Unix"），
+            // 克隆节点后移除再取文本，避免污染评论内容/uid
+            const cleanText = (el) => {
+                if (!el) return '';
+                const clone = el.cloneNode(true);
+                clone.querySelectorAll('.google-anno-skip, .google-anno-sc, .google-anno').forEach(n => n.remove());
+                return (clone.textContent || '').trim();
+            };
+
             const items = [];
-            const cards = document.querySelectorAll('.card');
+            const cards = document.querySelectorAll('.card, .MuiCard-root');
             cards.forEach(card => {
-                // 必须有 .message 元素（评论内容）
-                const msgEl = card.querySelector('.message');
+                const isMui = card.classList.contains('MuiCard-root');
+
+                // 消息元素: 旧版 .message; 新版 p.MuiTypography-body1
+                let msgEl = card.querySelector('.message');
+                if (!msgEl && isMui) {
+                    msgEl = card.querySelector('p.MuiTypography-body1');
+                }
                 if (!msgEl) return;  // 无评论内容，跳过
 
-                const message = msgEl.textContent.trim();
+                const message = cleanText(msgEl);
                 if (!message || message.length < 2) return;
 
-                // 必须有 .time 元素，且内容是日期格式
-                const timeEl = card.querySelector('.time');
+                // 时间元素: 旧版 .time; 新版第一个 MuiTypography-caption
+                let timeEl = card.querySelector('.time');
+                if (!timeEl && isMui) {
+                    timeEl = card.querySelector('span.MuiTypography-caption');
+                }
                 if (!timeEl) return;  // 无时间，跳过
 
-                const timeText = (timeEl.textContent || '').trim();
+                const timeText = cleanText(timeEl);
                 // 过滤导航 card：.time 内容是"相关链接"或"用户信息"
                 if (timeText.includes('相关链接') || timeText.includes('用户信息')) {
                     return;  // 导航 card，跳过
                 }
 
-                // 解析时间: "2025/9/11 18:07:46 1" (末尾数字=点赞数)
+                // 解析时间: "2023/5/13 09:32:05 2" (末尾数字=点赞数)
                 let timestamp = 0;
                 let readableTime = '';
                 const dateMatch = timeText.match(/^(\\d{4})[\\/](\\d{1,2})[\\/](\\d{1,2})\\s+(\\d{1,2}):(\\d{1,2}):(\\d{1,2})/);
@@ -134,59 +166,130 @@ def _extract_aicu_comments_from_page(page) -> list:
                         timestamp = Math.floor(dt.getTime() / 1000);
                         readableTime = dateMatch[1] + '/' + dateMatch[2] + '/' + dateMatch[3] + ' ' + dateMatch[4] + ':' + dateMatch[5];
                     } catch(e) {}
+                } else if (isMui) {
+                    // 新版卡片: 时间 caption 必须匹配日期格式（排除用户信息等非评论卡）
+                    return;
                 }
 
-                // 提取 oid (视频AV号) — 从 buttons 里的链接获取
+                // 提取 oid (视频AV号/动态ID) + cid (评论ID, 精确去重) — 从卡片内 bilibili 链接获取
+                // 新版链接样本 (2026-09):
+                //   方式0: https://www.bilibili.com/video/av117189726182059#reply312580404449
+                //   方式2: https://www.bilibili.com/h5/comment/sub?oid=117189726182059&pageType=1&root=312580404449
+                //   oid=评论所在视频 (同视频多条评论共享, 不能用于去重); cid=评论ID (唯一)
                 let oid = '';
+                let cid = '';
                 const links = card.querySelectorAll('a[href*="bilibili.com"]');
                 links.forEach(a => {
                     const href = a.getAttribute('href') || '';
-                    // 匹配 /video/av115183758349626 或 oid=115183758349626
+                    // oid: /video/av115183758349626 或 [?&]oid=115183758349626 或 t.bilibili.com/241379639
                     const avMatch = href.match(/\\/av(\\d+)/);
                     const oidMatch = href.match(/[?&]oid=(\\d+)/);
+                    const dynMatch = href.match(/t\\.bilibili\\.com\\/(\\d+)/);
                     if (avMatch) oid = avMatch[1];
                     else if (oidMatch) oid = oidMatch[1];
+                    else if (dynMatch) oid = dynMatch[1];
+                    // cid: #reply123 / [?&]root=123 — 精确评论 ID（首个有效即可）
+                    if (!cid) {
+                        const replyMatch = href.match(/#reply(\\d+)/);
+                        if (replyMatch) cid = replyMatch[1];
+                        else {
+                            const rootMatch = href.match(/[?&]root=(\\d+)/);
+                            if (rootMatch) cid = rootMatch[1];
+                        }
+                    }
                 });
 
-                // 提取点赞数 — 从 .time 末尾的数字
+                // 提取点赞数 — 从时间文本末尾的数字
                 let rank = 0;
                 const rankMatch = timeText.match(/\\s+(\\d+)$/);
                 if (rankMatch) rank = parseInt(rankMatch[1]);
 
+                // 提取评论作者 uid — 新版 footer caption: "uid:684663 爱来自aicu.cc"
+                let authorUid = '';
+                if (isMui) {
+                    const uidSpan = card.querySelector('span.MuiTypography-alignRight');
+                    if (uidSpan) {
+                        const uidMatch = cleanText(uidSpan).match(/uid[::：]\\s*(\\d+)/i);
+                        if (uidMatch) authorUid = uidMatch[1];
+                    }
+                }
+
                 items.push({
                     message: message.slice(0, 500),
                     oid: oid,
+                    cid: cid,
                     time: timestamp > 0 ? timestamp : '',
                     readable_time: readableTime,
                     type: 1,  // 评论
                     rank: rank,
+                    author_uid: authorUid,
                 });
             });
             return items;
         }""")
         comments = result or []
 
-        # 方法2: Playwright locator 兜底（如果 JS 没拿到）
+        # 方法2: Playwright locator 兜底（如果 JS 没拿到，兼容新旧结构）
         if not comments:
-            cards = page.locator('.card')
+            # 先移除 Google 广告标注元素（会被注入到卡片文本内部，污染 inner_text）
+            try:
+                page.evaluate(
+                    "document.querySelectorAll('.google-anno-skip, .google-anno-sc, .google-anno')"
+                    ".forEach(n => n.remove())"
+                )
+            except Exception:
+                pass
+
+            cards = page.locator('.card, .MuiCard-root')
             count = cards.count()
             for i in range(min(count, 200)):
                 try:
                     card = cards.nth(i)
-                    # 跳过页脚 card
-                    z_text = card.locator('.z').first.inner_text() if card.locator('.z').count() > 0 else ''
-                    if '当前查询uid' in z_text or '爱来自aicu.cc' in z_text:
-                        continue
+                    is_mui = 'MuiCard-root' in (card.get_attribute('class') or '')
+
+                    # 消息元素: 旧版 .message; 新版 p.MuiTypography-body1
                     msg_el = card.locator('.message').first
+                    if msg_el.count() == 0:
+                        msg_el = card.locator('p.MuiTypography-body1').first
                     if msg_el.count() == 0:
                         continue
                     message = msg_el.inner_text().strip()
                     if not message or len(message) < 2:
                         continue
-                    time_text = card.locator('.time').first.inner_text().strip() if card.locator('.time').count() > 0 else ''
+
+                    # 时间元素: 旧版 .time; 新版第一个 MuiTypography-caption
+                    time_el = card.locator('.time').first
+                    if time_el.count() == 0:
+                        time_el = card.locator('span.MuiTypography-caption').first
+                    time_text = time_el.inner_text().strip() if time_el.count() > 0 else ''
+
+                    # 过滤导航 card
+                    if '相关链接' in time_text or '用户信息' in time_text:
+                        continue
+                    # 新版卡片: 时间必须匹配日期格式（排除用户信息等非评论卡）
+                    if is_mui and not re.match(r'^\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{1,2}', time_text):
+                        continue
+
+                    # 提取 oid/cid（评论ID）— 新版链接: avXXX#reply123 / sub?oid=XXX&root=123
+                    oid = ""
+                    cid = ""
+                    try:
+                        for a_el in card.locator('a[href*="bilibili.com"]').all():
+                            href = a_el.get_attribute("href") or ""
+                            m = re.search(r"/av(\d+)", href) or re.search(r"[?&]oid=(\d+)", href)
+                            if m:
+                                oid = m.group(1)
+                            if not cid:
+                                cm = re.search(r"#reply(\d+)", href) or re.search(r"[?&]root=(\d+)", href)
+                                if cm:
+                                    cid = cm.group(1)
+                    except Exception:
+                        pass
+
                     comments.append({
                         "message": message[:500],
-                        "oid": "",
+                        "oid": oid,
+                        "cid": cid,
                         "time": "",
                         "readable_time": time_text[:19] if time_text else '',
                         "type": 1,
@@ -201,6 +304,64 @@ def _extract_aicu_comments_from_page(page) -> list:
         logger.warning(f"[AICU:Web] 评论提取异常: {e}")
 
     return comments
+
+
+def _switch_aicu_tab(page, tab_name: str) -> bool:
+    """切换新版 aicu.cc (MUI) 页面的查询类型 tab：评论 / 视频弹幕 / 直播弹幕。
+
+    结构样本:
+        <div role="group" class="MuiButtonGroup-root MuiButtonGroup-outlined ...">
+            <button class="...MuiButton-contained... MuiButtonGroup-firstButton">评论</button>  ← 当前选中
+            <button class="...MuiButton-outlined... MuiButtonGroup-middleButton">视频弹幕</button>
+            <button class="...MuiButton-outlined... MuiButtonGroup-lastButton">直播弹幕</button>
+        </div>
+
+    选中状态判定: class 含 MuiButton-contained 表示当前 tab 已激活；
+    MuiButton-outlined 表示未激活，需要点击切换。
+
+    Args:
+        page: Playwright page
+        tab_name: "评论" / "视频弹幕" / "直播弹幕"
+
+    Returns:
+        True 表示目标 tab 已处于激活状态（已选中或切换成功），False 失败
+    """
+    try:
+        group = page.locator('div[role="group"]')
+        if group.count() == 0:
+            logger.warning("[AICU:Web] 未找到 tab 切换组 div[role=group]")
+            return False
+
+        btns = group.locator('button')
+        btn_count = btns.count()
+        for i in range(btn_count):
+            btn = btns.nth(i)
+            try:
+                text = (btn.inner_text() or '').strip()
+            except Exception:
+                continue
+            if text != tab_name:
+                continue
+
+            cls = btn.get_attribute('class') or ''
+            if 'MuiButton-contained' in cls:
+                logger.info(f"[AICU:Web] tab 已是激活状态: {tab_name}")
+                return True
+
+            try:
+                btn.click()
+                logger.info(f"[AICU:Web] 已切换 tab → {tab_name}")
+                return True
+            except Exception as e:
+                logger.warning(f"[AICU:Web] 点击 tab [{tab_name}] 失败: {e}")
+                return False
+
+        logger.warning(f"[AICU:Web] 未找到 tab 按钮: {tab_name}")
+        return False
+
+    except Exception as e:
+        logger.warning(f"[AICU:Web] 切换 tab 异常: {e}")
+        return False
 
 
 # ============================================================
@@ -243,10 +404,14 @@ class AicuUserData:
     profile: dict = field(default_factory=dict)
     marks: dict = field(default_factory=dict)
     comments: list = field(default_factory=list)
-    danmus: list = field(default_factory=list)
+    danmus: list = field(default_factory=list)          # 视频弹幕 [{id, content, oid}]
+    live_danmus: list = field(default_factory=list)     # 直播弹幕 [{id, content, oid}]
     comment_count: int = 0
-    danmu_count: int = 0
+    danmu_count: int = 0            # 视频弹幕数
+    live_danmu_count: int = 0       # 直播弹幕数
     stats: dict = field(default_factory=dict)
+    danmu_stats: dict = field(default_factory=dict)         # 视频弹幕统计 {count, active_hour, avg_length, hour_dist, source}
+    live_danmu_stats: dict = field(default_factory=dict)    # 直播弹幕统计
     fetch_ok: bool = False
     fetch_error: str = ""
     waf_blocked: bool = False   # API 被 WAF 拦截（HTTP 403）
@@ -457,20 +622,22 @@ class AicuFetcher:
 
         return None
 
-    def _get_via_playwright_html(self, mid: int, max_pages: int = 20) -> Optional[list]:
-        """通过 Playwright 真实浏览器访问 AICU 评论查询页，提取评论数据。
+    def _get_via_playwright_html(self, mid: int, max_pages: int = 20, tab: str = "评论") -> Optional[list]:
+        """通过 Playwright 真实浏览器访问 AICU 查询页，提取数据。
 
         流程（v3 - 直接URL方案，绕过首页输入框）:
           1. 直接打开 https://www.aicu.cc/reply?uid={mid}
           2. 等待页面加载完成
-          3. 滚动触发懒加载
-          4. 提取当前页评论
-          5. 点击翻页按钮获取更多
-          6. 从中提取评论内容
+          3. （可选）切换查询类型 tab：评论 / 视频弹幕 / 直播弹幕
+          4. 滚动触发懒加载
+          5. 提取当前页数据
+          6. 点击翻页按钮获取更多
 
         Args:
             mid: B站用户 UID
-            max_pages: 最大翻页次数（默认20，约1000条评论）
+            max_pages: 最大翻页次数（默认20，约1000条）
+            tab: 查询类型: "评论"（默认）/ "视频弹幕" / "直播弹幕"
+                 （新版 MUI 页面通过 div[role=group] 按钮组切换）
 
         Returns:
             [{time, message, readable_time, oid, type, rank}, ...] 或 None
@@ -550,7 +717,31 @@ class AicuFetcher:
 
             page.wait_for_timeout(2000)
 
-            # ---- Step 2: 滚动加载 + 翻页获取全部评论 ----
+            # ---- Step 1.5: 切换查询类型 tab（新版 MUI 页面）----
+            if tab != "评论":
+                logger.info(f"[AICU:Web] 目标查询类型: {tab}")
+                if _switch_aicu_tab(page, tab):
+                    # 等待新 tab 内容加载（日期格式数据出现）
+                    try:
+                        page.wait_for_function(
+                            """() => {
+                                const text = document.body.innerText || '';
+                                return /\\d{4}\\/\\d{1,2}\\/\\d{1,2}\\s+\\d{1,2}:\\d{1,2}/.test(text);
+                            }""",
+                            timeout=15000,
+                        )
+                        logger.info(f"[AICU:Web] {tab} 数据已加载")
+                    except Exception:
+                        logger.warning(f"[AICU:Web] 等待 {tab} 数据加载超时，继续尝试提取...")
+                    page.wait_for_timeout(2000)
+                else:
+                    # 切换失败（旧版页面无 tab 组 / 无该类型）→ 放弃提取，避免把评论误当弹幕
+                    logger.warning(f"[AICU:Web] tab 切换失败，放弃提取: {tab}")
+                    if self._log:
+                        self._log("warn", f"  tab 切换失败，跳过 {tab} 抓取")
+                    return []
+
+            # ---- Step 2: 滚动加载 + 翻页获取全部数据 ----
             all_comments = []
             seen_ids = set()
 
@@ -568,9 +759,11 @@ class AicuFetcher:
                 comments = _extract_aicu_comments_from_page(page)
                 new_count = 0
                 for c in comments:
-                    oid = c.get("oid", "") or c.get("message", "")[:50]
-                    if oid and oid not in seen_ids:
-                        seen_ids.add(oid)
+                    # 去重键: cid(评论ID, 唯一) > oid(视频号, 同视频多条评论共享) > message[:50]
+                    # ★ 2026-09: 新版链接带 #reply/root= 评论ID，用 cid 去重避免同视频多条评论被误删
+                    dedup_key = c.get("cid") or c.get("oid", "") or c.get("message", "")[:50]
+                    if dedup_key and dedup_key not in seen_ids:
+                        seen_ids.add(dedup_key)
                         all_comments.append(c)
                         new_count += 1
 
@@ -584,27 +777,75 @@ class AicuFetcher:
                 # ---- 翻页：多种策略 ----
                 clicked = False
 
-                # 策略1: 找"下一页"箭头 / 文字按钮
-                for next_sel in [
-                    "a:has-text('>')",
-                    "a:has-text('下一页')",
-                    "a.pagination-next",
-                    "button:has-text('下一页')",
-                    ".pagination a:last-child",
-                ]:
-                    btn = page.locator(next_sel)
-                    if btn.count() > 0 and btn.first.is_visible():
+                # 策略1: MUI (Material UI) 分页 — 新版 aicu.cc 页面 (2026-07)
+                # 结构样本:
+                #   <nav aria-label="pagination navigation" class="MuiPagination-root">
+                #     <ul class="MuiPagination-ul">
+                #       <li><button aria-label="page 1" aria-current="page">1</button></li>
+                #       <li><button aria-label="Go to page 2">2</button></li>
+                #       <li><button aria-label="Go to next page">›</button></li>
+                # 策略1a: MUI "下一页" 箭头按钮
+                mui_next = page.locator(
+                    'nav[aria-label="pagination navigation"] '
+                    'button[aria-label="Go to next page"]'
+                )
+                if mui_next.count() > 0 and mui_next.first.is_enabled():
+                    try:
+                        mui_next.first.click()
+                        clicked = True
+                        current_page += 1
+                        logger.info(f"[AICU:Web] MUI 下一页按钮 → 第{current_page}页")
+                    except Exception:
+                        clicked = False
+
+                # 策略1b: MUI 数字按钮（aria-label="Go to page N"，只点当前页的下一页）
+                if not clicked:
+                    mui_pages = page.locator(
+                        'nav[aria-label="pagination navigation"] '
+                        'button[aria-label^="Go to page "]'
+                    )
+                    mui_count = mui_pages.count()
+                    for i in range(mui_count):
                         try:
-                            btn.first.click()
-                            clicked = True
-                            current_page += 1
-                            break
-                        except Exception:
+                            btn = mui_pages.nth(i)
+                            label = (btn.get_attribute("aria-label") or "").strip()
+                            if not label.startswith("Go to page "):
+                                continue
+                            page_num = int(label.split()[-1])
+                            if page_num == current_page + 1:
+                                btn.click()
+                                current_page = page_num
+                                clicked = True
+                                logger.info(f"[AICU:Web] MUI 数字按钮 → 第{current_page}页")
+                                break
+                        except (ValueError, Exception):
                             continue
 
-                # 策略2: 找数字按钮（比当前页大）
+                # 策略2: 旧版 "下一页" 箭头 / 文字按钮（兜底）
                 if not clicked:
-                    all_btns = page.locator("#pagination a, .pagination a, nav a")
+                    for next_sel in [
+                        "a:has-text('>')",
+                        "a:has-text('下一页')",
+                        "a.pagination-next",
+                        "button:has-text('下一页')",
+                        ".pagination a:last-child",
+                    ]:
+                        btn = page.locator(next_sel)
+                        if btn.count() > 0 and btn.first.is_visible():
+                            try:
+                                btn.first.click()
+                                clicked = True
+                                current_page += 1
+                                break
+                            except Exception:
+                                continue
+
+                # 策略3: 数字按钮（比当前页大，兼容 a/button）
+                if not clicked:
+                    all_btns = page.locator(
+                        "#pagination a, .pagination a, nav a, "
+                        "#pagination button, .pagination button, nav button"
+                    )
                     btn_count = all_btns.count()
                     for i in range(btn_count):
                         try:
@@ -859,11 +1100,139 @@ class AicuFetcher:
             },
         }
 
+    @staticmethod
+    def _compute_danmu_stats(items: list, source: str) -> dict:
+        """从弹幕条目列表计算统计特征（活跃时段/平均长度/时段分布）。
+
+        API 弹幕条目无时间字段（{id, content, oid}），只统计长度；
+        网页弹幕条目含 time 时间戳，可额外得到活跃时段。
+        """
+        lengths = []
+        hour_counter = Counter()
+        for d in items:
+            content = d.get("content") or d.get("message") or ""
+            if content:
+                lengths.append(len(content))
+            ts = d.get("time", 0)
+            if ts and isinstance(ts, (int, float)) and ts > 0:
+                try:
+                    dt = datetime.fromtimestamp(int(ts), tz=_BEIJING_TZ)
+                    hour_counter[dt.hour] += 1
+                except (OSError, ValueError, OverflowError):
+                    pass
+
+        stats = {
+            "count": len(items),
+            "avg_length": round(sum(lengths) / len(lengths), 1) if lengths else 0.0,
+            "source": source,
+        }
+        if hour_counter:
+            stats["active_hour"] = hour_counter.most_common(1)[0][0]
+            stats["hour_dist"] = dict(hour_counter.most_common(5))
+        return stats
+
+    def _fetch_danmu_via_web(self, mid: int, max_pages: int = None) -> dict:
+        """网页抓取视频弹幕（新版 aicu.cc 可切换 tab），API 失败时的兜底。
+
+        通过 _get_via_playwright_html 切换 "视频弹幕" tab 抓取，
+        提取到的卡片结构与评论一致（message/time），转换为弹幕格式。
+        """
+        if max_pages is None:
+            try:
+                from config.base_config import AICU_DANMU_MAX_PAGES
+                max_pages = AICU_DANMU_MAX_PAGES
+            except ImportError:
+                max_pages = 5
+        logger.info(f"[AICU] API 弹幕不可用，改用网页抓取视频弹幕: mid={mid}")
+        if self._log:
+            self._log("info", f"  API 弹幕不可用，切换网页抓取视频弹幕: mid={mid}")
+
+        html_items = self._get_via_playwright_html(mid, max_pages=max_pages, tab="视频弹幕")
+        if not html_items:
+            logger.warning(f"[AICU] 网页弹幕抓取失败: mid={mid}")
+            if self._log:
+                self._log("warn", f"  网页弹幕抓取失败: mid={mid}")
+            return {"danmus": [], "count": 0, "stats": {}}
+
+        danmus = []
+        for c in html_items:
+            danmus.append({
+                "id": "",
+                "content": c.get("message", ""),
+                "oid": c.get("oid", 0),
+                "time": c.get("time", 0),  # 保留时间戳用于统计
+            })
+
+        stats = self._compute_danmu_stats(danmus, "playwright_web")
+        logger.info(f"[AICU] 网页弹幕抓取完成: mid={mid}, {len(danmus)}条")
+        if self._log:
+            self._log("success", f"  网页弹幕抓取完成 mid={mid}: {len(danmus)}条")
+        return {
+            "danmus": danmus,
+            "count": len(danmus),
+            "stats": stats,
+        }
+
+    def fetch_user_live_danmu(self, mid: int) -> dict:
+        """抓取用户直播弹幕（仅网页方式，新版 aicu.cc "直播弹幕" tab）。
+
+        AICU API 无直播弹幕接口，直接使用 Playwright 网页抓取，
+        切换 "直播弹幕" tab 后提取（卡片结构与评论一致）。
+
+        Args:
+            mid: B站用户 UID
+
+        Returns:
+            {
+                danmus: [{id, content, oid, time}],
+                count: int,
+                stats: {count, active_hour, avg_length, hour_dist, source}
+            }
+        """
+        from config.base_config import AICU_ENABLE_LIVE_DANMU, AICU_LIVE_DANMU_MAX_PAGES
+
+        if not AICU_ENABLE_LIVE_DANMU:
+            logger.info("[AICU] 直播弹幕抓取未启用 (AICU_ENABLE_LIVE_DANMU=False)")
+            return {"danmus": [], "count": 0, "stats": {}}
+
+        logger.info(f"[AICU] 开始网页抓取直播弹幕: mid={mid}")
+        if self._log:
+            self._log("info", f"  网页抓取直播弹幕: mid={mid}")
+
+        html_items = self._get_via_playwright_html(
+            mid, max_pages=AICU_LIVE_DANMU_MAX_PAGES, tab="直播弹幕"
+        )
+        if not html_items:
+            logger.warning(f"[AICU] 网页直播弹幕抓取失败: mid={mid}")
+            if self._log:
+                self._log("warn", f"  网页直播弹幕抓取失败: mid={mid}")
+            return {"danmus": [], "count": 0, "stats": {}}
+
+        danmus = []
+        for c in html_items:
+            danmus.append({
+                "id": "",
+                "content": c.get("message", ""),
+                "oid": c.get("oid", 0),
+                "time": c.get("time", 0),
+            })
+
+        stats = self._compute_danmu_stats(danmus, "playwright_web")
+        logger.info(f"[AICU] 网页直播弹幕抓取完成: mid={mid}, {len(danmus)}条")
+        if self._log:
+            self._log("success", f"  网页直播弹幕抓取完成 mid={mid}: {len(danmus)}条")
+        return {
+            "danmus": danmus,
+            "count": len(danmus),
+            "stats": stats,
+        }
+
     def fetch_user_danmu(self, mid: int) -> dict:
         """
-        分页获取用户历史弹幕（AICU API）。
+        分页获取用户历史弹幕（AICU API，失败时网页抓取兜底）。
 
         先请求 ps=0 获取 all_count，然后分页获取全部弹幕（每页最多 500 条）。
+        若 API 探测失败或分页取不到数据，自动切换新版网页"视频弹幕"tab 抓取。
 
         Args:
             mid: B站用户 UID
@@ -887,7 +1256,8 @@ class AicuFetcher:
             count_raw = self._get(AICU_DANMU_API, count_params)
             if not count_raw or count_raw.get("code") != 0:
                 logger.debug(f"[AICU] 弹幕总数获取失败: mid={mid}, code={count_raw.get('code') if count_raw else 'N/A'}")
-                return {"danmus": [], "count": 0, "stats": {}}
+                # API 不可用（WAF/超时/异常）→ 网页抓取视频弹幕 tab 兜底
+                return self._fetch_danmu_via_web(mid)
 
             all_count = count_raw.get("data", {}).get("cursor", {}).get("all_count", 0)
             if all_count == 0:
@@ -900,7 +1270,8 @@ class AicuFetcher:
 
         except Exception as e:
             logger.error(f"[AICU] fetch_user_danmu({mid}) 获取总数异常: {e}")
-            return {"danmus": [], "count": 0, "stats": {}}
+            # 异常 → 网页抓取视频弹幕 tab 兜底
+            return self._fetch_danmu_via_web(mid)
 
         # 第二步：分页获取弹幕
         parsed = []
@@ -957,13 +1328,18 @@ class AicuFetcher:
                 logger.error(f"[AICU] 弹幕分页异常: mid={mid}, page={page}, error={e}")
                 break
 
+        if not parsed:
+            # API 分页未取到数据 → 网页抓取视频弹幕 tab 兜底
+            return self._fetch_danmu_via_web(mid)
+
+        stats = self._compute_danmu_stats(parsed, "api")
         logger.info(f"[AICU] 弹幕获取完成: mid={mid}, 实际={len(parsed)}, 总数={all_count}")
         if self._log:
             self._log("success", f"  弹幕获取完成 mid={mid}: {len(parsed)}条")
         return {
             "danmus": parsed,
             "count": len(parsed),
-            "stats": {},
+            "stats": stats,
         }
 
     def _get_fast(self, url: str, params: dict) -> Optional[dict]:
@@ -1030,6 +1406,7 @@ class AicuFetcher:
             # 4. 分页抓取（仅当探测成功 + 有数据时）
             comment_data = {"comments": [], "count": 0, "stats": {}}
             danmu_data = {"danmus": [], "count": 0, "stats": {}}
+            live_danmu_data = {"danmus": [], "count": 0, "stats": {}}
 
             if comment_total > 0:
                 if self._log:
@@ -1037,14 +1414,24 @@ class AicuFetcher:
                 comment_data = self.fetch_user_comments(mid, known_count=comment_total)
                 if self._log:
                     self._log("info", f"  评论抓取结果 mid={mid}: 获得{comment_data.get('count', 0)}条")
-            if danmu_total > 0:
+            if danmu_total > 0 or not (danmu_fast and danmu_fast.get("code") == 0):
+                # 弹幕 API 探测失败时也调用 fetch_user_danmu（内部会走网页"视频弹幕"tab 兜底）
+                if self._log and not (danmu_fast and danmu_fast.get("code") == 0):
+                    self._log("info", f"  AICU API 弹幕探测失败，改用网页抓取视频弹幕 mid={mid}")
                 danmu_data = self.fetch_user_danmu(mid)
+
+            # 直播弹幕（仅网页抓取，新版页面"直播弹幕"tab）
+            live_danmu_data = self.fetch_user_live_danmu(mid)
 
             result.comments = comment_data.get("comments", [])
             result.danmus = danmu_data.get("danmus", [])
+            result.live_danmus = live_danmu_data.get("danmus", [])
             result.comment_count = comment_data.get("count", 0)
             result.danmu_count = danmu_data.get("count", 0)
+            result.live_danmu_count = live_danmu_data.get("count", 0)
             result.stats = comment_data.get("stats", {})
+            result.danmu_stats = danmu_data.get("stats", {})
+            result.live_danmu_stats = live_danmu_data.get("stats", {})
             result.waf_blocked = self._waf_detected
 
             # v2.30: 时间模式分析 — 提取评论时间戳，检测长时间不活跃
@@ -1117,7 +1504,8 @@ class AicuFetcher:
                 f"profile={'OK' if profile else 'EMPTY'}, "
                 f"marks={'OK' if marks else 'EMPTY'}, "
                 f"comments={result.comment_count}/{comment_total}, "
-                f"danmus={result.danmu_count}/{danmu_total}"
+                f"danmus={result.danmu_count}/{danmu_total}, "
+                f"live_danmus={result.live_danmu_count}"
             )
 
         except Exception as e:
